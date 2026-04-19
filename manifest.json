@@ -1,0 +1,15 @@
+{
+  "name": "ConvoMail",
+  "short_name": "ConvoMail",
+  "description": "Conversation-centric email client",
+  "start_url": "./mockup-v4.html",
+  "scope": "./",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#f0f0f0",
+  "theme_color": "#6366f1",
+  "icons": [
+    { "src": "icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any maskable" },
+    { "src": "icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any maskable" }
+  ]
+}

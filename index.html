@@ -1,0 +1,39 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, minimum-scale=1.0, user-scalable=no, viewport-fit=cover" />
+  <title>ConvoMail</title>
+  <link rel="manifest" href="manifest.json"/>
+  <meta name="theme-color" content="#6366f1"/>
+  <meta name="apple-mobile-web-app-capable" content="yes"/>
+  <meta name="apple-mobile-web-app-title" content="ConvoMail"/>
+  <meta name="apple-mobile-web-app-status-bar-style" content="default"/>
+  <link rel="apple-touch-icon" href="apple-touch-icon-180.png"/>
+  <link rel="apple-touch-icon" sizes="152x152" href="apple-touch-icon-152.png"/>
+  <link rel="apple-touch-icon" sizes="167x167" href="apple-touch-icon-167.png"/>
+  <link rel="apple-touch-icon" sizes="180x180" href="apple-touch-icon-180.png"/>
+  <link rel="apple-touch-icon-precomposed" href="apple-touch-icon-180.png"/>
+  <link rel="icon" type="image/png" sizes="192x192" href="icon-192.png"/>
+  <link rel="icon" type="image/png" sizes="512x512" href="icon-512.png"/>
+  <script>
+    // Auto-route: phones → direct mobile app, desktops → phone-frame preview
+    (function(){
+      var w = Math.min(window.innerWidth, window.screen.width);
+      if (w < 768) {
+        window.location.replace('mockup-v4.html');
+      } else {
+        window.location.replace('mockup-v4-phone.html');
+      }
+    })();
+  </script>
+  <style>
+    body { margin: 0; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background: #f3f4f6; color: #64748b; display: flex; align-items: center; justify-content: center; min-height: 100vh; }
+    a { color: #6366f1; text-decoration: none; margin: 0 8px; }
+    a:hover { text-decoration: underline; }
+  </style>
+</head>
+<body>
+  <p>Loading ConvoMail — <a href="mockup-v4.html">mobile app</a> · <a href="mockup-v4-phone.html">iPhone preview</a></p>
+</body>
+</html>
