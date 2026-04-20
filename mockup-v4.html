@@ -72,7 +72,7 @@ const { useState, useMemo, useRef, useEffect, useCallback } = React;
 
 // ─── Constants ───────────────────────────────────────────────────────────────
 
-const APP_VERSION = "0.0.16"; // bumped on every deploy — keep in sync with version.json
+const APP_VERSION = "0.0.17"; // bumped on every deploy — keep in sync with version.json
 
 // ─── Backend + Supabase config ───────────────────────────────────────────────
 const SUPABASE_URL = "https://oyrlzqbjcsliesvunbwj.supabase.co";
@@ -488,13 +488,281 @@ function SettingsModal({onClose, initialTab='profile', signatures, setSignatures
   const isMobile = typeof window !== 'undefined' && window.innerWidth < 768;
   // Emails from the real mail-accounts, used by the signatures tab "Linked accounts" list
   const accountEmails = mailAccounts.map(a => a.email).filter(Boolean);
-  // 0=nav; 1=tab content (profile form / accounts panel / signature list); 2=signature detail
+  // 0=nav; 1=tab middle (profile form / accounts list / signature list); 2=detail (accounts form / signature editor)
   const [mobileSetCol, setMobileSetCol] = useState(initialTab==='profile' ? 0 : 1);
+
+  // ── Mail-accounts tab state (master-detail) ────────────────────────────────
+  const [macAccounts, setMacAccounts]   = useState(null);              // null=loading, [] or [...]
+  const [macLoadErr, setMacLoadErr]     = useState('');
+  const [macSelectedId, setMacSelectedId] = useState(null);            // null | 'new' | uuid
+  const [macForm, setMacForm]           = useState(BLANK_MAC_FORM);
+  const [macBusy, setMacBusy]           = useState(null);              // null | 'test' | 'save' | 'delete' | 'sync'
+  const [macFormErr, setMacFormErr]     = useState('');
+  const [macFormInfo, setMacFormInfo]   = useState('');
+  const [macSyncResult, setMacSyncResult] = useState(null);
+  const macRefresh = useCallback(async () => {
+    try {
+      const r = await apiFetch('/mail-accounts');
+      setMacAccounts(r.accounts); setMacLoadErr('');
+    } catch (e) { setMacLoadErr(e.message); setMacAccounts([]); }
+  }, []);
+  useEffect(() => { macRefresh(); }, [macRefresh]);
+
+  function macStartNew() {
+    setMacForm(BLANK_MAC_FORM); setMacSelectedId('new');
+    setMacFormErr(''); setMacFormInfo(''); setMacSyncResult(null);
+    if (isMobile) setMobileSetCol(2);
+  }
+  function macSelectAccount(acc) {
+    setMacForm({
+      provider: acc.provider || 'generic',
+      email: acc.email || '',
+      display_name: acc.display_name || '',
+      imap_host: acc.imap_host || '',
+      imap_port: acc.imap_port || 993,
+      imap_user: acc.imap_user || '',
+      imap_password: '',
+      smtp_host: acc.smtp_host || '',
+      smtp_port: acc.smtp_port || 587,
+      smtp_user: acc.smtp_user || '',
+      smtp_password: '',
+    });
+    setMacSelectedId(acc.id);
+    setMacFormErr(''); setMacFormInfo(''); setMacSyncResult(null);
+    if (isMobile) setMobileSetCol(2);
+  }
+  function macApplyProvider(p) {
+    const preset = PROVIDER_PRESETS[p] || PROVIDER_PRESETS.generic;
+    setMacForm(f => ({ ...f, provider: p, ...preset }));
+  }
+  function macSetField(field, val) { setMacForm(f => ({ ...f, [field]: val })); }
+
+  async function macTest() {
+    setMacFormErr(''); setMacFormInfo(''); setMacBusy('test');
+    try {
+      const r = await apiFetch('/mail-accounts/test', { method:'POST', body: JSON.stringify(macForm) });
+      setMacFormInfo(`Connection OK — ${r.mailboxCount} mailboxes.`);
+    } catch (e) { setMacFormErr(e.message); }
+    setMacBusy(null);
+  }
+  async function macSave() {
+    setMacFormErr(''); setMacFormInfo(''); setMacBusy('save');
+    try {
+      if (macSelectedId === 'new') {
+        const r = await apiFetch('/mail-accounts', { method:'POST', body: JSON.stringify(macForm) });
+        await macRefresh(); onMailAccountsChanged?.();
+        if (r.account?.id) setMacSelectedId(r.account.id);
+        setMacFormInfo('Account saved.');
+        setMacForm(f => ({ ...f, imap_password: '', smtp_password: '' }));
+      } else {
+        const body = {
+          display_name: macForm.display_name,
+          imap_host: macForm.imap_host, imap_port: macForm.imap_port, imap_user: macForm.imap_user,
+          smtp_host: macForm.smtp_host, smtp_port: macForm.smtp_port, smtp_user: macForm.smtp_user,
+        };
+        if (macForm.imap_password) body.imap_password = macForm.imap_password;
+        if (macForm.smtp_password) body.smtp_password = macForm.smtp_password;
+        await apiFetch(`/mail-accounts/${macSelectedId}`, { method:'PATCH', body: JSON.stringify(body) });
+        await macRefresh(); onMailAccountsChanged?.();
+        setMacFormInfo('Saved.');
+        setMacForm(f => ({ ...f, imap_password: '', smtp_password: '' }));
+      }
+    } catch (e) { setMacFormErr(e.message); }
+    setMacBusy(null);
+  }
+  async function macDelete() {
+    if (!macSelectedId || macSelectedId === 'new') return;
+    if (!confirm('Delete this mail account? (Mail stays on the server.)')) return;
+    setMacBusy('delete');
+    try {
+      await apiFetch(`/mail-accounts/${macSelectedId}`, { method:'DELETE' });
+      await macRefresh(); onMailAccountsChanged?.();
+      setMacSelectedId(null);
+      if (isMobile) setMobileSetCol(1);
+    } catch (e) { setMacFormErr(e.message); }
+    setMacBusy(null);
+  }
+  async function macSync() {
+    if (!macSelectedId || macSelectedId === 'new') return;
+    setMacBusy('sync'); setMacSyncResult(null);
+    try {
+      const r = await apiFetch(`/mail-accounts/${macSelectedId}/sync`, { method:'POST' });
+      setMacSyncResult(r);
+      await macRefresh(); onMailAccountsChanged?.();
+    } catch (e) { setMacSyncResult({ ok:false, error: e.message }); }
+    setMacBusy(null);
+  }
+
+  // Auto-open blank-form detail when the accounts tab loads with zero accounts
+  useEffect(() => {
+    if (activeTab === 'accounts' && macAccounts && macAccounts.length === 0 && macSelectedId === null) {
+      macStartNew();
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeTab, macAccounts]);
+
+  const macInputCls = "w-full border border-gray-200 rounded-lg px-2.5 py-1.5 text-sm outline-none focus:border-indigo-400";
+
+  function renderMacList() {
+    return (
+      <div className="w-44 flex-shrink-0 space-y-1 overflow-y-auto">
+        {macAccounts === null && <div className="text-xs text-gray-400 px-2 py-2">Loading…</div>}
+        {macLoadErr && <div className="text-xs text-red-500 px-2 py-1">{macLoadErr}</div>}
+        {macAccounts && macAccounts.map(a => {
+          const label = a.display_name || a.email;
+          return (
+            <button key={a.id} onClick={()=>macSelectAccount(a)}
+              className={`w-full text-left px-2.5 py-2 rounded-lg text-xs transition-colors truncate ${macSelectedId===a.id?'bg-indigo-50 text-indigo-700 font-semibold border border-indigo-200':'text-gray-600 hover:bg-gray-100 border border-transparent'}`}>
+              <div className="truncate">{label}</div>
+              {label !== a.email && <div className="text-[10px] text-gray-400 truncate">{a.email}</div>}
+            </button>
+          );
+        })}
+        <button onClick={macStartNew}
+          className={`mt-1 w-full text-left px-2 py-1.5 rounded-lg text-xs transition-colors flex items-center gap-1.5 ${macSelectedId==='new'?'bg-indigo-50 text-indigo-700 font-semibold border border-indigo-200':'text-indigo-500 hover:bg-indigo-50 border border-dashed border-indigo-200'}`}>
+          <PlusIcon size={10}/> Add account
+        </button>
+      </div>
+    );
+  }
+
+  function renderMacDetail() {
+    if (macSelectedId === null) {
+      return (
+        <div className="flex-1 min-w-0 flex items-center justify-center text-center text-sm text-gray-400 italic px-4">
+          Select an account on the left to edit, or click + Add account.
+        </div>
+      );
+    }
+    const isNew = macSelectedId === 'new';
+    return (
+      <div className="flex-1 min-w-0 space-y-4">
+        {isNew && (
+          <div>
+            <div className="text-xs text-gray-400 mb-1">Provider</div>
+            <select value={macForm.provider} onChange={e=>macApplyProvider(e.target.value)}
+              className={macInputCls + " bg-white text-gray-700"}>
+              <option value="generic">Generic (own IMAP)</option>
+              <option value="icloud">iCloud</option>
+              <option value="gmail" disabled>Gmail — OAuth coming soon</option>
+            </select>
+            {macForm.provider === 'icloud' && (
+              <div className="mt-2 px-3 py-2 bg-amber-50 border border-amber-200 rounded text-xs text-amber-800">
+                iCloud requires an <b>app-specific password</b>. Generate one at{' '}
+                <a href="https://account.apple.com/account/manage" target="_blank" rel="noreferrer" className="underline">account.apple.com</a>{' '}
+                → Sign-In and Security → App-Specific Passwords.
+              </div>
+            )}
+          </div>
+        )}
+        <div className="grid grid-cols-2 gap-3">
+          <div className="col-span-2">
+            <div className="text-xs text-gray-400 mb-1">Email</div>
+            <input type="email" value={macForm.email}
+              onChange={isNew ? e=>macSetField('email', e.target.value) : undefined}
+              readOnly={!isNew}
+              placeholder="you@example.com"
+              className={macInputCls + (isNew ? "" : " bg-gray-50 text-gray-500")}/>
+          </div>
+          <div className="col-span-2">
+            <div className="text-xs text-gray-400 mb-1">Display name</div>
+            <input value={macForm.display_name} onChange={e=>macSetField('display_name', e.target.value)}
+              placeholder="(optional)" className={macInputCls}/>
+          </div>
+        </div>
+
+        <div className="text-xs font-semibold text-gray-500 uppercase tracking-wider pb-1 border-b border-gray-100 pt-2">Incoming mail (IMAP)</div>
+        <div className="grid grid-cols-2 gap-3">
+          <div className="col-span-2">
+            <div className="text-xs text-gray-400 mb-1">Hostname</div>
+            <input value={macForm.imap_host} onChange={e=>macSetField('imap_host', e.target.value)} placeholder="imap.example.com" className={macInputCls}/>
+          </div>
+          <div>
+            <div className="text-xs text-gray-400 mb-1">Port</div>
+            <input type="number" value={macForm.imap_port} onChange={e=>macSetField('imap_port', Number(e.target.value))} className={macInputCls}/>
+          </div>
+          <div>
+            <div className="text-xs text-gray-400 mb-1">Username</div>
+            <input value={macForm.imap_user} onChange={e=>macSetField('imap_user', e.target.value)} className={macInputCls}/>
+          </div>
+          <div className="col-span-2">
+            <div className="text-xs text-gray-400 mb-1">Password</div>
+            <input type="password" value={macForm.imap_password} onChange={e=>macSetField('imap_password', e.target.value)}
+              placeholder={isNew ? 'password' : 'Leave empty to keep existing'} className={macInputCls}/>
+          </div>
+        </div>
+
+        <div className="text-xs font-semibold text-gray-500 uppercase tracking-wider pb-1 border-b border-gray-100 pt-2">Outgoing mail (SMTP)</div>
+        <div className="grid grid-cols-2 gap-3">
+          <div className="col-span-2">
+            <div className="text-xs text-gray-400 mb-1">Hostname</div>
+            <input value={macForm.smtp_host} onChange={e=>macSetField('smtp_host', e.target.value)} placeholder="smtp.example.com" className={macInputCls}/>
+          </div>
+          <div>
+            <div className="text-xs text-gray-400 mb-1">Port</div>
+            <input type="number" value={macForm.smtp_port} onChange={e=>macSetField('smtp_port', Number(e.target.value))} className={macInputCls}/>
+          </div>
+          <div>
+            <div className="text-xs text-gray-400 mb-1">Username</div>
+            <input value={macForm.smtp_user} onChange={e=>macSetField('smtp_user', e.target.value)} placeholder="often same as IMAP" className={macInputCls}/>
+          </div>
+          <div className="col-span-2">
+            <div className="text-xs text-gray-400 mb-1">Password</div>
+            <input type="password" value={macForm.smtp_password} onChange={e=>macSetField('smtp_password', e.target.value)}
+              placeholder={isNew ? 'often same as IMAP' : 'Leave empty to keep existing'} className={macInputCls}/>
+          </div>
+        </div>
+
+        {macFormErr && <div className="px-3 py-2 rounded bg-red-50 text-red-600 text-xs">{macFormErr}</div>}
+        {macFormInfo && <div className="px-3 py-2 rounded bg-green-50 text-green-700 text-xs">{macFormInfo}</div>}
+        {macSyncResult && macSyncResult.ok && (
+          <div className="px-3 py-2 rounded bg-green-50 text-green-700 text-xs">
+            Synced: {macSyncResult.folders.map(f=>`${f.folder} +${f.inserted}`).join(', ') || 'nothing new'}
+            {macSyncResult.contactsCreated > 0 ? `, ${macSyncResult.contactsCreated} new contacts` : ''}
+            {' '}({(macSyncResult.durationMs/1000).toFixed(1)}s)
+          </div>
+        )}
+        {macSyncResult && !macSyncResult.ok && <div className="px-3 py-2 rounded bg-red-50 text-red-600 text-xs">Sync failed: {macSyncResult.error}</div>}
+
+        <div className="flex flex-wrap items-center gap-2 pt-2">
+          <button onClick={macSave} disabled={macBusy!==null || (isNew && !macFormInfo)}
+            title={isNew && !macFormInfo ? 'Test the connection first' : ''}
+            className="px-4 py-1.5 text-xs rounded-lg bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 text-white font-medium">
+            {macBusy==='save' ? 'Saving…' : 'Save'}
+          </button>
+          <button onClick={macTest} disabled={macBusy!==null}
+            className="px-4 py-1.5 text-xs rounded-lg bg-gray-100 hover:bg-gray-200 disabled:opacity-50 text-gray-600 font-medium">
+            {macBusy==='test' ? 'Testing…' : 'Test connection'}
+          </button>
+          {!isNew && (
+            <button onClick={macSync} disabled={macBusy!==null}
+              className="px-4 py-1.5 text-xs rounded-lg bg-gray-100 hover:bg-gray-200 disabled:opacity-50 text-gray-600 font-medium">
+              {macBusy==='sync' ? 'Syncing…' : 'Sync now'}
+            </button>
+          )}
+          <div className="flex-1"/>
+          {isNew && (
+            <button onClick={()=>{setMacSelectedId(null); if(isMobile) setMobileSetCol(1);}}
+              disabled={macBusy!==null}
+              className="px-4 py-1.5 text-xs rounded-lg bg-gray-100 hover:bg-gray-200 disabled:opacity-50 text-gray-600 font-medium">
+              Cancel
+            </button>
+          )}
+          {!isNew && (
+            <button onClick={macDelete} disabled={macBusy!==null}
+              className="px-4 py-1.5 text-xs rounded-lg bg-red-50 hover:bg-red-100 disabled:opacity-50 text-red-500 font-medium">
+              {macBusy==='delete' ? 'Deleting…' : 'Delete'}
+            </button>
+          )}
+        </div>
+      </div>
+    );
+  }
 
   // Mobile: sliding-panel layout
   if (isMobile) {
-    // profile + accounts: 2 panels (nav, content); signatures: 3 panels (nav, list, detail)
-    const panelCount = activeTab==='signatures' ? 3 : 2;
+    // profile: 2 panels (nav, form); accounts + signatures: 3 panels (nav, list, detail)
+    const panelCount = activeTab==='profile' ? 2 : 3;
     const clampedCol = Math.min(mobileSetCol, panelCount - 1);
     const tabTitle = {profile:'Profile',accounts:'Mail accounts',signatures:'Signatures'}[activeTab];
 
@@ -574,9 +842,7 @@ function SettingsModal({onClose, initialTab='profile', signatures, setSignatures
               </div>
             </div>
           )}
-          {activeTab==='accounts'&&(
-            <MailAccountsPanel onChanged={onMailAccountsChanged} initialFormOpen={mailAccounts.length===0}/>
-          )}
+          {activeTab==='accounts'&&renderMacList()}
           {activeTab==='signatures'&&(
             <div className="space-y-1">
               {signatures.map(sig=>(
@@ -612,11 +878,12 @@ function SettingsModal({onClose, initialTab='profile', signatures, setSignatures
       </div>
     );
 
-    // Detail panel (signatures only — accounts now lives fully in the middle panel)
+    // Detail panel — accounts form or signature editor
     const DetailPanel = (
       <div style={{width:'100vw',height:'100%',flexShrink:0}} className="flex flex-col bg-white">
         <BackBar label={tabTitle} onBack={()=>setMobileSetCol(1)}/>
         <div className="flex-1 overflow-y-auto scroll px-4 py-4">
+          {activeTab==='accounts'&&renderMacDetail()}
           {activeTab==='signatures'&&selSig&&(
             <div className="space-y-4">
               <div>
@@ -746,7 +1013,10 @@ function SettingsModal({onClose, initialTab='profile', signatures, setSignatures
             )}
 
             {activeTab==='accounts'&&(
-              <MailAccountsPanel onChanged={onMailAccountsChanged} initialFormOpen={mailAccounts.length===0}/>
+              <div className="flex gap-4 h-full">
+                {renderMacList()}
+                {renderMacDetail()}
+              </div>
             )}
             {activeTab==='signatures'&&(
               <div className="flex gap-4">
@@ -2698,242 +2968,17 @@ function LoginScreen() {
 
 // ─── App ──────────────────────────────────────────────────────────────────────
 
-// ─── Mail accounts panel (real backend-connected, used inside SettingsModal) ──
+// ─── Mail-accounts provider presets (used by SettingsModal accounts tab) ─────
 const PROVIDER_PRESETS = {
   icloud: { imap_host: "imap.mail.me.com", imap_port: 993, smtp_host: "smtp.mail.me.com", smtp_port: 587 },
   generic: { imap_host: "", imap_port: 993, smtp_host: "", smtp_port: 587 },
 };
 
-function MailAccountsPanel({onChanged, initialFormOpen=false}) {
-  const [accounts, setAccounts] = useState(null); // null=loading, [] or [...]
-  const [loadErr, setLoadErr] = useState('');
-  const [formOpen, setFormOpen] = useState(initialFormOpen);
-  const [form, setForm] = useState({
-    provider: 'generic', email: '', display_name: '',
-    imap_host: '', imap_port: 993, imap_user: '', imap_password: '',
-    smtp_host: '', smtp_port: 587, smtp_user: '', smtp_password: '',
-  });
-  const [formErr, setFormErr] = useState('');
-  const [formInfo, setFormInfo] = useState('');
-  const [busy, setBusy] = useState(null); // null | 'test' | 'save'
-
-  const refresh = useCallback(async () => {
-    try {
-      const r = await apiFetch('/mail-accounts');
-      setAccounts(r.accounts); setLoadErr('');
-    } catch (e) { setLoadErr(e.message); setAccounts([]); }
-  }, []);
-  useEffect(() => { refresh(); }, [refresh]);
-
-  function setProvider(p) {
-    const preset = PROVIDER_PRESETS[p] || PROVIDER_PRESETS.generic;
-    setForm(f => ({ ...f, provider: p, ...preset }));
-  }
-  function openForm() {
-    setForm({ provider:'generic', email:'', display_name:'',
-      imap_host:'', imap_port:993, imap_user:'', imap_password:'',
-      smtp_host:'', smtp_port:587, smtp_user:'', smtp_password:'' });
-    setFormErr(''); setFormInfo(''); setFormOpen(true);
-  }
-  async function testConnection() {
-    setFormErr(''); setFormInfo(''); setBusy('test');
-    try {
-      const r = await apiFetch('/mail-accounts/test', { method:'POST', body: JSON.stringify(form) });
-      setFormInfo(`Connection OK — ${r.mailboxCount} mailboxes found.`);
-    } catch (e) { setFormErr(e.message); }
-    setBusy(null);
-  }
-  async function save() {
-    setFormErr(''); setFormInfo(''); setBusy('save');
-    try {
-      await apiFetch('/mail-accounts', { method:'POST', body: JSON.stringify(form) });
-      await refresh();
-      setFormOpen(false);
-      onChanged?.();
-    } catch (e) { setFormErr(e.message); }
-    setBusy(null);
-  }
-  async function remove(id) {
-    if (!confirm('Delete this mail account? (Mail stays on the server.)')) return;
-    try { await apiFetch(`/mail-accounts/${id}`, { method:'DELETE' }); await refresh(); onChanged?.(); }
-    catch (e) { alert(e.message); }
-  }
-  async function testSaved(id) {
-    setLoadErr('');
-    try {
-      const r = await apiFetch(`/mail-accounts/${id}/test`, { method:'POST' });
-      alert(`Connection OK — ${r.mailboxCount} mailboxes.`);
-    } catch (e) { alert('Test failed: ' + e.message); }
-  }
-
-  const [syncingId, setSyncingId] = useState(null);
-  const [syncResults, setSyncResults] = useState({}); // accountId → result
-  const [expanded, setExpanded] = useState({});       // accountId → {messages:[]} | loading
-
-  async function syncNow(id) {
-    setSyncingId(id); setSyncResults(r => ({...r, [id]: null}));
-    try {
-      const r = await apiFetch(`/mail-accounts/${id}/sync`, { method:'POST' });
-      setSyncResults(s => ({...s, [id]: r}));
-      await refresh();
-      onChanged?.();
-      // If already expanded, reload preview
-      if (expanded[id]) loadPreview(id);
-    } catch (e) {
-      setSyncResults(s => ({...s, [id]: { ok:false, error: e.message }}));
-    }
-    setSyncingId(null);
-  }
-  async function loadPreview(id) {
-    setExpanded(e => ({...e, [id]: { loading:true }}));
-    try {
-      const r = await apiFetch(`/mail-accounts/${id}/messages?limit=5`);
-      setExpanded(e => ({...e, [id]: { messages: r.messages }}));
-    } catch (e) {
-      setExpanded(ex => ({...ex, [id]: { error: e.message }}));
-    }
-  }
-  function togglePreview(id) {
-    if (expanded[id]) setExpanded(e => { const c={...e}; delete c[id]; return c; });
-    else loadPreview(id);
-  }
-
-  const input = "w-full border border-gray-200 rounded-lg px-3 py-2 text-sm outline-none focus:border-indigo-400";
-
-  return (
-    <div className="space-y-4">
-      {loadErr && <div className="px-3 py-2 rounded bg-red-50 text-red-600 text-xs">{loadErr}</div>}
-          {accounts === null && <div className="text-sm text-gray-400">Loading…</div>}
-          {accounts && accounts.length === 0 && !formOpen && (
-            <div className="text-sm text-gray-500 py-6 text-center">No mail accounts connected yet.</div>
-          )}
-          {accounts && accounts.length > 0 && (
-            <div className="divide-y divide-gray-100 border border-gray-200 rounded-lg">
-              {accounts.map(a => {
-                const res = syncResults[a.id];
-                const exp = expanded[a.id];
-                return (
-                <div key={a.id}>
-                  <div className="flex items-center justify-between gap-3 px-3 py-2.5">
-                    <div className="min-w-0 flex-1">
-                      <div className="text-sm font-medium text-gray-800 truncate">{a.display_name || a.email}</div>
-                      <div className="text-xs text-gray-400 truncate">{a.email} · {a.provider} · {a.imap_host}:{a.imap_port}</div>
-                      {a.last_sync_at && <div className="text-xs text-gray-400 mt-0.5">Last synced {new Date(a.last_sync_at).toLocaleString('nl-NL')}</div>}
-                      {a.last_error && <div className="text-xs text-red-500 mt-0.5 truncate" title={a.last_error}>Last error: {a.last_error}</div>}
-                      {res && res.ok && (
-                        <div className="text-xs text-green-600 mt-0.5">
-                          Synced: {res.folders.map(f=>`${f.folder} +${f.inserted}`).join(', ') || 'nothing new'}
-                          {res.contactsCreated>0 ? `, ${res.contactsCreated} new contacts`:''}
-                          {' '}({(res.durationMs/1000).toFixed(1)}s)
-                        </div>
-                      )}
-                      {res && !res.ok && <div className="text-xs text-red-500 mt-0.5">Sync failed: {res.error}</div>}
-                    </div>
-                    <button onClick={()=>syncNow(a.id)} disabled={syncingId===a.id}
-                      className="text-xs text-indigo-600 hover:text-indigo-800 disabled:text-gray-400">
-                      {syncingId===a.id?'Syncing…':'Sync'}
-                    </button>
-                    <button onClick={()=>togglePreview(a.id)} className="text-xs text-gray-500 hover:text-gray-800">
-                      {exp?'Hide':'Preview'}
-                    </button>
-                    <button onClick={()=>testSaved(a.id)} className="text-xs text-indigo-600 hover:text-indigo-800">Test</button>
-                    <button onClick={()=>remove(a.id)} className="text-xs text-red-500 hover:text-red-700">Delete</button>
-                  </div>
-                  {exp && (
-                    <div className="px-3 pb-3 bg-gray-50 border-t border-gray-100">
-                      {exp.loading && <div className="text-xs text-gray-400 py-2">Loading…</div>}
-                      {exp.error && <div className="text-xs text-red-500 py-2">{exp.error}</div>}
-                      {exp.messages && exp.messages.length===0 && <div className="text-xs text-gray-400 py-2">No synced messages yet — click Sync.</div>}
-                      {exp.messages && exp.messages.length>0 && (
-                        <ul className="divide-y divide-gray-200">
-                          {exp.messages.map(m=>(
-                            <li key={m.id} className="py-1.5">
-                              <div className="flex items-center gap-2">
-                                <span className={`text-xs px-1.5 rounded font-medium flex-shrink-0 ${m.direction==='in'?'bg-sky-100 text-sky-600':'bg-emerald-100 text-emerald-600'}`}>{m.direction==='in'?'In':'Out'}</span>
-                                <span className="text-xs text-gray-700 truncate flex-1">{m.subject || '(no subject)'}</span>
-                                <span className="text-xs text-gray-400 flex-shrink-0">{new Date(m.date).toLocaleDateString('nl-NL',{day:'numeric',month:'short'})}</span>
-                              </div>
-                              <div className="text-xs text-gray-500 truncate pl-10">{m.from_name || m.from_email}</div>
-                            </li>
-                          ))}
-                        </ul>
-                      )}
-                    </div>
-                  )}
-                </div>
-              );})}
-            </div>
-          )}
-          {!formOpen && (
-            <button onClick={openForm}
-              className="px-3 py-1.5 text-xs rounded bg-indigo-600 hover:bg-indigo-700 text-white font-medium">
-              + Add account
-            </button>
-          )}
-          {formOpen && (
-            <div className="border border-gray-200 rounded-lg p-4 space-y-3 bg-gray-50">
-              <div className="flex items-center gap-2">
-                <span className="text-xs text-gray-500 w-24">Provider</span>
-                <select value={form.provider} onChange={e=>setProvider(e.target.value)} className={input+" flex-1"}>
-                  <option value="generic">Generic (own IMAP)</option>
-                  <option value="icloud">iCloud</option>
-                  <option value="gmail" disabled>Gmail — OAuth coming soon</option>
-                </select>
-              </div>
-              {form.provider === 'icloud' && (
-                <div className="px-3 py-2 bg-amber-50 border border-amber-200 rounded text-xs text-amber-800">
-                  iCloud requires an <b>app-specific password</b>. Generate one at{' '}
-                  <a href="https://account.apple.com/account/manage" target="_blank" rel="noreferrer" className="underline">account.apple.com</a>{' '}
-                  → Sign-In and Security → App-Specific Passwords.
-                </div>
-              )}
-              <div className="flex items-center gap-2">
-                <span className="text-xs text-gray-500 w-24">Email</span>
-                <input value={form.email} onChange={e=>setForm({...form, email:e.target.value, imap_user: f=>f||e.target.value, smtp_user: f=>f||e.target.value})}
-                  placeholder="you@example.com" className={input+" flex-1"}/>
-              </div>
-              <div className="flex items-center gap-2">
-                <span className="text-xs text-gray-500 w-24">Display name</span>
-                <input value={form.display_name} onChange={e=>setForm({...form, display_name:e.target.value})}
-                  placeholder="(optional)" className={input+" flex-1"}/>
-              </div>
-              <div className="pt-2 mt-2 border-t border-gray-200 text-xs font-medium text-gray-600">IMAP (incoming)</div>
-              <div className="grid grid-cols-2 gap-2">
-                <input value={form.imap_host} onChange={e=>setForm({...form, imap_host:e.target.value})} placeholder="imap.example.com" className={input}/>
-                <input type="number" value={form.imap_port} onChange={e=>setForm({...form, imap_port:Number(e.target.value)})} placeholder="993" className={input}/>
-                <input value={form.imap_user} onChange={e=>setForm({...form, imap_user:e.target.value})} placeholder="username" className={input}/>
-                <input type="password" value={form.imap_password} onChange={e=>setForm({...form, imap_password:e.target.value})} placeholder="password" className={input}/>
-              </div>
-              <div className="pt-2 mt-2 border-t border-gray-200 text-xs font-medium text-gray-600">SMTP (outgoing)</div>
-              <div className="grid grid-cols-2 gap-2">
-                <input value={form.smtp_host} onChange={e=>setForm({...form, smtp_host:e.target.value})} placeholder="smtp.example.com" className={input}/>
-                <input type="number" value={form.smtp_port} onChange={e=>setForm({...form, smtp_port:Number(e.target.value)})} placeholder="587" className={input}/>
-                <input value={form.smtp_user} onChange={e=>setForm({...form, smtp_user:e.target.value})} placeholder="username (often same as IMAP)" className={input}/>
-                <input type="password" value={form.smtp_password} onChange={e=>setForm({...form, smtp_password:e.target.value})} placeholder="password (often same as IMAP)" className={input}/>
-              </div>
-              {formErr && <div className="px-3 py-2 rounded bg-red-50 text-red-600 text-xs">{formErr}</div>}
-              {formInfo && <div className="px-3 py-2 rounded bg-green-50 text-green-700 text-xs">{formInfo}</div>}
-              <div className="flex items-center gap-2 pt-2">
-                <button onClick={testConnection} disabled={busy!==null}
-                  className="px-3 py-1.5 text-xs rounded bg-gray-200 hover:bg-gray-300 disabled:opacity-50 text-gray-700 font-medium">
-                  {busy==='test'?'Testing…':'Test connection'}
-                </button>
-                <button onClick={save} disabled={busy!==null||!formInfo}
-                  title={!formInfo?'Test the connection first':''}
-                  className="px-3 py-1.5 text-xs rounded bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 text-white font-medium">
-                  {busy==='save'?'Saving…':'Save'}
-                </button>
-                <div className="flex-1"/>
-                <button onClick={()=>setFormOpen(false)}
-                  className="px-3 py-1.5 text-xs rounded bg-gray-100 hover:bg-gray-200 text-gray-600">
-                  Cancel
-                </button>
-              </div>
-            </div>
-          )}
-        </div>
-  );
-}
+const BLANK_MAC_FORM = {
+  provider: 'generic', email: '', display_name: '',
+  imap_host: '', imap_port: 993, imap_user: '', imap_password: '',
+  smtp_host: '', smtp_port: 587, smtp_user: '', smtp_password: '',
+};
 
 function App({onSignOut}) {
   // Mobile

@@ -81,6 +81,46 @@ export async function registerMailAccountsRoutes(app: FastifyInstance) {
     }
   });
 
+  // ─── Update account (partial) ────────────────────────────────────────────
+  // Email is read-only. Passwords are only re-encrypted when non-empty values
+  // are provided — an empty/missing password field leaves the existing creds
+  // untouched, so the user can edit display_name or hosts without re-typing.
+  app.patch<{ Params: { id: string }; Body: Partial<AccountInput> }>("/mail-accounts/:id", auth, async (req, reply) => {
+    const id = req.params.id;
+    const b = req.body;
+    const pool = requirePool();
+
+    const r0 = await pool.query<{ user_id: string }>(
+      `SELECT user_id FROM mail_accounts WHERE id = $1`, [id],
+    );
+    if (r0.rows.length === 0) return reply.notFound();
+    if (r0.rows[0].user_id !== req.authUser!.id) return reply.forbidden();
+
+    const sets: string[] = [];
+    const vals: unknown[] = [];
+    let p = 1;
+    const setField = (col: string, val: unknown) => { sets.push(`${col} = $${p++}`); vals.push(val); };
+
+    if (b.display_name !== undefined) setField("display_name", b.display_name || null);
+    if (b.imap_host     !== undefined) setField("imap_host",    b.imap_host || null);
+    if (b.imap_port     !== undefined) setField("imap_port",    b.imap_port || null);
+    if (b.imap_user     !== undefined) setField("imap_user",    b.imap_user || null);
+    if (b.imap_password)               setField("imap_cred_enc", encrypt(b.imap_password));
+    if (b.smtp_host     !== undefined) setField("smtp_host",    b.smtp_host || null);
+    if (b.smtp_port     !== undefined) setField("smtp_port",    b.smtp_port || null);
+    if (b.smtp_user     !== undefined) setField("smtp_user",    b.smtp_user || null);
+    if (b.smtp_password)               setField("smtp_cred_enc", encrypt(b.smtp_password));
+
+    if (sets.length === 0) return reply.badRequest("no updatable fields provided");
+
+    vals.push(id);
+    await pool.query(
+      `UPDATE mail_accounts SET ${sets.join(", ")} WHERE id = $${p}`,
+      vals,
+    );
+    return reply.code(204).send();
+  });
+
   // ─── Delete account ─────────────────────────────────────────────────────
   app.delete<{ Params: { id: string } }>("/mail-accounts/:id", auth, async (req, reply) => {
     const sb = supabaseWithJwt(req.authJwt!);
