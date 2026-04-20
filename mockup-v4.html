@@ -72,7 +72,7 @@ const { useState, useMemo, useRef, useEffect, useCallback } = React;
 
 // ─── Constants ───────────────────────────────────────────────────────────────
 
-const APP_VERSION = "0.0.14"; // bumped on every deploy — keep in sync with version.json
+const APP_VERSION = "0.0.15"; // bumped on every deploy — keep in sync with version.json
 
 // ─── Backend + Supabase config ───────────────────────────────────────────────
 const SUPABASE_URL = "https://oyrlzqbjcsliesvunbwj.supabase.co";
@@ -3739,31 +3739,18 @@ function App({onSignOut}) {
       return next;
     });
   }
-  function handleUnmergeEmail(contactId, email){
+  async function handleUnmergeEmail(contactId, email){
     const contact = contactList.find(c=>c.id===contactId);
     if(!contact || contact.emails.length <= 1) return;
-    const newId = Math.max(...contactList.map(c=>c.id)) + 1;
-    const newContact = {
-      id: newId,
-      name: email.split('@')[0],
-      org: '',
-      emails: [email],
-      avatar: email.substring(0,2).toUpperCase(),
-      color: '#6366f1',
-      portrait: null,
-      r2mDays: 3,
-      account: contact.account
-    };
-    setContactList(prev => [
-      ...prev.map(c => c.id===contactId ? {...c, emails: c.emails.filter(e=>e!==email)} : c),
-      newContact
-    ]);
-    // Move messages that exclusively involve this email to the new contact
-    setMessageList(prev => prev.map(m => {
-      if(m.contactId !== contactId) return m;
-      if(m.from === email || m.to === email) return {...m, contactId: newId};
-      return m;
-    }));
+    try {
+      await apiFetch(`/contacts/${contactId}/unmerge-email`, {
+        method:'POST',
+        body: JSON.stringify({ email }),
+      });
+      refreshData();
+    } catch (e) {
+      alert('Unmerge failed: ' + e.message);
+    }
   }
   function handleAddMsgTag(msgId,tag){setMsgTags(prev=>({...prev,[msgId]:[...(prev[msgId]||[]).filter(t=>t!==tag),tag]}));}
   function handleRemoveMsgTag(msgId,tag){setMsgTags(prev=>({...prev,[msgId]:(prev[msgId]||[]).filter(t=>t!==tag)}));}

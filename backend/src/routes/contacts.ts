@@ -71,4 +71,74 @@ export async function registerContactsRoutes(app: FastifyInstance) {
       return { ok: true, kept: keepId, discarded: discardId };
     },
   );
+
+  // ─── Unmerge one email off a contact into a new contact ────────────────
+  // Used when a contact was erroneously auto-merged or when a shared address
+  // should become its own identity. Leaves the original contact with its
+  // remaining emails. Messages re-attribute via email lookup on next sync.
+  app.post<{ Params: { id: string }; Body: { email: string; name?: string } }>(
+    "/contacts/:id/unmerge-email",
+    auth,
+    async (req, reply) => {
+      const contactId = req.params.id;
+      const email = (req.body?.email || "").toLowerCase().trim();
+      const requestedName = req.body?.name?.trim();
+      if (!email) return reply.badRequest("email required");
+
+      const pool = requirePool();
+      const userId = req.authUser!.id;
+      const client = await pool.connect();
+      try {
+        await client.query("BEGIN");
+        // Ownership + email-belongs-to-this-contact check
+        const own = await client.query<{ user_id: string }>(
+          `SELECT user_id FROM contacts WHERE id = $1 FOR UPDATE`,
+          [contactId],
+        );
+        if (own.rows.length === 0) { await client.query("ROLLBACK"); return reply.notFound(); }
+        if (own.rows[0].user_id !== userId) { await client.query("ROLLBACK"); return reply.forbidden(); }
+
+        const ce = await client.query(
+          `SELECT 1 FROM contact_emails WHERE contact_id = $1 AND email = $2`,
+          [contactId, email],
+        );
+        if (ce.rowCount === 0) { await client.query("ROLLBACK"); return reply.badRequest("email not linked to this contact"); }
+
+        const countRes = await client.query<{ c: number }>(
+          `SELECT COUNT(*)::int AS c FROM contact_emails WHERE contact_id = $1`,
+          [contactId],
+        );
+        if (countRes.rows[0].c <= 1) { await client.query("ROLLBACK"); return reply.badRequest("contact has only one email — cannot unmerge"); }
+
+        // Derive a reasonable default name from the local-part if none provided
+        const defaultName = email.split("@")[0]
+          .split(/[._-]+/).filter(Boolean)
+          .map(p => p[0].toUpperCase() + p.slice(1)).join(" ")
+          || email;
+        const newName = requestedName || defaultName;
+
+        const ins = await client.query<{ id: string }>(
+          `INSERT INTO contacts (user_id, name, primary_email)
+             VALUES ($1, $2, $3)
+             RETURNING id`,
+          [userId, newName, email],
+        );
+        const newId = ins.rows[0].id;
+
+        await client.query(
+          `UPDATE contact_emails SET contact_id = $1, user_id = $2 WHERE email = $3 AND contact_id = $4`,
+          [newId, userId, email, contactId],
+        );
+
+        await client.query("COMMIT");
+        return { ok: true, newContactId: newId, name: newName, email };
+      } catch (e) {
+        await client.query("ROLLBACK");
+        const msg = e instanceof Error ? e.message : String(e);
+        return reply.internalServerError(msg);
+      } finally {
+        client.release();
+      }
+    },
+  );
 }
