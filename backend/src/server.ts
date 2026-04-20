@@ -3,6 +3,7 @@ import cors from "@fastify/cors";
 import sensible from "@fastify/sensible";
 import { config } from "./config.js";
 import { authPreHandler } from "./auth.js";
+import { registerMailAccountsRoutes } from "./routes/mailAccounts.js";
 
 const app = Fastify({
   logger: {
@@ -26,6 +27,8 @@ app.get("/health", async () => ({
 app.get("/me", { preHandler: authPreHandler }, async (req) => ({
   user: req.authUser,
 }));
+
+await registerMailAccountsRoutes(app);
 
 try {
   await app.listen({ port: config.port, host: config.host });
