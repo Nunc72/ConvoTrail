@@ -1,0 +1,39 @@
+import type { FastifyInstance } from "fastify";
+import { supabaseWithJwt } from "../supabase.js";
+import { authPreHandler } from "../auth.js";
+
+export async function registerDataRoutes(app: FastifyInstance) {
+  const auth = { preHandler: authPreHandler };
+
+  // ─── Contacts (with all emails) ─────────────────────────────────────────
+  app.get("/contacts", auth, async (req, reply) => {
+    const sb = supabaseWithJwt(req.authJwt!);
+    const { data, error } = await sb
+      .from("contacts")
+      .select(
+        "id, name, org, color, portrait_url, r2m_days, primary_email, archived_at, " +
+        "contact_emails(email, is_news, is_muted)",
+      )
+      .order("name", { ascending: true });
+    if (error) return reply.internalServerError(error.message);
+    return { contacts: data };
+  });
+
+  // ─── Messages (cross-account, filtered by user via RLS) ─────────────────
+  app.get<{ Querystring: { limit?: string; before?: string } }>("/messages", auth, async (req, reply) => {
+    const limit = Math.min(Number(req.query.limit) || 500, 2000);
+    const sb = supabaseWithJwt(req.authJwt!);
+    let q = sb
+      .from("messages")
+      .select(
+        "id, mail_account_id, folder, uid, thread_id, from_email, from_name, to_emails, " +
+        "subject, snippet, body_text, date, flags, direction, deleted_at, has_attachments",
+      )
+      .order("date", { ascending: false })
+      .limit(limit);
+    if (req.query.before) q = q.lt("date", req.query.before);
+    const { data, error } = await q;
+    if (error) return reply.internalServerError(error.message);
+    return { messages: data };
+  });
+}

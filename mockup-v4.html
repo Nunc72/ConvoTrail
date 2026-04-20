@@ -72,7 +72,7 @@ const { useState, useMemo, useRef, useEffect, useCallback } = React;
 
 // ─── Constants ───────────────────────────────────────────────────────────────
 
-const APP_VERSION = "0.0.8"; // bumped on every deploy — keep in sync with version.json
+const APP_VERSION = "0.0.9"; // bumped on every deploy — keep in sync with version.json
 
 // ─── Backend + Supabase config ───────────────────────────────────────────────
 const SUPABASE_URL = "https://oyrlzqbjcsliesvunbwj.supabase.co";
@@ -82,6 +82,25 @@ const BACKEND_URL = "https://convotrail-backend-nunc72.fly.dev";
 const sb = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
   auth: { persistSession: true, autoRefreshToken: true, detectSessionInUrl: true, flowType: "pkce" },
 });
+
+const AVATAR_PALETTE = ["#6366f1","#0ea5e9","#14b8a6","#10b981","#f59e0b","#ef4444","#ec4899","#8b5cf6","#3b82f6","#f97316"];
+function initialsOf(nameOrEmail) {
+  if (!nameOrEmail) return "?";
+  const s = String(nameOrEmail).trim();
+  if (s.includes("@")) {
+    const local = s.split("@")[0];
+    return local.slice(0, 2).toUpperCase();
+  }
+  const parts = s.split(/\s+/).filter(Boolean);
+  if (parts.length === 0) return "?";
+  if (parts.length === 1) return parts[0].slice(0, 2).toUpperCase();
+  return (parts[0][0] + parts[parts.length - 1][0]).toUpperCase();
+}
+function colorFromSeed(seed) {
+  let h = 0;
+  for (let i = 0; i < seed.length; i++) h = (h * 31 + seed.charCodeAt(i)) >>> 0;
+  return AVATAR_PALETTE[h % AVATAR_PALETTE.length];
+}
 
 async function apiFetch(path, opts = {}) {
   const { data: { session } } = await sb.auth.getSession();
@@ -3110,8 +3129,81 @@ function App({onSignOut}) {
   const [tagsHeight,   setTagsHeight]   = useState(180);
   const [archiveHeight,setArchiveHeight]= useState(120);
   // Data
-  const [contactList,  setContactList]  = useState(INIT_CONTACTS);
-  const [messageList,  setMessageList]  = useState(INIT_MESSAGES);
+  const [contactList,  setContactList]  = useState([]);
+  const [messageList,  setMessageList]  = useState([]);
+  const [dataLoading,  setDataLoading]  = useState(true);
+  const [dataError,    setDataError]    = useState('');
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      setDataLoading(true); setDataError('');
+      try {
+        const [{ contacts }, { messages }] = await Promise.all([
+          apiFetch('/contacts'),
+          apiFetch('/messages?limit=500'),
+        ]);
+        if (cancelled) return;
+
+        // Build email → contact map for linking messages
+        const emailToContactId = new Map();
+        for (const c of contacts) {
+          for (const ce of c.contact_emails || []) {
+            if (ce.email) emailToContactId.set(ce.email.toLowerCase(), c.id);
+          }
+          if (c.primary_email) emailToContactId.set(c.primary_email.toLowerCase(), c.id);
+        }
+
+        // Shape contacts into mockup format (derive avatar + color if missing)
+        const shapedContacts = contacts.map(c => {
+          const emails = (c.contact_emails && c.contact_emails.length
+            ? c.contact_emails.map(e => e.email)
+            : [c.primary_email].filter(Boolean));
+          return {
+            id: c.id,
+            name: c.name || emails[0] || '(unknown)',
+            org: c.org || '',
+            emails,
+            avatar: initialsOf(c.name || emails[0] || ''),
+            color: c.color || colorFromSeed(c.name || emails[0] || ''),
+            portrait: c.portrait_url || null,
+            r2mDays: c.r2m_days || 3,
+            account: null,
+          };
+        });
+
+        // Shape messages into mockup format; compute contactId via the "other" email
+        const shapedMessages = messages.map(m => {
+          const otherEmail = m.direction === 'in'
+            ? (m.from_email || '').toLowerCase()
+            : (m.to_emails?.[0]?.email || '').toLowerCase();
+          const contactId = emailToContactId.get(otherEmail) ?? null;
+          return {
+            id: m.id,
+            contactId,
+            dir: m.direction,
+            subject: m.subject || '(no subject)',
+            from: m.from_email || '',
+            to: m.to_emails?.[0]?.email || '',
+            date: m.date,
+            read: !!m.flags?.seen,
+            revert2me: false,
+            draft: !!m.flags?.draft,
+            body: m.body_text || m.snippet || '',
+            hasAttachments: !!m.has_attachments,
+          };
+        }).filter(m => m.contactId !== null);
+
+        setContactList(shapedContacts);
+        setMessageList(shapedMessages);
+      } catch (e) {
+        if (!cancelled) setDataError(e.message);
+      } finally {
+        if (!cancelled) setDataLoading(false);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, []);
   const [deletedIds,   setDeletedIds]   = useState(INIT_DELETED);
   const [msgTags,      setMsgTags]      = useState(INIT_MSG_TAGS);
   const [conTags,      setConTags]      = useState(INIT_CON_TAGS);
@@ -3889,6 +3981,29 @@ function App({onSignOut}) {
         signatures={signatures} setSignatures={setSignatures}
         accountSigs={accountSigs} setAccountSigs={setAccountSigs}/>}
       {showMailAccounts&&<MailAccountsModal onClose={()=>setShowMailAccounts(false)}/>}
+
+      {/* Data-loading / empty-state banner */}
+      {(dataLoading || dataError || (!dataLoading && contactList.length===0)) && (
+        <div className={`flex items-center gap-3 px-4 py-2 text-xs flex-shrink-0 border-b ${dataError?'bg-red-50 border-red-200 text-red-700':'bg-indigo-50 border-indigo-100 text-indigo-700'}`}>
+          {dataLoading && <span>Loading your mail…</span>}
+          {dataError && <span>Couldn't load data: {dataError}</span>}
+          {!dataLoading && !dataError && contactList.length===0 && (
+            <>
+              <span>No mail synced yet.</span>
+              <button onClick={()=>setShowMailAccounts(true)}
+                className="underline hover:no-underline font-medium">
+                Add a mail account
+              </button>
+              <span>or open</span>
+              <button onClick={()=>setShowMailAccounts(true)}
+                className="underline hover:no-underline font-medium">
+                Mail accounts
+              </button>
+              <span>and click Sync.</span>
+            </>
+          )}
+        </div>
+      )}
 
       {/* Global mobile toast — below the back-subheader so the '< [name]' link stays tappable */}
       {isMobile&&actionToast&&(
