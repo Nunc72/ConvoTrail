@@ -72,7 +72,7 @@ const { useState, useMemo, useRef, useEffect, useCallback } = React;
 
 // ─── Constants ───────────────────────────────────────────────────────────────
 
-const APP_VERSION = "0.0.9"; // bumped on every deploy — keep in sync with version.json
+const APP_VERSION = "0.0.10"; // bumped on every deploy — keep in sync with version.json
 
 // ─── Backend + Supabase config ───────────────────────────────────────────────
 const SUPABASE_URL = "https://oyrlzqbjcsliesvunbwj.supabase.co";
@@ -3139,10 +3139,7 @@ function App({onSignOut}) {
     (async () => {
       setDataLoading(true); setDataError('');
       try {
-        const [{ contacts }, { messages }] = await Promise.all([
-          apiFetch('/contacts'),
-          apiFetch('/messages?limit=500'),
-        ]);
+        const { contacts, messages } = await apiFetch('/bootstrap?limit=500');
         if (cancelled) return;
 
         // Build email → contact map for linking messages

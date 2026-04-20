@@ -5,6 +5,25 @@ import { authPreHandler } from "../auth.js";
 export async function registerDataRoutes(app: FastifyInstance) {
   const auth = { preHandler: authPreHandler };
 
+  // ─── Bootstrap: contacts + messages in one round-trip ───────────────────
+  app.get<{ Querystring: { limit?: string } }>("/bootstrap", auth, async (req, reply) => {
+    const limit = Math.min(Number(req.query.limit) || 500, 2000);
+    const sb = supabaseWithJwt(req.authJwt!);
+    const [contactsRes, messagesRes] = await Promise.all([
+      sb.from("contacts").select(
+        "id, name, org, color, portrait_url, r2m_days, primary_email, archived_at, " +
+        "contact_emails(email, is_news, is_muted)",
+      ).order("name", { ascending: true }),
+      sb.from("messages").select(
+        "id, mail_account_id, folder, uid, thread_id, from_email, from_name, to_emails, " +
+        "subject, snippet, body_text, date, flags, direction, deleted_at, has_attachments",
+      ).order("date", { ascending: false }).limit(limit),
+    ]);
+    if (contactsRes.error) return reply.internalServerError(contactsRes.error.message);
+    if (messagesRes.error) return reply.internalServerError(messagesRes.error.message);
+    return { contacts: contactsRes.data, messages: messagesRes.data };
+  });
+
   // ─── Contacts (with all emails) ─────────────────────────────────────────
   app.get("/contacts", auth, async (req, reply) => {
     const sb = supabaseWithJwt(req.authJwt!);
