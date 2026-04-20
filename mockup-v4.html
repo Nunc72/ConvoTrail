@@ -72,7 +72,7 @@ const { useState, useMemo, useRef, useEffect, useCallback } = React;
 
 // ─── Constants ───────────────────────────────────────────────────────────────
 
-const APP_VERSION = "0.0.11"; // bumped on every deploy — keep in sync with version.json
+const APP_VERSION = "0.0.12"; // bumped on every deploy — keep in sync with version.json
 
 // ─── Backend + Supabase config ───────────────────────────────────────────────
 const SUPABASE_URL = "https://oyrlzqbjcsliesvunbwj.supabase.co";
@@ -3448,7 +3448,7 @@ function App({onSignOut}) {
     return contactList
       .filter(contact => (contact.accountEmails||[]).some(ae=>selAccounts.includes(ae)))
       .map(contact=>{
-        const all=messageList.filter(m=>m.contactId===contact.id);
+        const all=messageList.filter(m=>m.contactId===contact.id && (!m.accountEmail || selAccounts.includes(m.accountEmail)));
         const active=all.filter(m=>!deletedIds.includes(m.id)&&!m.draft);
         const unread=active.filter(m=>!m.read).length;
         const oldestUnread=unread>0?active.filter(m=>!m.read).reduce((a,b)=>a.date<b.date?a:b).date:null;
@@ -3778,7 +3778,10 @@ function App({onSignOut}) {
   const selectedMsg=messageList.find(m=>m.id===selMsg)||null;
   // When in tag view, derive the detail contact from the message itself
   const detailContact = selectedContact || (selectedMsg?contactList.find(c=>c.id===selectedMsg.contactId)||null:null);
-  const allContactMsgs=selContact?messageList.filter(m=>m.contactId===selContact).filter(msgMatchesSearch):[];
+  const allContactMsgs=selContact?messageList
+    .filter(m=>m.contactId===selContact)
+    .filter(m=>!m.accountEmail||selAccounts.includes(m.accountEmail))
+    .filter(msgMatchesSearch):[];
   const totalUnread=messageList.filter(m=>!m.read&&!deletedIds.includes(m.id)&&!m.draft&&selAccounts.includes(m.accountEmail)).length;
   const totalR2m=messageList.filter(m=>m.revert2me&&!deletedIds.includes(m.id)&&!m.draft&&selAccounts.includes(m.accountEmail)).length;
 
