@@ -72,7 +72,7 @@ const { useState, useMemo, useRef, useEffect, useCallback } = React;
 
 // ─── Constants ───────────────────────────────────────────────────────────────
 
-const APP_VERSION = "0.0.5"; // bumped on every deploy — keep in sync with version.json
+const APP_VERSION = "0.0.6"; // bumped on every deploy — keep in sync with version.json
 
 // ─── Backend + Supabase config ───────────────────────────────────────────────
 const SUPABASE_URL = "https://oyrlzqbjcsliesvunbwj.supabase.co";
@@ -2918,6 +2918,37 @@ function MailAccountsModal({onClose}) {
     } catch (e) { alert('Test failed: ' + e.message); }
   }
 
+  const [syncingId, setSyncingId] = useState(null);
+  const [syncResults, setSyncResults] = useState({}); // accountId → result
+  const [expanded, setExpanded] = useState({});       // accountId → {messages:[]} | loading
+
+  async function syncNow(id) {
+    setSyncingId(id); setSyncResults(r => ({...r, [id]: null}));
+    try {
+      const r = await apiFetch(`/mail-accounts/${id}/sync`, { method:'POST' });
+      setSyncResults(s => ({...s, [id]: r}));
+      await refresh();
+      // If already expanded, reload preview
+      if (expanded[id]) loadPreview(id);
+    } catch (e) {
+      setSyncResults(s => ({...s, [id]: { ok:false, error: e.message }}));
+    }
+    setSyncingId(null);
+  }
+  async function loadPreview(id) {
+    setExpanded(e => ({...e, [id]: { loading:true }}));
+    try {
+      const r = await apiFetch(`/mail-accounts/${id}/messages?limit=5`);
+      setExpanded(e => ({...e, [id]: { messages: r.messages }}));
+    } catch (e) {
+      setExpanded(ex => ({...ex, [id]: { error: e.message }}));
+    }
+  }
+  function togglePreview(id) {
+    if (expanded[id]) setExpanded(e => { const c={...e}; delete c[id]; return c; });
+    else loadPreview(id);
+  }
+
   const input = "w-full border border-gray-200 rounded-lg px-3 py-2 text-sm outline-none focus:border-indigo-400";
 
   return (
@@ -2936,17 +2967,59 @@ function MailAccountsModal({onClose}) {
           )}
           {accounts && accounts.length > 0 && (
             <div className="divide-y divide-gray-100 border border-gray-200 rounded-lg">
-              {accounts.map(a => (
-                <div key={a.id} className="flex items-center justify-between gap-3 px-3 py-2.5">
-                  <div className="min-w-0 flex-1">
-                    <div className="text-sm font-medium text-gray-800 truncate">{a.display_name || a.email}</div>
-                    <div className="text-xs text-gray-400 truncate">{a.email} · {a.provider} · {a.imap_host}:{a.imap_port}</div>
-                    {a.last_error && <div className="text-xs text-red-500 mt-0.5 truncate" title={a.last_error}>Last error: {a.last_error}</div>}
+              {accounts.map(a => {
+                const res = syncResults[a.id];
+                const exp = expanded[a.id];
+                return (
+                <div key={a.id}>
+                  <div className="flex items-center justify-between gap-3 px-3 py-2.5">
+                    <div className="min-w-0 flex-1">
+                      <div className="text-sm font-medium text-gray-800 truncate">{a.display_name || a.email}</div>
+                      <div className="text-xs text-gray-400 truncate">{a.email} · {a.provider} · {a.imap_host}:{a.imap_port}</div>
+                      {a.last_sync_at && <div className="text-xs text-gray-400 mt-0.5">Last synced {new Date(a.last_sync_at).toLocaleString('nl-NL')}</div>}
+                      {a.last_error && <div className="text-xs text-red-500 mt-0.5 truncate" title={a.last_error}>Last error: {a.last_error}</div>}
+                      {res && res.ok && (
+                        <div className="text-xs text-green-600 mt-0.5">
+                          Synced: {res.folders.map(f=>`${f.folder} +${f.inserted}`).join(', ') || 'nothing new'}
+                          {res.contactsCreated>0 ? `, ${res.contactsCreated} new contacts`:''}
+                          {' '}({(res.durationMs/1000).toFixed(1)}s)
+                        </div>
+                      )}
+                      {res && !res.ok && <div className="text-xs text-red-500 mt-0.5">Sync failed: {res.error}</div>}
+                    </div>
+                    <button onClick={()=>syncNow(a.id)} disabled={syncingId===a.id}
+                      className="text-xs text-indigo-600 hover:text-indigo-800 disabled:text-gray-400">
+                      {syncingId===a.id?'Syncing…':'Sync'}
+                    </button>
+                    <button onClick={()=>togglePreview(a.id)} className="text-xs text-gray-500 hover:text-gray-800">
+                      {exp?'Hide':'Preview'}
+                    </button>
+                    <button onClick={()=>testSaved(a.id)} className="text-xs text-indigo-600 hover:text-indigo-800">Test</button>
+                    <button onClick={()=>remove(a.id)} className="text-xs text-red-500 hover:text-red-700">Delete</button>
                   </div>
-                  <button onClick={()=>testSaved(a.id)} className="text-xs text-indigo-600 hover:text-indigo-800">Test</button>
-                  <button onClick={()=>remove(a.id)} className="text-xs text-red-500 hover:text-red-700">Delete</button>
+                  {exp && (
+                    <div className="px-3 pb-3 bg-gray-50 border-t border-gray-100">
+                      {exp.loading && <div className="text-xs text-gray-400 py-2">Loading…</div>}
+                      {exp.error && <div className="text-xs text-red-500 py-2">{exp.error}</div>}
+                      {exp.messages && exp.messages.length===0 && <div className="text-xs text-gray-400 py-2">No synced messages yet — click Sync.</div>}
+                      {exp.messages && exp.messages.length>0 && (
+                        <ul className="divide-y divide-gray-200">
+                          {exp.messages.map(m=>(
+                            <li key={m.id} className="py-1.5">
+                              <div className="flex items-center gap-2">
+                                <span className={`text-xs px-1.5 rounded font-medium flex-shrink-0 ${m.direction==='in'?'bg-sky-100 text-sky-600':'bg-emerald-100 text-emerald-600'}`}>{m.direction==='in'?'In':'Out'}</span>
+                                <span className="text-xs text-gray-700 truncate flex-1">{m.subject || '(no subject)'}</span>
+                                <span className="text-xs text-gray-400 flex-shrink-0">{new Date(m.date).toLocaleDateString('nl-NL',{day:'numeric',month:'short'})}</span>
+                              </div>
+                              <div className="text-xs text-gray-500 truncate pl-10">{m.from_name || m.from_email}</div>
+                            </li>
+                          ))}
+                        </ul>
+                      )}
+                    </div>
+                  )}
                 </div>
-              ))}
+              );})}
             </div>
           )}
           {!formOpen && (

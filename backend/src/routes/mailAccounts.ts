@@ -3,6 +3,7 @@ import { supabaseWithJwt, supabaseAdmin } from "../supabase.js";
 import { encrypt, decrypt } from "../crypto.js";
 import { testImapConnection } from "../imap.js";
 import { authPreHandler } from "../auth.js";
+import { syncAccount } from "../sync.js";
 
 interface AccountInput {
   email: string;
@@ -85,6 +86,34 @@ export async function registerMailAccountsRoutes(app: FastifyInstance) {
     const { error } = await sb.from("mail_accounts").delete().eq("id", req.params.id);
     if (error) return reply.internalServerError(error.message);
     return reply.code(204).send();
+  });
+
+  // ─── Sync account (fetch last 90d INBOX + Sent, upsert messages + contacts) ─
+  app.post<{ Params: { id: string } }>("/mail-accounts/:id/sync", auth, async (req, reply) => {
+    if (!supabaseAdmin) return reply.internalServerError("Service key not configured");
+    // Verify ownership first
+    const { data: acc, error } = await supabaseAdmin
+      .from("mail_accounts").select("user_id").eq("id", req.params.id).single();
+    if (error || !acc) return reply.notFound();
+    if (acc.user_id !== req.authUser!.id) return reply.forbidden();
+
+    const result = await syncAccount(req.params.id);
+    if (!result.ok) return reply.code(400).send(result);
+    return result;
+  });
+
+  // ─── List synced messages for an account (MVP: latest N) ────────────────
+  app.get<{ Params: { id: string }; Querystring: { limit?: string } }>("/mail-accounts/:id/messages", auth, async (req, reply) => {
+    const limit = Math.min(Number(req.query.limit) || 10, 100);
+    const sb = supabaseWithJwt(req.authJwt!);
+    const { data, error } = await sb
+      .from("messages")
+      .select("id, folder, uid, from_email, from_name, subject, snippet, date, direction, flags")
+      .eq("mail_account_id", req.params.id)
+      .order("date", { ascending: false })
+      .limit(limit);
+    if (error) return reply.internalServerError(error.message);
+    return { messages: data };
   });
 
   // ─── Test connection for existing saved account ─────────────────────────
