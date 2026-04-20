@@ -5,6 +5,7 @@ import { testImapConnection } from "../imap.js";
 import { authPreHandler } from "../auth.js";
 import { syncAccount } from "../sync.js";
 import { requirePool } from "../db.js";
+import { sendMail, splitAddresses } from "../smtp.js";
 
 interface AccountInput {
   email: string;
@@ -155,6 +156,91 @@ export async function registerMailAccountsRoutes(app: FastifyInstance) {
       .limit(limit);
     if (error) return reply.internalServerError(error.message);
     return { messages: data };
+  });
+
+  // ─── Send a mail (SMTP + best-effort APPEND to Sent) ─────────────────────
+  app.post<{
+    Params: { id: string };
+    Body: { to: string; cc?: string; bcc?: string; subject?: string; body?: string; reply_to_id?: string };
+  }>("/mail-accounts/:id/send", auth, async (req, reply) => {
+    const { id } = req.params;
+    const b = req.body || ({} as typeof req.body);
+    if (!b.to || !b.to.trim()) return reply.badRequest("to required");
+
+    const pool = requirePool();
+    const r = await pool.query<{
+      user_id: string; email: string; display_name: string | null;
+      imap_host: string | null; imap_port: number | null; imap_user: string | null; imap_cred_enc: Buffer | null;
+      smtp_host: string | null; smtp_port: number | null; smtp_user: string | null; smtp_cred_enc: Buffer | null;
+    }>(
+      `SELECT user_id, email, display_name,
+              imap_host, imap_port, imap_user, imap_cred_enc,
+              smtp_host, smtp_port, smtp_user, smtp_cred_enc
+         FROM mail_accounts WHERE id = $1`,
+      [id],
+    );
+    if (r.rows.length === 0) return reply.notFound();
+    const acc = r.rows[0];
+    if (acc.user_id !== req.authUser!.id) return reply.forbidden();
+    if (!acc.smtp_host || !acc.smtp_port || !acc.smtp_cred_enc) return reply.badRequest("SMTP not configured for this account");
+    if (!acc.imap_host || !acc.imap_port || !acc.imap_cred_enc) return reply.badRequest("IMAP not configured for this account");
+
+    // Threading: resolve RFC Message-ID of the message we are replying to (if any)
+    let inReplyTo: string | null = null;
+    if (b.reply_to_id) {
+      const rr = await pool.query<{ message_id: string | null }>(
+        `SELECT message_id FROM messages WHERE id = $1 AND user_id = $2`,
+        [b.reply_to_id, req.authUser!.id],
+      );
+      if (rr.rows[0]?.message_id) inReplyTo = rr.rows[0].message_id;
+    }
+
+    const result = await sendMail({
+      smtp: { host: acc.smtp_host, port: acc.smtp_port, user: acc.smtp_user || acc.email, pass: decrypt(acc.smtp_cred_enc) },
+      imap: { host: acc.imap_host, port: acc.imap_port, user: acc.imap_user || acc.email, pass: decrypt(acc.imap_cred_enc) },
+      fromEmail: acc.email,
+      fromName: acc.display_name,
+      to: b.to,
+      cc: b.cc,
+      bcc: b.bcc,
+      subject: b.subject || "",
+      text: b.body || "",
+      inReplyTo,
+      references: inReplyTo,
+    });
+
+    if (!result.ok) return reply.code(400).send(result);
+
+    // If APPEND succeeded and returned a UID, record the outgoing message so
+    // it shows up in the UI immediately (next sync would pick it up anyway).
+    if (result.appended) {
+      const toList = splitAddresses(b.to).map(email => ({ email, role: "to" }))
+        .concat(splitAddresses(b.cc).map(email => ({ email, role: "cc" })))
+        .concat(splitAddresses(b.bcc).map(email => ({ email, role: "bcc" })));
+      const snippet = (b.body || "").substring(0, 200);
+      try {
+        await pool.query(
+          `INSERT INTO messages (
+             user_id, mail_account_id, folder, uid, uidvalidity, message_id,
+             from_email, from_name, to_emails, subject, body_text, snippet,
+             date, flags, direction
+           ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9::jsonb,$10,$11,$12, now(), $13::jsonb, 'out')
+           ON CONFLICT DO NOTHING`,
+          [
+            req.authUser!.id, id,
+            result.appended.folder, result.appended.uid, result.appended.uidValidity, result.messageId || null,
+            acc.email, acc.display_name,
+            JSON.stringify(toList), b.subject || "", b.body || "", snippet,
+            JSON.stringify({ seen: true }),
+          ],
+        );
+      } catch (e) {
+        // Non-fatal — the mail is delivered and sits in the server's Sent folder.
+        req.log.warn({ err: e }, "send: insert into messages failed");
+      }
+    }
+
+    return result;
   });
 
   // ─── Test connection for existing saved account ─────────────────────────

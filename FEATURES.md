@@ -1,6 +1,6 @@
 # ConvoTrail — feature roadmap
 
-_Last updated: 2026-04-20, v0.0.17_
+_Last updated: 2026-04-20, v0.0.18_
 
 Status legend:
 - ✅ **Done** — works end-to-end, persists where relevant
@@ -22,6 +22,7 @@ this doc covers product.
 - ✅ Main UI: contacts list, per-contact thread, message detail — all driven by real data
 - ✅ Left-column account switcher: toggle/combine real accounts; contact list, message list, and per-contact unread/r2m badges all filter by selection
 - ✅ Contact merge / unmerge (persisted)
+- ✅ Send mail (SMTP + best-effort IMAP APPEND to Sent)
 - ✅ Client-side search across loaded messages
 - ✅ Filter tabs (Now/All/In/Out/Draft/Deleted)
 - ✅ Version banner + click-to-check-for-update
@@ -41,7 +42,6 @@ this doc covers product.
 - 🚧 Spam (routes through delete state)
 - 🚧 Compose message (new / reply / reply-all / forward)
 - 🚧 Save draft
-- 🚧 Send (no SMTP wired)
 - 🚧 Signatures CRUD + per-account auto-sig
 
 **Not implemented at all**
@@ -76,8 +76,8 @@ Turns in-memory actions into durable ones. Highest value for daily usability.
 
 1. ✅ **1.1 — Real accounts in column 1, switch/combine** — shipped v0.0.11–0.0.12
 2. ✅ **1.2 — Contact merge + unmerge persisted** — shipped v0.0.14–0.0.15
-3. ⬜ **1.3 — Mail Send (SMTP + IMAP APPEND to Sent)** ← *next*
-4. ⬜ **1.4 — Save draft persisted + active-message-per-contact memory**
+3. ✅ **1.3 — Mail Send (SMTP + IMAP APPEND to Sent)** — shipped v0.0.18
+4. ⬜ **1.4 — Save draft persisted + active-message-per-contact memory** ← *next*
 5. ⬜ **1.5 — Mark-read persisted** (flags.seen → IMAP \\Seen + DB)
 6. ⬜ **1.6 — Delete persisted** (soft-delete in DB, IMAP EXPUNGE via retention cron)
 7. ⬜ **1.7 — Tags on messages** (CRUD + persist)
@@ -90,9 +90,7 @@ Turns in-memory actions into durable ones. Highest value for daily usability.
 
 **1.2 Contact merge + unmerge** — shipped v0.0.14–0.0.15.
 
-**1.3 Send** (1 day)
-- Backend: `POST /mail-accounts/:id/send { to, cc, bcc, subject, body, reply_to_message_id, signature_id }` — decrypt SMTP creds, build MIME via `nodemailer`, send, IMAP APPEND to Sent (best-effort). Insert a `messages` row with `direction='out'` and the new UID.
-- Frontend: wire Send button in Compose; success toast; clear draft.
+**1.3 Send** — shipped v0.0.18.
 
 **1.4 Drafts** (½ day)
 - Backend: `/drafts` CRUD (POST/PATCH/DELETE, GET via bootstrap).
