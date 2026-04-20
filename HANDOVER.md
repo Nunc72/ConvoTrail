@@ -72,7 +72,7 @@ Node 22+ (via nvm). `flyctl` at `~/.fly/bin/flyctl`.
 ## Workflow
 
 - Commit-per-feature. Bump `APP_VERSION` + `version.json` on every commit pushed to main.
-- Worktree at `.claude/worktrees/eloquent-torvalds-9b5043/` (current), branch `claude/eloquent-torvalds-9b5043`. Fast-forward merge into `main` before push.
+- Claude Code sessions work on a worktree under `.claude/worktrees/<name>/`, branch `claude/<name>`. Fast-forward merge into `main` before push.
 - After deploying backend: smoke-test `/health`.
 - After frontend push: wait ~30–60 s for Pages build, then user can click version row in user menu to reload.
 
