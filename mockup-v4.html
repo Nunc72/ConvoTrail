@@ -72,7 +72,7 @@ const { useState, useMemo, useRef, useEffect, useCallback } = React;
 
 // ─── Constants ───────────────────────────────────────────────────────────────
 
-const APP_VERSION = "0.0.10"; // bumped on every deploy — keep in sync with version.json
+const APP_VERSION = "0.0.11"; // bumped on every deploy — keep in sync with version.json
 
 // ─── Backend + Supabase config ───────────────────────────────────────────────
 const SUPABASE_URL = "https://oyrlzqbjcsliesvunbwj.supabase.co";
@@ -2141,7 +2141,8 @@ function LeftColumn({contactMeta, archivedContacts, selectedId, mergeId, onSelec
                      tagsHeight, onTagsDividerDrag, archiveHeight, onArchiveDividerDrag,
                      collapsed, onToggleCollapse,
                      emailFlags,
-                     selAccounts, onToggleAccount}) {
+                     selAccounts, onToggleAccount,
+                     mailAccounts=[]}) {
   const [accDropOpen, setAccDropOpen] = useState(false);
   const [contactTab,  setContactTab]  = useState('Convo');
   const [archiveTagsVisible, setArchiveTagsVisible] = useState(false);
@@ -2180,7 +2181,16 @@ function LeftColumn({contactMeta, archivedContacts, selectedId, mergeId, onSelec
       .reduce((s,m)=>s+m.unread+(m.r2mCount||0),0);
   }
 
-  const accountLabel = selAccounts.length===1 ? selAccounts[0] : `${selAccounts.length} accounts`;
+  const labelForEmail = (email) => {
+    const a = mailAccounts.find(a => (a.email||'').toLowerCase() === email);
+    return a ? (a.display_name || a.email) : email;
+  };
+  const accountLabel = mailAccounts.length === 0
+    ? 'No accounts'
+    : selAccounts.length === mailAccounts.length ? 'All accounts'
+    : selAccounts.length === 1 ? labelForEmail(selAccounts[0])
+    : selAccounts.length === 0 ? '(none)'
+    : `${selAccounts.length} accounts`;
 
   function CollapseIcon({open}) {
     return <svg width="10" height="10" viewBox="0 0 10 10" fill="none">
@@ -2260,16 +2270,18 @@ function LeftColumn({contactMeta, archivedContacts, selectedId, mergeId, onSelec
             </button>
             {accDropOpen&&(
               <div className="absolute left-0 right-0 top-full z-50 bg-white border border-gray-200 rounded-b-lg shadow-lg overflow-hidden">
-                {USER_ACCOUNTS.map(acc=>{
-                  const checked=selAccounts.includes(acc);
+                {mailAccounts.length===0 && <div className="px-3 py-2 text-xs text-gray-400">No mail accounts connected.</div>}
+                {mailAccounts.map(a=>{
+                  const email=(a.email||'').toLowerCase();
+                  const checked=selAccounts.includes(email);
                   return (
-                    <div key={acc} className="flex items-center gap-2 px-3 py-2 hover:bg-gray-50">
+                    <div key={a.id} className="flex items-center gap-2 px-3 py-2 hover:bg-gray-50">
                       <input type="checkbox" checked={checked}
-                        onChange={e=>{e.stopPropagation();onToggleAccount(acc);}}
+                        onChange={e=>{e.stopPropagation();onToggleAccount(email);}}
                         className="accent-indigo-600 flex-shrink-0 cursor-pointer"/>
                       <span className="text-xs text-gray-700 truncate flex-1 cursor-pointer"
-                        onClick={()=>{onToggleAccount('__exclusive__'+acc);setAccDropOpen(false);}}>
-                        {acc}
+                        onClick={()=>{onToggleAccount('__exclusive__'+email);setAccDropOpen(false);}}>
+                        {a.display_name ? <><span>{a.display_name}</span> <span className="text-gray-400">· {a.email}</span></> : a.email}
                       </span>
                     </div>
                   );
@@ -2345,16 +2357,18 @@ function LeftColumn({contactMeta, archivedContacts, selectedId, mergeId, onSelec
         </button>
         {accDropOpen&&(
           <div className="absolute left-0 right-0 top-full z-50 bg-white border border-gray-200 rounded-b-lg shadow-lg overflow-hidden">
-            {USER_ACCOUNTS.map(acc=>{
-              const checked=selAccounts.includes(acc);
+            {mailAccounts.length===0 && <div className="px-3 py-2 text-xs text-gray-400">No mail accounts connected.</div>}
+            {mailAccounts.map(a=>{
+              const email=(a.email||'').toLowerCase();
+              const checked=selAccounts.includes(email);
               return (
-                <div key={acc} className="flex items-center gap-2 px-3 py-2 hover:bg-gray-50">
+                <div key={a.id} className="flex items-center gap-2 px-3 py-2 hover:bg-gray-50">
                   <input type="checkbox" checked={checked}
-                    onChange={e=>{e.stopPropagation();onToggleAccount(acc);}}
+                    onChange={e=>{e.stopPropagation();onToggleAccount(email);}}
                     className="accent-indigo-600 flex-shrink-0 cursor-pointer"/>
                   <span className="text-xs text-gray-700 truncate flex-1 cursor-pointer"
-                    onClick={()=>{onToggleAccount('__exclusive__'+acc);setAccDropOpen(false);}}>
-                    {acc}
+                    onClick={()=>{onToggleAccount('__exclusive__'+email);setAccDropOpen(false);}}>
+                    {a.display_name ? <><span>{a.display_name}</span> <span className="text-gray-400">· {a.email}</span></> : a.email}
                   </span>
                 </div>
               );
@@ -3129,20 +3143,26 @@ function App({onSignOut}) {
   const [tagsHeight,   setTagsHeight]   = useState(180);
   const [archiveHeight,setArchiveHeight]= useState(120);
   // Data
+  const [mailAccounts, setMailAccounts] = useState([]);   // [{id, email, display_name, ...}]
   const [contactList,  setContactList]  = useState([]);
   const [messageList,  setMessageList]  = useState([]);
   const [dataLoading,  setDataLoading]  = useState(true);
   const [dataError,    setDataError]    = useState('');
+  const [dataRefreshTick, setDataRefreshTick] = useState(0);
 
   useEffect(() => {
     let cancelled = false;
     (async () => {
       setDataLoading(true); setDataError('');
       try {
-        const { contacts, messages } = await apiFetch('/bootstrap?limit=500');
+        const { mail_accounts, contacts, messages } = await apiFetch('/bootstrap?limit=500');
         if (cancelled) return;
 
-        // Build email → contact map for linking messages
+        // accountId → email lookup
+        const accountEmailById = new Map();
+        for (const a of mail_accounts) accountEmailById.set(a.id, (a.email || '').toLowerCase());
+
+        // email → contact_id lookup
         const emailToContactId = new Map();
         for (const c of contacts) {
           for (const ce of c.contact_emails || []) {
@@ -3151,32 +3171,17 @@ function App({onSignOut}) {
           if (c.primary_email) emailToContactId.set(c.primary_email.toLowerCase(), c.id);
         }
 
-        // Shape contacts into mockup format (derive avatar + color if missing)
-        const shapedContacts = contacts.map(c => {
-          const emails = (c.contact_emails && c.contact_emails.length
-            ? c.contact_emails.map(e => e.email)
-            : [c.primary_email].filter(Boolean));
-          return {
-            id: c.id,
-            name: c.name || emails[0] || '(unknown)',
-            org: c.org || '',
-            emails,
-            avatar: initialsOf(c.name || emails[0] || ''),
-            color: c.color || colorFromSeed(c.name || emails[0] || ''),
-            portrait: c.portrait_url || null,
-            r2mDays: c.r2m_days || 3,
-            account: null,
-          };
-        });
-
-        // Shape messages into mockup format; compute contactId via the "other" email
+        // Shape messages first (we need them to compute per-contact accountEmails)
         const shapedMessages = messages.map(m => {
+          const accountEmail = accountEmailById.get(m.mail_account_id) ?? '';
           const otherEmail = m.direction === 'in'
             ? (m.from_email || '').toLowerCase()
             : (m.to_emails?.[0]?.email || '').toLowerCase();
           const contactId = emailToContactId.get(otherEmail) ?? null;
           return {
             id: m.id,
+            accountId: m.mail_account_id,
+            accountEmail,
             contactId,
             dir: m.direction,
             subject: m.subject || '(no subject)',
@@ -3191,6 +3196,36 @@ function App({onSignOut}) {
           };
         }).filter(m => m.contactId !== null);
 
+        // Per-contact: which account-emails have we seen activity from/to?
+        const contactAccounts = new Map(); // contact_id → Set<accountEmail>
+        for (const m of shapedMessages) {
+          if (!m.accountEmail) continue;
+          let s = contactAccounts.get(m.contactId);
+          if (!s) { s = new Set(); contactAccounts.set(m.contactId, s); }
+          s.add(m.accountEmail);
+        }
+
+        // Shape contacts
+        const shapedContacts = contacts.map(c => {
+          const emails = (c.contact_emails && c.contact_emails.length
+            ? c.contact_emails.map(e => e.email)
+            : [c.primary_email].filter(Boolean));
+          const accEmails = [...(contactAccounts.get(c.id) || [])];
+          return {
+            id: c.id,
+            name: c.name || emails[0] || '(unknown)',
+            org: c.org || '',
+            emails,
+            avatar: initialsOf(c.name || emails[0] || ''),
+            color: c.color || colorFromSeed(c.name || emails[0] || ''),
+            portrait: c.portrait_url || null,
+            r2mDays: c.r2m_days || 3,
+            accountEmails: accEmails,                 // array of all account-emails this contact has activity in
+            account: accEmails[0] || null,            // "primary" account (first seen) — kept for back-compat
+          };
+        });
+
+        setMailAccounts(mail_accounts);
         setContactList(shapedContacts);
         setMessageList(shapedMessages);
       } catch (e) {
@@ -3200,7 +3235,9 @@ function App({onSignOut}) {
       }
     })();
     return () => { cancelled = true; };
-  }, []);
+  }, [dataRefreshTick]);
+
+  const refreshData = useCallback(() => setDataRefreshTick(t => t + 1), []);
   const [deletedIds,   setDeletedIds]   = useState(INIT_DELETED);
   const [msgTags,      setMsgTags]      = useState(INIT_MSG_TAGS);
   const [conTags,      setConTags]      = useState(INIT_CON_TAGS);
@@ -3218,7 +3255,13 @@ function App({onSignOut}) {
   const [leftCollapsed,    setLeftCollapsed]    = useState({contacts:false,tags:true,archive:true});
   const [showSettings,     setShowSettings]     = useState(false);
   const [showMailAccounts, setShowMailAccounts] = useState(false);
-  const [selAccounts,      setSelAccounts]      = useState(USER_ACCOUNTS);
+  const [selAccounts,      setSelAccounts]      = useState([]);
+  // Once real accounts are loaded, select them all by default
+  useEffect(() => {
+    if (mailAccounts.length === 0) return;
+    const allEmails = mailAccounts.map(a => (a.email || '').toLowerCase()).filter(Boolean);
+    setSelAccounts(prev => prev.length === 0 ? allEmails : prev.filter(e => allEmails.includes(e)));
+  }, [mailAccounts]);
   const [showUserMenu,     setShowUserMenu]     = useState(false);
   const [updateStatus,     setUpdateStatus]     = useState(null); // null | 'checking' | 'uptodate' | 'error'
   const checkForUpdate = useCallback(async ()=>{
@@ -3392,7 +3435,7 @@ function App({onSignOut}) {
 
   // ── Derived: all known tags from message tags ──
   const usedTags = useMemo(()=>{
-    const visibleContactIds = new Set(contactList.filter(c=>selAccounts.includes(c.account||"me@megamail.nl")).map(c=>c.id));
+    const visibleContactIds = new Set(contactList.filter(c=>(c.accountEmails||[]).some(ae=>selAccounts.includes(ae))).map(c=>c.id));
     return [...new Set(Object.entries(msgTags).filter(([msgId])=>{
       const msg=messageList.find(m=>m.id===Number(msgId));
       return msg && visibleContactIds.has(msg.contactId);
@@ -3403,7 +3446,7 @@ function App({onSignOut}) {
   // ── Contact metadata ──
   const contactMeta=useMemo(()=>{
     return contactList
-      .filter(contact => selAccounts.includes(contact.account||"me@megamail.nl"))
+      .filter(contact => (contact.accountEmails||[]).some(ae=>selAccounts.includes(ae)))
       .map(contact=>{
         const all=messageList.filter(m=>m.contactId===contact.id);
         const active=all.filter(m=>!deletedIds.includes(m.id)&&!m.draft);
@@ -3736,8 +3779,8 @@ function App({onSignOut}) {
   // When in tag view, derive the detail contact from the message itself
   const detailContact = selectedContact || (selectedMsg?contactList.find(c=>c.id===selectedMsg.contactId)||null:null);
   const allContactMsgs=selContact?messageList.filter(m=>m.contactId===selContact).filter(msgMatchesSearch):[];
-  const totalUnread=messageList.filter(m=>!m.read&&!deletedIds.includes(m.id)&&!m.draft&&selAccounts.includes(m.to)).length;
-  const totalR2m=messageList.filter(m=>m.revert2me&&!deletedIds.includes(m.id)&&!m.draft&&selAccounts.includes(m.from)).length;
+  const totalUnread=messageList.filter(m=>!m.read&&!deletedIds.includes(m.id)&&!m.draft&&selAccounts.includes(m.accountEmail)).length;
+  const totalR2m=messageList.filter(m=>m.revert2me&&!deletedIds.includes(m.id)&&!m.draft&&selAccounts.includes(m.accountEmail)).length;
 
   function msgMatchesSearch(m) {
     if(!searchQuery) return true;
@@ -4024,7 +4067,8 @@ function App({onSignOut}) {
                 archiveHeight={archiveHeight} onArchiveDividerDrag={onArchiveDivDown}
                 collapsed={leftCollapsed} onToggleCollapse={handleToggleCollapse}
                 emailFlags={emailFlags}
-                selAccounts={selAccounts} onToggleAccount={handleToggleAccount}/>
+                selAccounts={selAccounts} onToggleAccount={handleToggleAccount}
+                mailAccounts={mailAccounts}/>
             </div>
             {/* Mobile Col 2 */}
             <div style={{width:'100vw',height:'100%',overflow:'hidden',flexShrink:0}} className="flex flex-col">
@@ -4079,7 +4123,8 @@ function App({onSignOut}) {
                 archiveHeight={archiveHeight} onArchiveDividerDrag={onArchiveDivDown}
                 collapsed={leftCollapsed} onToggleCollapse={handleToggleCollapse}
                 emailFlags={emailFlags}
-                selAccounts={selAccounts} onToggleAccount={handleToggleAccount}/>
+                selAccounts={selAccounts} onToggleAccount={handleToggleAccount}
+                mailAccounts={mailAccounts}/>
             </div>
 
             <div onMouseDown={e=>onColDivDown(e,0)} className={`col-divider${activeColDiv===0?" active":""}`}/>
