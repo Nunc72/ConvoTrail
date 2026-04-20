@@ -71,6 +71,8 @@ const { useState, useMemo, useRef, useEffect, useCallback } = React;
 
 // ─── Constants ───────────────────────────────────────────────────────────────
 
+const APP_VERSION = "0.0.2"; // bumped on every deploy — keep in sync with version.json
+
 const CURRENT_USER = {
   id: 0, name: "Quinten Yvilik", emails: ["me@megamail.nl","q.yvilik@bureau.nl","q@yvilik.com"],
   avatar: "QY", color: "#6366f1",
@@ -2844,6 +2846,25 @@ function App({onSignOut}) {
   const [showSettings,     setShowSettings]     = useState(false);
   const [selAccounts,      setSelAccounts]      = useState(USER_ACCOUNTS);
   const [showUserMenu,     setShowUserMenu]     = useState(false);
+  const [updateStatus,     setUpdateStatus]     = useState(null); // null | 'checking' | 'uptodate' | 'error'
+  const checkForUpdate = useCallback(async ()=>{
+    setUpdateStatus('checking');
+    try {
+      const r = await fetch('version.json?t='+Date.now(), {cache:'no-store'});
+      if(!r.ok) throw new Error('HTTP '+r.status);
+      const {version} = await r.json();
+      if(version && version !== APP_VERSION){
+        // Force a cold load of the HTML: new query → new cache key
+        window.location.replace(window.location.pathname + '?v=' + version);
+        return;
+      }
+      setUpdateStatus('uptodate');
+      setTimeout(()=>setUpdateStatus(null), 2000);
+    } catch(e) {
+      setUpdateStatus('error');
+      setTimeout(()=>setUpdateStatus(null), 2500);
+    }
+  }, []);
   const [searchQuery,      setSearchQuery]      = useState('');
   const [searchScope,      setSearchScope]      = useState('all');
   const [searchActive,     setSearchActive]     = useState(false);
@@ -3480,6 +3501,14 @@ function App({onSignOut}) {
                     className="w-full flex items-center gap-2.5 px-3 py-2 text-sm text-gray-700 hover:bg-gray-50">
                     <LogoutIcon size={14}/><span>Sign out</span>
                   </button>
+                  <div className="border-t border-gray-100"/>
+                  <button onClick={checkForUpdate} title="Click to check for updates"
+                    className="w-full text-left px-3 py-1.5 text-xs text-gray-400 hover:bg-gray-50 hover:text-gray-600 transition-colors">
+                    {updateStatus==='checking' ? 'Checking for updates…'
+                     : updateStatus==='uptodate' ? `v${APP_VERSION} · up to date ✓`
+                     : updateStatus==='error' ? `v${APP_VERSION} · check failed`
+                     : `v${APP_VERSION}`}
+                  </button>
                 </div>
               )}
             </div>
@@ -3547,6 +3576,14 @@ function App({onSignOut}) {
                     className="w-full flex items-center gap-2.5 px-3 py-2 text-sm text-gray-700 hover:bg-gray-50">
                     <LogoutIcon size={14}/>
                     <span>Sign out</span>
+                  </button>
+                  <div className="border-t border-gray-100"/>
+                  <button onClick={checkForUpdate} title="Click to check for updates"
+                    className="w-full text-left px-3 py-1.5 text-xs text-gray-400 hover:bg-gray-50 hover:text-gray-600 transition-colors">
+                    {updateStatus==='checking' ? 'Checking for updates…'
+                     : updateStatus==='uptodate' ? `v${APP_VERSION} · up to date ✓`
+                     : updateStatus==='error' ? `v${APP_VERSION} · check failed`
+                     : `v${APP_VERSION}`}
                   </button>
                 </div>
               )}
