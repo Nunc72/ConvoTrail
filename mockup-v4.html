@@ -72,7 +72,7 @@ const { useState, useMemo, useRef, useEffect, useCallback } = React;
 
 // ─── Constants ───────────────────────────────────────────────────────────────
 
-const APP_VERSION = "0.0.15"; // bumped on every deploy — keep in sync with version.json
+const APP_VERSION = "0.0.16"; // bumped on every deploy — keep in sync with version.json
 
 // ─── Backend + Supabase config ───────────────────────────────────────────────
 const SUPABASE_URL = "https://oyrlzqbjcsliesvunbwj.supabase.co";
@@ -467,12 +467,6 @@ const ERASE_OPTIONS = [
   {value:"365d",label:"After 1 year"},
 ];
 
-const INIT_IMAP_SETTINGS = {
-  "me@megamail.nl":      { imapHost:"imap.megamail.nl", imapPort:993, imapSsl:true,  smtpHost:"smtp.megamail.nl", smtpPort:465, smtpSsl:true,  user:"me@megamail.nl",      pass:"••••••••", auth:"Password", eraseDeleted:"30d", eraseSpam:"14d" },
-  "q.yvilik@bureau.nl": { imapHost:"mail.bureau.nl",   imapPort:993, imapSsl:true,  smtpHost:"smtp.bureau.nl",   smtpPort:587, smtpSsl:false, user:"q.yvilik@bureau.nl", pass:"••••••••", auth:"Password", eraseDeleted:"never", eraseSpam:"30d" },
-  "q@yvilik.com":       { imapHost:"imap.yvilik.com",  imapPort:993, imapSsl:true,  smtpHost:"smtp.yvilik.com",  smtpPort:465, smtpSsl:true,  user:"q@yvilik.com",       pass:"••••••••", auth:"OAuth2",   eraseDeleted:"90d",  eraseSpam:"14d" },
-};
-
 const INIT_SIGNATURES = [
   { id: 1, title: "Formeel",   body: "Met vriendelijke groet,\n\nQuinten Yvilik\nme@megamail.nl" },
   { id: 2, title: "Informeel", body: "Groeten,\nQ" },
@@ -485,26 +479,22 @@ const INIT_ACCOUNT_SIGS = {
   "q@yvilik.com":       { linked:[],    autoId:null },
 };
 
-function SettingsModal({onClose, signatures, setSignatures, accountSigs, setAccountSigs}) {
-  const [activeTab, setActiveTab] = useState('profile');
-  const [imapSettings, setImapSettings] = useState(INIT_IMAP_SETTINGS);
-  const [selAccount, setSelAccount] = useState(USER_ACCOUNTS[0]);
+function SettingsModal({onClose, initialTab='profile', signatures, setSignatures, accountSigs, setAccountSigs, mailAccounts=[], onMailAccountsChanged}) {
+  const [activeTab, setActiveTab] = useState(initialTab);
   const [profile, setProfile] = useState({ name: CURRENT_USER.name, email: CURRENT_USER.emails[0], mobile: "+31 6 12345678", pass: "" });
   const [showPass, setShowPass] = useState(false);
   const [selSigId, setSelSigId] = useState(signatures[0]?.id||null);
-  const acc = imapSettings[selAccount] || {};
   const selSig = signatures.find(s=>s.id===selSigId)||null;
   const isMobile = typeof window !== 'undefined' && window.innerWidth < 768;
-  const [mobileSetCol, setMobileSetCol] = useState(0); // 0=nav, 1=list/form, 2=detail
-
-  function setAccField(field, val) {
-    setImapSettings(prev => ({...prev, [selAccount]: {...prev[selAccount], [field]: val}}));
-  }
+  // Emails from the real mail-accounts, used by the signatures tab "Linked accounts" list
+  const accountEmails = mailAccounts.map(a => a.email).filter(Boolean);
+  // 0=nav; 1=tab content (profile form / accounts panel / signature list); 2=signature detail
+  const [mobileSetCol, setMobileSetCol] = useState(initialTab==='profile' ? 0 : 1);
 
   // Mobile: sliding-panel layout
   if (isMobile) {
-    // profile: 2 panels (nav, form); accounts/signatures: 3 panels (nav, list, detail)
-    const panelCount = activeTab==='profile' ? 2 : 3;
+    // profile + accounts: 2 panels (nav, content); signatures: 3 panels (nav, list, detail)
+    const panelCount = activeTab==='signatures' ? 3 : 2;
     const clampedCol = Math.min(mobileSetCol, panelCount - 1);
     const tabTitle = {profile:'Profile',accounts:'Mail accounts',signatures:'Signatures'}[activeTab];
 
@@ -585,26 +575,7 @@ function SettingsModal({onClose, signatures, setSignatures, accountSigs, setAcco
             </div>
           )}
           {activeTab==='accounts'&&(
-            <div className="space-y-1">
-              {Object.keys(imapSettings).map(a=>(
-                <button key={a} onClick={()=>{setSelAccount(a);setMobileSetCol(2);}}
-                  className={`w-full text-left px-3 py-2.5 rounded-lg text-sm transition-colors truncate flex items-center justify-between ${selAccount===a?'bg-indigo-50 text-indigo-700 font-semibold border border-indigo-200':'text-gray-700 hover:bg-gray-100 border border-transparent'}`}>
-                  <span className="truncate">{a}</span>
-                  <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><polyline points="9 18 15 12 9 6"/></svg>
-                </button>
-              ))}
-              <button onClick={()=>{
-                const base='new@example.com';
-                let unique=base; let i=2;
-                while(imapSettings[unique]) unique=`new${i++}@example.com`;
-                setImapSettings(prev=>({...prev,[unique]:{imapHost:'',imapPort:993,imapSsl:true,smtpHost:'',smtpPort:465,smtpSsl:true,user:'',pass:'',auth:'Password',eraseDeleted:'never',eraseSpam:'never'}}));
-                setSelAccount(unique);
-                setMobileSetCol(2);
-              }}
-                className="mt-2 w-full text-left px-3 py-2 rounded-lg text-sm text-indigo-500 hover:bg-indigo-50 border border-dashed border-indigo-200 flex items-center gap-1.5">
-                <PlusIcon size={12}/> Add account
-              </button>
-            </div>
+            <MailAccountsPanel onChanged={onMailAccountsChanged} initialFormOpen={mailAccounts.length===0}/>
           )}
           {activeTab==='signatures'&&(
             <div className="space-y-1">
@@ -641,70 +612,11 @@ function SettingsModal({onClose, signatures, setSignatures, accountSigs, setAcco
       </div>
     );
 
-    // Detail panel (only for accounts/signatures)
+    // Detail panel (signatures only — accounts now lives fully in the middle panel)
     const DetailPanel = (
       <div style={{width:'100vw',height:'100%',flexShrink:0}} className="flex flex-col bg-white">
         <BackBar label={tabTitle} onBack={()=>setMobileSetCol(1)}/>
         <div className="flex-1 overflow-y-auto scroll px-4 py-4">
-          {activeTab==='accounts'&&(
-            <div className="space-y-4">
-              <div className="text-sm font-semibold text-gray-700 truncate">{selAccount}</div>
-              <div className="text-xs font-semibold text-gray-500 uppercase tracking-wider pb-1 border-b border-gray-100">Incoming mail (IMAP)</div>
-              {[['imapHost','Hostname','text'],['imapPort','Port','number'],['user','Username','text'],['pass','Password','password']].map(([f,label,type])=>(
-                <div key={f}>
-                  <div className="text-xs text-gray-400 mb-1">{label}</div>
-                  <input type={type} value={acc[f]||''} onChange={e=>setAccField(f,type==='number'?Number(e.target.value):e.target.value)}
-                    className="w-full border border-gray-200 rounded-lg px-2.5 py-2 text-sm outline-none focus:border-indigo-400"/>
-                </div>
-              ))}
-              <div>
-                <div className="text-xs text-gray-400 mb-1">Authentication</div>
-                <select value={acc.auth||'Password'} onChange={e=>setAccField('auth',e.target.value)}
-                  className="w-full border border-gray-200 rounded-lg px-2.5 py-2 text-sm outline-none focus:border-indigo-400 bg-white text-gray-700">
-                  {IMAP_AUTH_OPTIONS.map(o=><option key={o} value={o}>{o}</option>)}
-                </select>
-              </div>
-              <label className="flex items-center gap-2 cursor-pointer">
-                <input type="checkbox" checked={!!acc.imapSsl} onChange={e=>setAccField('imapSsl',e.target.checked)} className="accent-indigo-600"/>
-                <span className="text-sm text-gray-700">Use SSL (IMAP)</span>
-              </label>
-              <div className="text-xs font-semibold text-gray-500 uppercase tracking-wider pb-1 border-b border-gray-100 pt-2">Outgoing mail (SMTP)</div>
-              {[['smtpHost','Hostname','text'],['smtpPort','Port','number']].map(([f,label,type])=>(
-                <div key={f}>
-                  <div className="text-xs text-gray-400 mb-1">{label}</div>
-                  <input type={type} value={acc[f]||''} onChange={e=>setAccField(f,type==='number'?Number(e.target.value):e.target.value)}
-                    className="w-full border border-gray-200 rounded-lg px-2.5 py-2 text-sm outline-none focus:border-indigo-400"/>
-                </div>
-              ))}
-              <label className="flex items-center gap-2 cursor-pointer">
-                <input type="checkbox" checked={!!acc.smtpSsl} onChange={e=>setAccField('smtpSsl',e.target.checked)} className="accent-indigo-600"/>
-                <span className="text-sm text-gray-700">Use SSL/TLS (SMTP)</span>
-              </label>
-              <button className="px-3 py-1.5 text-xs rounded-lg bg-gray-100 hover:bg-gray-200 text-gray-600">Test connection</button>
-              <div className="text-xs font-semibold text-gray-500 uppercase tracking-wider pb-1 border-b border-gray-100 pt-2">Mailbox maintenance</div>
-              {[['eraseDeleted','Permanently erase deleted messages'],['eraseSpam','Permanently erase spam messages']].map(([f,label])=>(
-                <div key={f}>
-                  <div className="text-xs text-gray-400 mb-1">{label}</div>
-                  <select value={acc[f]||'never'} onChange={e=>setAccField(f,e.target.value)}
-                    className="w-full border border-gray-200 rounded-lg px-2.5 py-2 text-sm outline-none focus:border-indigo-400 bg-white text-gray-700">
-                    {ERASE_OPTIONS.map(o=><option key={o.value} value={o.value}>{o.label}</option>)}
-                  </select>
-                </div>
-              ))}
-              <div className="flex gap-2 pt-2">
-                <button className="px-4 py-2 text-sm rounded-lg bg-indigo-600 hover:bg-indigo-700 text-white font-medium">Save</button>
-                {Object.keys(imapSettings).length>1&&(
-                  <button onClick={()=>{
-                    const keys=Object.keys(imapSettings).filter(k=>k!==selAccount);
-                    setImapSettings(prev=>{const n={...prev};delete n[selAccount];return n;});
-                    setSelAccount(keys[0]);
-                    setMobileSetCol(1);
-                  }}
-                    className="px-4 py-2 text-sm rounded-lg bg-red-50 hover:bg-red-100 text-red-500 font-medium">Delete</button>
-                )}
-              </div>
-            </div>
-          )}
           {activeTab==='signatures'&&selSig&&(
             <div className="space-y-4">
               <div>
@@ -721,8 +633,9 @@ function SettingsModal({onClose, signatures, setSignatures, accountSigs, setAcco
               </div>
               <div>
                 <div className="text-xs font-semibold text-gray-500 uppercase tracking-wider pb-1 border-b border-gray-100 mb-2">Linked accounts</div>
+                {accountEmails.length===0 && <div className="text-xs text-gray-400">No mail accounts connected yet.</div>}
                 <div className="space-y-2">
-                  {Object.keys(imapSettings).map(acct=>{
+                  {accountEmails.map(acct=>{
                     const as=accountSigs[acct]||{linked:[],autoId:null};
                     const linked=as.linked.includes(selSigId);
                     const isAuto=as.autoId===selSigId;
@@ -833,108 +746,7 @@ function SettingsModal({onClose, signatures, setSignatures, accountSigs, setAcco
             )}
 
             {activeTab==='accounts'&&(
-              <div className="flex gap-4">
-                {/* Account list */}
-                <div className="w-36 flex-shrink-0 space-y-1">
-                  {Object.keys(imapSettings).map(a=>(
-                    <button key={a} onClick={()=>setSelAccount(a)}
-                      className={`w-full text-left px-2.5 py-2 rounded-lg text-xs transition-colors truncate ${selAccount===a?'bg-indigo-50 text-indigo-700 font-semibold border border-indigo-200':'text-gray-600 hover:bg-gray-100 border border-transparent'}`}>
-                      {a}
-                    </button>
-                  ))}
-                  <button onClick={()=>{
-                    const base='new@example.com';
-                    let unique=base;
-                    let i=2;
-                    while(imapSettings[unique]) unique=`new${i++}@example.com`;
-                    setImapSettings(prev=>({...prev,[unique]:{imapHost:'',imapPort:993,imapSsl:true,smtpHost:'',smtpPort:465,smtpSsl:true,user:'',pass:'',auth:'Password',eraseDeleted:'never',eraseSpam:'never'}}));
-                    setSelAccount(unique);
-                  }}
-                    className="mt-1 w-full text-left px-2 py-1.5 rounded-lg text-xs text-indigo-500 hover:bg-indigo-50 border border-dashed border-indigo-200 flex items-center gap-1.5">
-                    <PlusIcon size={10}/> Add account
-                  </button>
-                </div>
-
-                {/* Account settings */}
-                <div className="flex-1 min-w-0 space-y-4">
-
-                  {/* IMAP */}
-                  <div className="text-xs font-semibold text-gray-500 uppercase tracking-wider pb-1 border-b border-gray-100">Incoming mail (IMAP)</div>
-                  <div className="grid grid-cols-2 gap-3">
-                    {[['imapHost','Hostname','text'],['imapPort','Port','number'],['user','Username','text'],['pass','Password','password']].map(([f,label,type])=>(
-                      <div key={f} className={f==='imapHost'||f==='user'?'col-span-2':''}>
-                        <div className="text-xs text-gray-400 mb-1">{label}</div>
-                        <input type={type} value={acc[f]||''} onChange={e=>setAccField(f,type==='number'?Number(e.target.value):e.target.value)}
-                          className="w-full border border-gray-200 rounded-lg px-2.5 py-1.5 text-sm outline-none focus:border-indigo-400"/>
-                      </div>
-                    ))}
-                    <div>
-                      <div className="text-xs text-gray-400 mb-1">Authentication</div>
-                      <select value={acc.auth||'Password'} onChange={e=>setAccField('auth',e.target.value)}
-                        className="w-full border border-gray-200 rounded-lg px-2.5 py-1.5 text-sm outline-none focus:border-indigo-400 bg-white text-gray-700">
-                        {IMAP_AUTH_OPTIONS.map(o=><option key={o} value={o}>{o}</option>)}
-                      </select>
-                    </div>
-                    <div>
-                      <div className="text-xs text-gray-400 mb-1">SSL/TLS</div>
-                      <label className="flex items-center gap-2 cursor-pointer mt-2">
-                        <input type="checkbox" checked={!!acc.imapSsl} onChange={e=>setAccField('imapSsl',e.target.checked)} className="accent-indigo-600"/>
-                        <span className="text-sm text-gray-700">Use SSL</span>
-                      </label>
-                    </div>
-                  </div>
-
-                  {/* SMTP */}
-                  <div className="text-xs font-semibold text-gray-500 uppercase tracking-wider pb-1 border-b border-gray-100">Outgoing mail (SMTP)</div>
-                  <div className="grid grid-cols-2 gap-3">
-                    {[['smtpHost','Hostname','text'],['smtpPort','Port','number']].map(([f,label,type])=>(
-                      <div key={f} className={f==='smtpHost'?'col-span-2':''}>
-                        <div className="text-xs text-gray-400 mb-1">{label}</div>
-                        <input type={type} value={acc[f]||''} onChange={e=>setAccField(f,type==='number'?Number(e.target.value):e.target.value)}
-                          className="w-full border border-gray-200 rounded-lg px-2.5 py-1.5 text-sm outline-none focus:border-indigo-400"/>
-                      </div>
-                    ))}
-                    <div>
-                      <div className="text-xs text-gray-400 mb-1">SSL/TLS</div>
-                      <label className="flex items-center gap-2 cursor-pointer mt-2">
-                        <input type="checkbox" checked={!!acc.smtpSsl} onChange={e=>setAccField('smtpSsl',e.target.checked)} className="accent-indigo-600"/>
-                        <span className="text-sm text-gray-700">Use SSL/TLS</span>
-                      </label>
-                    </div>
-                    <div className="col-span-2 flex gap-2 pt-1">
-                      <button className="px-4 py-1.5 text-xs rounded-lg bg-gray-100 hover:bg-gray-200 text-gray-600">Test connection</button>
-                    </div>
-                  </div>
-
-                  {/* Maintenance */}
-                  <div className="text-xs font-semibold text-gray-500 uppercase tracking-wider pb-1 border-b border-gray-100">Mailbox maintenance</div>
-                  <div className="grid grid-cols-2 gap-3">
-                    {[['eraseDeleted','Permanently erase deleted messages'],['eraseSpam','Permanently erase spam messages']].map(([f,label])=>(
-                      <div key={f} className="col-span-2">
-                        <div className="text-xs text-gray-400 mb-1">{label}</div>
-                        <select value={acc[f]||'never'} onChange={e=>setAccField(f,e.target.value)}
-                          className="w-full border border-gray-200 rounded-lg px-2.5 py-1.5 text-sm outline-none focus:border-indigo-400 bg-white text-gray-700">
-                          {ERASE_OPTIONS.map(o=><option key={o.value} value={o.value}>{o.label}</option>)}
-                        </select>
-                      </div>
-                    ))}
-                    <div className="col-span-2 flex gap-2 pt-1">
-                      <button className="px-4 py-1.5 text-xs rounded-lg bg-indigo-600 hover:bg-indigo-700 text-white font-medium">Save account settings</button>
-                      {Object.keys(imapSettings).length>1&&(
-                        <button onClick={()=>{
-                          const keys=Object.keys(imapSettings).filter(k=>k!==selAccount);
-                          setImapSettings(prev=>{const n={...prev};delete n[selAccount];return n;});
-                          setSelAccount(keys[0]);
-                        }}
-                          className="px-4 py-1.5 text-xs rounded-lg bg-red-50 hover:bg-red-100 text-red-500 font-medium">
-                          Delete account
-                        </button>
-                      )}
-                    </div>
-                  </div>
-
-                </div>
-              </div>
+              <MailAccountsPanel onChanged={onMailAccountsChanged} initialFormOpen={mailAccounts.length===0}/>
             )}
             {activeTab==='signatures'&&(
               <div className="flex gap-4">
@@ -986,8 +798,9 @@ function SettingsModal({onClose, signatures, setSignatures, accountSigs, setAcco
                     </div>
                     <div>
                       <div className="text-xs font-semibold text-gray-500 uppercase tracking-wider pb-1 border-b border-gray-100 mb-3">Linked accounts</div>
+                      {accountEmails.length===0 && <div className="text-xs text-gray-400">No mail accounts connected yet.</div>}
                       <div className="space-y-2">
-                        {Object.keys(imapSettings).map(acct=>{
+                        {accountEmails.map(acct=>{
                           const as=accountSigs[acct]||{linked:[],autoId:null};
                           const linked=as.linked.includes(selSigId);
                           const isAuto=as.autoId===selSigId;
@@ -2885,16 +2698,16 @@ function LoginScreen() {
 
 // ─── App ──────────────────────────────────────────────────────────────────────
 
-// ─── Mail accounts modal (real backend-connected) ───────────────────────────
+// ─── Mail accounts panel (real backend-connected, used inside SettingsModal) ──
 const PROVIDER_PRESETS = {
   icloud: { imap_host: "imap.mail.me.com", imap_port: 993, smtp_host: "smtp.mail.me.com", smtp_port: 587 },
   generic: { imap_host: "", imap_port: 993, smtp_host: "", smtp_port: 587 },
 };
 
-function MailAccountsModal({onClose}) {
+function MailAccountsPanel({onChanged, initialFormOpen=false}) {
   const [accounts, setAccounts] = useState(null); // null=loading, [] or [...]
   const [loadErr, setLoadErr] = useState('');
-  const [formOpen, setFormOpen] = useState(false);
+  const [formOpen, setFormOpen] = useState(initialFormOpen);
   const [form, setForm] = useState({
     provider: 'generic', email: '', display_name: '',
     imap_host: '', imap_port: 993, imap_user: '', imap_password: '',
@@ -2936,12 +2749,13 @@ function MailAccountsModal({onClose}) {
       await apiFetch('/mail-accounts', { method:'POST', body: JSON.stringify(form) });
       await refresh();
       setFormOpen(false);
+      onChanged?.();
     } catch (e) { setFormErr(e.message); }
     setBusy(null);
   }
   async function remove(id) {
     if (!confirm('Delete this mail account? (Mail stays on the server.)')) return;
-    try { await apiFetch(`/mail-accounts/${id}`, { method:'DELETE' }); await refresh(); }
+    try { await apiFetch(`/mail-accounts/${id}`, { method:'DELETE' }); await refresh(); onChanged?.(); }
     catch (e) { alert(e.message); }
   }
   async function testSaved(id) {
@@ -2962,6 +2776,7 @@ function MailAccountsModal({onClose}) {
       const r = await apiFetch(`/mail-accounts/${id}/sync`, { method:'POST' });
       setSyncResults(s => ({...s, [id]: r}));
       await refresh();
+      onChanged?.();
       // If already expanded, reload preview
       if (expanded[id]) loadPreview(id);
     } catch (e) {
@@ -2986,15 +2801,8 @@ function MailAccountsModal({onClose}) {
   const input = "w-full border border-gray-200 rounded-lg px-3 py-2 text-sm outline-none focus:border-indigo-400";
 
   return (
-    <div className="fixed inset-0 z-50 bg-black/40 flex items-center justify-center p-4" onClick={onClose}>
-      <div onClick={e=>e.stopPropagation()}
-        className="bg-white rounded-2xl shadow-xl w-full max-w-2xl max-h-[90vh] flex flex-col overflow-hidden">
-        <div className="flex items-center justify-between px-5 py-3 border-b border-gray-200">
-          <span className="font-semibold text-gray-800">Mail accounts</span>
-          <button onClick={onClose} className="text-gray-400 hover:text-gray-600 text-2xl leading-none">×</button>
-        </div>
-        <div className="flex-1 overflow-y-auto px-5 py-4 space-y-4">
-          {loadErr && <div className="px-3 py-2 rounded bg-red-50 text-red-600 text-xs">{loadErr}</div>}
+    <div className="space-y-4">
+      {loadErr && <div className="px-3 py-2 rounded bg-red-50 text-red-600 text-xs">{loadErr}</div>}
           {accounts === null && <div className="text-sm text-gray-400">Loading…</div>}
           {accounts && accounts.length === 0 && !formOpen && (
             <div className="text-sm text-gray-500 py-6 text-center">No mail accounts connected yet.</div>
@@ -3124,8 +2932,6 @@ function MailAccountsModal({onClose}) {
             </div>
           )}
         </div>
-      </div>
-    </div>
   );
 }
 
@@ -3253,8 +3059,7 @@ function App({onSignOut}) {
   const [emailFlags,       setEmailFlags]       = useState(INIT_EMAIL_FLAGS);
   const [editingTag,       setEditingTag]       = useState(null);
   const [leftCollapsed,    setLeftCollapsed]    = useState({contacts:false,tags:true,archive:true});
-  const [showSettings,     setShowSettings]     = useState(false);
-  const [showMailAccounts, setShowMailAccounts] = useState(false);
+  const [settingsTab,      setSettingsTab]      = useState(null); // null | 'profile' | 'accounts' | 'signatures'
   const [selAccounts,      setSelAccounts]      = useState([]);
   // Once real accounts are loaded, select them all by default
   useEffect(() => {
@@ -3910,13 +3715,9 @@ function App({onSignOut}) {
                     <div className="text-xs font-semibold text-gray-800">{CURRENT_USER.name}</div>
                     <div className="text-xs text-gray-400 mt-0.5">{CURRENT_USER.emails[0]}</div>
                   </div>
-                  <button onClick={()=>{setShowUserMenu(false);setShowSettings(true);}}
+                  <button onClick={()=>{setShowUserMenu(false);setSettingsTab('profile');}}
                     className="w-full flex items-center gap-2.5 px-3 py-2 text-sm text-gray-700 hover:bg-gray-50">
                     <GearIcon size={14}/><span>Settings</span>
-                  </button>
-                  <button onClick={()=>{setShowUserMenu(false);setShowMailAccounts(true);}}
-                    className="w-full flex items-center gap-2.5 px-3 py-2 text-sm text-gray-700 hover:bg-gray-50">
-                    <span className="text-xs">✉</span><span>Mail accounts</span>
                   </button>
                   <div className="border-t border-gray-100"/>
                   <button onClick={()=>{setShowUserMenu(false);onSignOut?.();}}
@@ -3988,15 +3789,10 @@ function App({onSignOut}) {
                     <div className="text-xs font-semibold text-gray-800">{CURRENT_USER.name}</div>
                     <div className="text-xs text-gray-400 mt-0.5">{CURRENT_USER.emails[0]}</div>
                   </div>
-                  <button onClick={()=>{setShowUserMenu(false);setShowSettings(true);}}
+                  <button onClick={()=>{setShowUserMenu(false);setSettingsTab('profile');}}
                     className="w-full flex items-center gap-2.5 px-3 py-2 text-sm text-gray-700 hover:bg-gray-50">
                     <GearIcon size={14}/>
                     <span>Settings</span>
-                  </button>
-                  <button onClick={()=>{setShowUserMenu(false);setShowMailAccounts(true);}}
-                    className="w-full flex items-center gap-2.5 px-3 py-2 text-sm text-gray-700 hover:bg-gray-50">
-                    <span className="text-xs">✉</span>
-                    <span>Mail accounts</span>
                   </button>
                   <div className="border-t border-gray-100"/>
                   <button onClick={()=>{setShowUserMenu(false);onSignOut?.();}}
@@ -4018,10 +3814,11 @@ function App({onSignOut}) {
           </div>
         </div>
       )}
-      {showSettings&&<SettingsModal onClose={()=>setShowSettings(false)}
+      {settingsTab&&<SettingsModal onClose={()=>setSettingsTab(null)}
+        initialTab={settingsTab}
         signatures={signatures} setSignatures={setSignatures}
-        accountSigs={accountSigs} setAccountSigs={setAccountSigs}/>}
-      {showMailAccounts&&<MailAccountsModal onClose={()=>setShowMailAccounts(false)}/>}
+        accountSigs={accountSigs} setAccountSigs={setAccountSigs}
+        mailAccounts={mailAccounts} onMailAccountsChanged={refreshData}/>}
 
       {/* Data-loading / empty-state banner */}
       {(dataLoading || dataError || (!dataLoading && contactList.length===0)) && (
@@ -4031,16 +3828,11 @@ function App({onSignOut}) {
           {!dataLoading && !dataError && contactList.length===0 && (
             <>
               <span>No mail synced yet.</span>
-              <button onClick={()=>setShowMailAccounts(true)}
+              <button onClick={()=>setSettingsTab('accounts')}
                 className="underline hover:no-underline font-medium">
-                Add a mail account
+                Open Settings → Mail accounts
               </button>
-              <span>or open</span>
-              <button onClick={()=>setShowMailAccounts(true)}
-                className="underline hover:no-underline font-medium">
-                Mail accounts
-              </button>
-              <span>and click Sync.</span>
+              <span>to add an account or click Sync.</span>
             </>
           )}
         </div>
