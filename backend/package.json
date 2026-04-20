@@ -1,0 +1,30 @@
+{
+  "name": "convotrail-backend",
+  "version": "0.0.3",
+  "private": true,
+  "description": "ConvoTrail backend — IMAP/SMTP proxy, sync, API",
+  "type": "module",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "dev": "tsx watch src/server.ts",
+    "build": "tsc -p tsconfig.json",
+    "start": "node dist/server.js",
+    "migrate": "tsx src/migrate.ts"
+  },
+  "dependencies": {
+    "@fastify/cors": "^11.0.0",
+    "@fastify/sensible": "^6.0.1",
+    "@supabase/supabase-js": "^2.45.4",
+    "dotenv": "^16.4.5",
+    "fastify": "^5.2.1",
+    "pg": "^8.13.1"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.5",
+    "@types/pg": "^8.11.10",
+    "tsx": "^4.19.2",
+    "typescript": "^5.7.2"
+  }
+}

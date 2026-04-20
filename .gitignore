@@ -4,3 +4,19 @@
 __pycache__/
 .vscode/
 .idea/
+
+# Node / backend
+backend/node_modules/
+backend/dist/
+backend/.env
+backend/.env.local
+backend/npm-debug.log*
+
+# Fly
+.fly/
+
+# Secrets — never commit
+*.pem
+*.key
+.env
+.env.local
