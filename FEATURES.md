@@ -1,6 +1,6 @@
 # ConvoTrail — feature roadmap
 
-_Last updated: 2026-04-20, v0.0.13_
+_Last updated: 2026-04-20, v0.0.15_
 
 Status legend:
 - ✅ **Done** — works end-to-end, persists where relevant
@@ -21,6 +21,7 @@ this doc covers product.
 - ✅ IMAP sync: INBOX + Sent, last 90 days, cap 100 msgs/folder, dedup on UID, extracts contacts from from/to addresses automatically
 - ✅ Main UI: contacts list, per-contact thread, message detail — all driven by real data
 - ✅ Left-column account switcher: toggle/combine real accounts; contact list, message list, and per-contact unread/r2m badges all filter by selection
+- ✅ Contact merge / unmerge (persisted)
 - ✅ Client-side search across loaded messages
 - ✅ Filter tabs (Now/All/In/Out/Draft/Deleted)
 - ✅ Version banner + click-to-check-for-update
@@ -34,7 +35,6 @@ this doc covers product.
 - 🚧 Tag roles (To / CC per email address)
 - 🚧 News / Mute flags per email address
 - 🚧 Contact edit (name, org, color, r2m_days)
-- 🚧 Contact merge / unmerge
 - 🚧 Contact archive
 - 🚧 Delete message (soft delete — state only)
 - 🚧 Recover from deleted
@@ -74,9 +74,9 @@ Turns in-memory actions into durable ones. Highest value for daily usability.
 
 **Active prioritized order** (per 2026-04-20 conversation):
 
-1. 🚧 **1.1 — Real accounts in column 1, switch/combine** → ✅ shipped v0.0.11–0.0.12
-2. ⬜ **1.2 — Contact merge persisted** ← *next*
-3. ⬜ **1.3 — Mail Send (SMTP + IMAP APPEND to Sent)**
+1. ✅ **1.1 — Real accounts in column 1, switch/combine** — shipped v0.0.11–0.0.12
+2. ✅ **1.2 — Contact merge + unmerge persisted** — shipped v0.0.14–0.0.15
+3. ⬜ **1.3 — Mail Send (SMTP + IMAP APPEND to Sent)** ← *next*
 4. ⬜ **1.4 — Save draft persisted + active-message-per-contact memory**
 5. ⬜ **1.5 — Mark-read persisted** (flags.seen → IMAP \\Seen + DB)
 6. ⬜ **1.6 — Delete persisted** (soft-delete in DB, IMAP EXPUNGE via retention cron)
@@ -88,9 +88,7 @@ Turns in-memory actions into durable ones. Highest value for daily usability.
 
 ### Per-item rough plan
 
-**1.2 Contact merge** (½ day)
-- Backend: `POST /contacts/:keepId/merge { discardId }` — move `contact_emails` to keep, merge `contact_tags`, delete discard. Transactional.
-- Frontend: wire existing merge UI to API; refresh data after success.
+**1.2 Contact merge + unmerge** — shipped v0.0.14–0.0.15.
 
 **1.3 Send** (1 day)
 - Backend: `POST /mail-accounts/:id/send { to, cc, bcc, subject, body, reply_to_message_id, signature_id }` — decrypt SMTP creds, build MIME via `nodemailer`, send, IMAP APPEND to Sent (best-effort). Insert a `messages` row with `direction='out'` and the new UID.
@@ -128,7 +126,7 @@ Turns in-memory actions into durable ones. Highest value for daily usability.
 **1.11 Onboarding nudge** (¼ day)
 - If `mailAccounts.length === 0` after bootstrap, auto-open MailAccountsModal with form expanded.
 
-**Total Tier 1 remaining**: ~1 week active work.
+**Total Tier 1 remaining**: ~4–5 days active work (1.2 done).
 
 ---
 

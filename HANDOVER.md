@@ -1,6 +1,6 @@
 # ConvoTrail — handover
 
-_Last updated: 2026-04-20, v0.0.13_
+_Last updated: 2026-04-20, v0.0.15_
 
 A conversation-centric email client. Mail stays on IMAP (Gmail/iCloud/own);
 ConvoTrail adds grouping per contact, tags, revert-to-me, merge/unmerge,
@@ -128,6 +128,9 @@ auth.users                        (managed by Supabase)
 
 ## Recent history (terse)
 
+- v0.0.15 — persist unmerge-email
+- v0.0.14 — persist contact merge
+- v0.0.13 — add HANDOVER.md + FEATURES.md
 - v0.0.12 — filter messages + per-contact counts by selected accounts
 - v0.0.11 — real mail accounts in left-column switcher (replaces hardcoded USER_ACCOUNTS)
 - v0.0.10 — JWT cache (60 s) + `/bootstrap` combined endpoint (perf)
