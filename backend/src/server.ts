@@ -2,6 +2,7 @@ import Fastify from "fastify";
 import cors from "@fastify/cors";
 import sensible from "@fastify/sensible";
 import { config } from "./config.js";
+import { authPreHandler } from "./auth.js";
 
 const app = Fastify({
   logger: {
@@ -20,6 +21,10 @@ app.get("/health", async () => ({
   service: "convotrail-backend",
   env: config.env,
   time: new Date().toISOString(),
+}));
+
+app.get("/me", { preHandler: authPreHandler }, async (req) => ({
+  user: req.authUser,
 }));
 
 try {

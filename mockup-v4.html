@@ -22,6 +22,7 @@
   <script src="https://unpkg.com/react@18/umd/react.development.js"></script>
   <script src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
   <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
   <style>
     * { box-sizing: border-box; }
     html, body {
@@ -71,7 +72,25 @@ const { useState, useMemo, useRef, useEffect, useCallback } = React;
 
 // ─── Constants ───────────────────────────────────────────────────────────────
 
-const APP_VERSION = "0.0.3"; // bumped on every deploy — keep in sync with version.json
+const APP_VERSION = "0.0.4"; // bumped on every deploy — keep in sync with version.json
+
+// ─── Backend + Supabase config ───────────────────────────────────────────────
+const SUPABASE_URL = "https://oyrlzqbjcsliesvunbwj.supabase.co";
+const SUPABASE_ANON_KEY = "sb_publishable_-AmkKndtiScgdS4itzK3kw_sSHPz4tk";
+const BACKEND_URL = "https://convotrail-backend-nunc72.fly.dev";
+
+const sb = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
+  auth: { persistSession: true, autoRefreshToken: true, detectSessionInUrl: true, flowType: "pkce" },
+});
+
+async function apiFetch(path, opts = {}) {
+  const { data: { session } } = await sb.auth.getSession();
+  const headers = { "Content-Type": "application/json", ...(opts.headers || {}) };
+  if (session?.access_token) headers.Authorization = `Bearer ${session.access_token}`;
+  const res = await fetch(BACKEND_URL + path, { ...opts, headers });
+  if (!res.ok) throw new Error(`${res.status} ${res.statusText}: ${await res.text()}`);
+  return res.status === 204 ? null : res.json();
+}
 
 const CURRENT_USER = {
   id: 0, name: "Quinten Yvilik", emails: ["me@megamail.nl","q.yvilik@bureau.nl","q@yvilik.com"],
@@ -2479,7 +2498,7 @@ function CreatingAccountBar({onComplete}) {
   );
 }
 
-function LoginScreen({onLogin}) {
+function LoginScreen() {
   // mode: 'login' | 'forgot' | 'reset-code' | 'reset-done' | 'register' | 'register-imap' | 'creating'
   const [mode, setMode]               = useState('login');
   const [email, setEmail]             = useState('');
@@ -2504,27 +2523,39 @@ function LoginScreen({onLogin}) {
     user:'', pass:'', auth:'Password', eraseDeleted:'never', eraseSpam:'never'
   });
 
-  function handleLogin(e) {
+  const [busy, setBusy] = useState(false);
+  async function handleLogin(e) {
     e.preventDefault();
     if(!email||!pass){setErr('Fill in email and password.');return;}
-    onLogin();
+    setErr(''); setBusy(true);
+    const { error } = await sb.auth.signInWithPassword({ email, password: pass });
+    setBusy(false);
+    if (error) { setErr(error.message); return; }
+    // Root listens to auth state changes and will swap views
   }
-  function handleCodeSubmit(e) {
-    e.preventDefault();
-    if(code.length<4){setErr('Enter the code you received.');return;}
-    setErr(''); setMode('reset-done');
+  async function handleSendResetEmail() {
+    if(!email){setErr('Enter your email first.');return;}
+    setErr(''); setBusy(true);
+    const { error } = await sb.auth.resetPasswordForEmail(email, {
+      redirectTo: window.location.origin + window.location.pathname,
+    });
+    setBusy(false);
+    if (error) { setErr(error.message); return; }
+    setMode('reset-sent');
   }
-  function handleNewPassSubmit(e) {
+  async function handleNewPassSubmit(e) {
     e.preventDefault();
     if(newPass.length<6){setErr('Password must be at least 6 characters.');return;}
     if(newPass!==newPass2){setErr('Passwords do not match.');return;}
-    setErr(''); onLogin();
+    setErr(''); setBusy(true);
+    const { error } = await sb.auth.updateUser({ password: newPass });
+    setBusy(false);
+    if (error) { setErr(error.message); return; }
+    // Session is already active; Root will swap to App via onAuthStateChange
   }
   function handleRegisterSubmit(e) {
     e.preventDefault();
-    if(!regEmail||!regPass){setErr('Fill in username and password.');return;}
-    if(regPass.length<6){setErr('Password must be at least 6 characters.');return;}
-    setErr(''); setMode('register-imap');
+    setErr('Registration is invite-only. Ask the admin for an invite link.');
   }
 
   const cardCls = "bg-white rounded-2xl shadow-xl px-6 py-8 sm:px-10 sm:py-10 w-full max-w-sm";
@@ -2589,31 +2620,39 @@ function LoginScreen({onLogin}) {
         </div>
       )}
 
-      {/* ── Forgot — choose method ── */}
+      {/* ── Forgot password ── */}
       {mode==='forgot'&&(
         <div className={cardCls}>
           <button onClick={()=>{setMode('login');setErr('');}} className="text-xs text-gray-400 hover:text-gray-600 mb-5 flex items-center gap-1">← Back to sign in</button>
           <h1 className="text-xl font-bold text-gray-900 mb-1">Reset password</h1>
-          <p className="text-sm text-gray-400 mb-7">How would you like to receive your reset code?</p>
+          <p className="text-sm text-gray-400 mb-7">We'll email you a link to set a new password.</p>
           {err&&<div className="mb-4 px-3 py-2 rounded-lg bg-red-50 text-red-600 text-xs">{err}</div>}
-          <div className="space-y-3">
-            <button onClick={()=>{setCodeMethod('sms');setCode('');setMode('reset-code');}}
-              className="w-full flex items-center gap-4 px-5 py-4 rounded-xl border-2 border-gray-200 hover:border-indigo-300 hover:bg-indigo-50 transition text-left">
-              <div className="w-9 h-9 rounded-full bg-indigo-100 flex items-center justify-center text-indigo-600 text-lg flex-shrink-0">💬</div>
-              <div>
-                <div className="text-sm font-semibold text-gray-800">Text message (SMS)</div>
-                <div className="text-xs text-gray-400 mt-0.5">Code sent to your registered mobile number</div>
-              </div>
-            </button>
-            <button onClick={()=>{setCodeMethod('email');setCode('');setMode('reset-code');}}
-              className="w-full flex items-center gap-4 px-5 py-4 rounded-xl border-2 border-gray-200 hover:border-indigo-300 hover:bg-indigo-50 transition text-left">
-              <div className="w-9 h-9 rounded-full bg-indigo-100 flex items-center justify-center text-indigo-600 text-lg flex-shrink-0">📧</div>
-              <div>
-                <div className="text-sm font-semibold text-gray-800">Recovery email</div>
-                <div className="text-xs text-gray-400 mt-0.5">Code sent to your registered recovery email</div>
-              </div>
+          <div className="space-y-4">
+            <div>
+              <label className="text-xs text-gray-500 font-medium block mb-1">Email address</label>
+              <input autoFocus type="email" value={email} onChange={e=>{setEmail(e.target.value);setErr('');}}
+                placeholder="you@example.com" className={inputCls}/>
+            </div>
+            <button onClick={handleSendResetEmail} disabled={busy}
+              className="w-full py-2.5 rounded-xl bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 text-white text-sm font-semibold transition">
+              {busy?'Sending…':'Send reset email'}
             </button>
           </div>
+        </div>
+      )}
+
+      {/* ── Reset email sent ── */}
+      {mode==='reset-sent'&&(
+        <div className={cardCls}>
+          <div className="w-14 h-14 rounded-full bg-green-100 flex items-center justify-center text-2xl mx-auto mb-5">📬</div>
+          <h1 className="text-xl font-bold text-gray-900 mb-1 text-center">Check your inbox</h1>
+          <p className="text-sm text-gray-400 mb-6 text-center">
+            If an account exists for <span className="text-gray-600">{email}</span>, we've sent a reset link. Click it to set a new password.
+          </p>
+          <button onClick={()=>{setMode('login');setErr('');}}
+            className="w-full py-2.5 rounded-xl bg-gray-100 hover:bg-gray-200 text-gray-700 text-sm font-medium transition">
+            Back to sign in
+          </button>
         </div>
       )}
 
@@ -3732,9 +3771,68 @@ function App({onSignOut}) {
 }
 
 function Root() {
-  const [loggedIn, setLoggedIn] = useState(false);
-  if(!loggedIn) return <LoginScreen onLogin={()=>setLoggedIn(true)}/>;
-  return <App onSignOut={()=>setLoggedIn(false)}/>;
+  const [session, setSession] = useState(undefined); // undefined = loading, null = logged out, object = logged in
+  const [recoveryMode, setRecoveryMode] = useState(false);
+
+  useEffect(()=>{
+    sb.auth.getSession().then(({ data }) => setSession(data.session ?? null));
+    const { data: sub } = sb.auth.onAuthStateChange((event, sess) => {
+      setSession(sess ?? null);
+      if (event === 'PASSWORD_RECOVERY') setRecoveryMode(true);
+      if (event === 'USER_UPDATED' && recoveryMode) setRecoveryMode(false);
+    });
+    return () => sub.subscription.unsubscribe();
+  }, []);
+
+  if (session === undefined) {
+    return <div className="min-h-screen bg-gradient-to-br from-indigo-50 to-slate-100 flex items-center justify-center">
+      <div className="text-sm text-gray-400">Loading…</div>
+    </div>;
+  }
+
+  // Recovery: user clicked reset-password link in email. Show set-new-password screen regardless of session.
+  if (recoveryMode) return <RecoveryScreen onDone={()=>setRecoveryMode(false)}/>;
+
+  if (!session) return <LoginScreen/>;
+
+  return <App onSignOut={async ()=>{ await sb.auth.signOut(); }}/>;
+}
+
+function RecoveryScreen({onDone}) {
+  const [newPass, setNewPass]   = useState('');
+  const [newPass2, setNewPass2] = useState('');
+  const [err, setErr]           = useState('');
+  const [busy, setBusy]         = useState(false);
+  const cardCls = "bg-white rounded-2xl shadow-xl px-6 py-8 sm:px-10 sm:py-10 w-full max-w-sm";
+  const inputCls = "w-full border border-gray-200 rounded-xl px-4 py-2.5 text-sm outline-none focus:border-indigo-400 focus:ring-2 focus:ring-indigo-100 transition";
+  async function submit(e) {
+    e.preventDefault();
+    if(newPass.length<6){setErr('Password must be at least 6 characters.');return;}
+    if(newPass!==newPass2){setErr('Passwords do not match.');return;}
+    setErr(''); setBusy(true);
+    const { error } = await sb.auth.updateUser({ password: newPass });
+    setBusy(false);
+    if (error) { setErr(error.message); return; }
+    onDone();
+  }
+  return (
+    <div className="min-h-screen bg-gradient-to-br from-indigo-50 to-slate-100 flex flex-col items-center justify-center px-4 py-6">
+      <div className={cardCls}>
+        <div className="w-14 h-14 rounded-full bg-green-100 flex items-center justify-center text-2xl mx-auto mb-5">✓</div>
+        <h1 className="text-xl font-bold text-gray-900 mb-1 text-center">Set a new password</h1>
+        <p className="text-sm text-gray-400 mb-6 text-center">Choose something at least 6 characters.</p>
+        {err&&<div className="mb-4 px-3 py-2 rounded-lg bg-red-50 text-red-600 text-xs">{err}</div>}
+        <form onSubmit={submit} className="space-y-4">
+          <input autoFocus type="password" value={newPass} onChange={e=>{setNewPass(e.target.value);setErr('');}} placeholder="New password" className={inputCls}/>
+          <input type="password" value={newPass2} onChange={e=>{setNewPass2(e.target.value);setErr('');}} placeholder="Confirm new password" className={inputCls}/>
+          <button type="submit" disabled={busy}
+            className="w-full py-2.5 rounded-xl bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 text-white text-sm font-semibold transition">
+            {busy?'Saving…':'Save & continue'}
+          </button>
+        </form>
+      </div>
+    </div>
+  );
 }
 
 ReactDOM.createRoot(document.getElementById("root")).render(<Root/>);

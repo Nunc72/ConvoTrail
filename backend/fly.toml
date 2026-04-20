@@ -1,4 +1,4 @@
-app = "convotrail-backend"
+app = "convotrail-backend-nunc72"
 primary_region = "fra"
 
 [build]
