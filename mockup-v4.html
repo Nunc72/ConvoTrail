@@ -1574,7 +1574,8 @@ function ThreadColumn({contact,allMsgs,deletedIds,selectedMsgId,msgTags,onSelect
     else if(filter==="draft")m=m.filter(x=>x.draft&&!del(x));
     else if(filter==="deleted")m=m.filter(x=>del(x));
     else m=m.filter(x=>!del(x));
-    return [...m].sort((a,b)=>filter==="draft"?(b.modifiedAt||b.date).localeCompare(a.modifiedAt||a.date):b.date.localeCompare(a.date));
+    const sortKey=x=>x.draft?(x.modifiedAt||x.date):x.date;
+    return [...m].sort((a,b)=>sortKey(b).localeCompare(sortKey(a)));
   },[allMsgs,filter,deletedIds]);
 
   if(!contact) return (
@@ -1814,8 +1815,9 @@ function TagView({tag, messages, contacts, deletedIds, msgTags, emailRoles, msgM
   const isMobile = typeof window !== 'undefined' && window.innerWidth < 768;
   const tagFilter = savedFilter||'all';
   const setTagFilterAndSave = f=>onFilterChange?.(f);
+  const tagSortKey=x=>x.draft?(x.modifiedAt||x.date):x.date;
   const allTaggedMsgs = messages.filter(m=>(msgTags[m.id]||[]).includes(tag))
-    .sort((a,b)=>b.date.localeCompare(a.date));
+    .sort((a,b)=>tagSortKey(b).localeCompare(tagSortKey(a)));
   const searchFn = msgMatchesSearch || (()=>true);
   const taggedMsgs = allTaggedMsgs.filter(m=>{
     if(!searchFn(m)) return false;
