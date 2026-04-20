@@ -5,6 +5,7 @@ import { config } from "./config.js";
 import { authPreHandler } from "./auth.js";
 import { registerMailAccountsRoutes } from "./routes/mailAccounts.js";
 import { registerDataRoutes } from "./routes/data.js";
+import { registerContactsRoutes } from "./routes/contacts.js";
 
 const app = Fastify({
   logger: {
@@ -31,6 +32,7 @@ app.get("/me", { preHandler: authPreHandler }, async (req) => ({
 
 await registerMailAccountsRoutes(app);
 await registerDataRoutes(app);
+await registerContactsRoutes(app);
 
 try {
   await app.listen({ port: config.port, host: config.host });

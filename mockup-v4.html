@@ -72,7 +72,7 @@ const { useState, useMemo, useRef, useEffect, useCallback } = React;
 
 // ─── Constants ───────────────────────────────────────────────────────────────
 
-const APP_VERSION = "0.0.13"; // bumped on every deploy — keep in sync with version.json
+const APP_VERSION = "0.0.14"; // bumped on every deploy — keep in sync with version.json
 
 // ─── Backend + Supabase config ───────────────────────────────────────────────
 const SUPABASE_URL = "https://oyrlzqbjcsliesvunbwj.supabase.co";
@@ -3575,10 +3575,21 @@ function App({onSignOut}) {
     setSelMsg(id);setShowCompose(false);setReplyTo(null);setComposeContact(null);setComposeDraft(null);
     if(isMobile) setMobileCol(2);
   }
-  function handleMerge(keep,discard,emails){
+  async function handleMerge(keep,discard,emails){
+    // Optimistic local merge so the UI responds instantly; server truth loads via refreshData
     setContactList(prev=>prev.map(c=>c.id===keep.id?{...c,emails}:c).filter(c=>c.id!==discard.id));
     setMessageList(prev=>prev.map(m=>m.contactId===discard.id?{...m,contactId:keep.id}:m));
     setSelContact(keep.id);setMergeContact(null);
+    try {
+      await apiFetch(`/contacts/${keep.id}/merge`, {
+        method:'POST',
+        body: JSON.stringify({ discardId: discard.id }),
+      });
+      refreshData(); // reload contacts + messages from server, so shapes/accountEmails re-derive
+    } catch (e) {
+      alert('Merge failed on server — reloading to revert. ('+e.message+')');
+      refreshData();
+    }
   }
   function handleDelete(id){
     captureAlert(id);
