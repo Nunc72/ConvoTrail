@@ -2,6 +2,7 @@ import { ImapFlow, type FetchMessageObject } from "imapflow";
 import { simpleParser, type ParsedMail, type AddressObject } from "mailparser";
 import { supabaseAdmin } from "./supabase.js";
 import { decrypt } from "./crypto.js";
+import { requirePool } from "./db.js";
 
 export interface FolderSyncStat {
   folder: string;
@@ -21,12 +22,6 @@ const SINCE_DAYS = 90;
 const PER_FOLDER_CAP = 100; // MVP safety — Fly free-tier memory + 60s HTTP timeout
 
 // ─── Helpers ────────────────────────────────────────────────────────────────
-function byteaToBuffer(raw: unknown): Buffer {
-  if (raw instanceof Buffer) return raw;
-  const s = String(raw);
-  return Buffer.from(s.startsWith("\\x") ? s.slice(2) : s, "hex");
-}
-
 function addrList(a: AddressObject | AddressObject[] | undefined): { email: string; name: string | null }[] {
   if (!a) return [];
   const arr = Array.isArray(a) ? a : [a];
@@ -56,18 +51,23 @@ export async function syncAccount(accountId: string): Promise<SyncResult> {
   const started = Date.now();
   if (!supabaseAdmin) return { ok: false, folders: [], contactsCreated: 0, durationMs: 0, error: "service key missing" };
 
-  // 1) Load account + decrypt password
-  const { data: acc, error: accErr } = await supabaseAdmin
-    .from("mail_accounts")
-    .select("id, user_id, email, imap_host, imap_port, imap_user, imap_cred_enc")
-    .eq("id", accountId)
-    .single();
-  if (accErr || !acc) return { ok: false, folders: [], contactsCreated: 0, durationMs: 0, error: accErr?.message || "account not found" };
+  // 1) Load account + decrypt password (via pg so bytea comes back as real Buffer)
+  const pool = requirePool();
+  const accR = await pool.query<{
+    id: string; user_id: string; email: string;
+    imap_host: string; imap_port: number; imap_user: string; imap_cred_enc: Buffer | null;
+  }>(
+    `SELECT id, user_id, email, imap_host, imap_port, imap_user, imap_cred_enc
+       FROM mail_accounts WHERE id = $1`,
+    [accountId],
+  );
+  const acc = accR.rows[0];
+  if (!acc) return { ok: false, folders: [], contactsCreated: 0, durationMs: 0, error: "account not found" };
   if (!acc.imap_cred_enc) return { ok: false, folders: [], contactsCreated: 0, durationMs: 0, error: "no stored imap password" };
 
-  const password = decrypt(byteaToBuffer(acc.imap_cred_enc));
-  const userId = acc.user_id as string;
-  const userEmail = (acc.email as string).toLowerCase();
+  const password = decrypt(acc.imap_cred_enc);
+  const userId = acc.user_id;
+  const userEmail = acc.email.toLowerCase();
 
   const client = new ImapFlow({
     host: acc.imap_host!, port: acc.imap_port!, secure: true,
