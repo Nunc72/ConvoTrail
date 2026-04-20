@@ -72,7 +72,7 @@ const { useState, useMemo, useRef, useEffect, useCallback } = React;
 
 // ─── Constants ───────────────────────────────────────────────────────────────
 
-const APP_VERSION = "0.0.6"; // bumped on every deploy — keep in sync with version.json
+const APP_VERSION = "0.0.7"; // bumped on every deploy — keep in sync with version.json
 
 // ─── Backend + Supabase config ───────────────────────────────────────────────
 const SUPABASE_URL = "https://oyrlzqbjcsliesvunbwj.supabase.co";
@@ -85,7 +85,8 @@ const sb = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
 
 async function apiFetch(path, opts = {}) {
   const { data: { session } } = await sb.auth.getSession();
-  const headers = { "Content-Type": "application/json", ...(opts.headers || {}) };
+  const headers = { ...(opts.headers || {}) };
+  if (opts.body != null) headers["Content-Type"] = "application/json";
   if (session?.access_token) headers.Authorization = `Bearer ${session.access_token}`;
   const res = await fetch(BACKEND_URL + path, { ...opts, headers });
   if (!res.ok) throw new Error(`${res.status} ${res.statusText}: ${await res.text()}`);
