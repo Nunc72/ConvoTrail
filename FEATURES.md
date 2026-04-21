@@ -1,6 +1,6 @@
 # ConvoTrail — feature roadmap
 
-_Last updated: 2026-04-21, v0.0.22_
+_Last updated: 2026-04-21, v0.0.23_
 
 Status legend:
 - ✅ **Done** — works end-to-end, persists where relevant
@@ -24,7 +24,7 @@ this doc covers product.
 - ✅ Contact merge / unmerge (persisted)
 - ✅ Send mail (SMTP + best-effort IMAP APPEND to Sent)
 - ✅ Drafts: save / edit / delete (synced across devices), auto-deleted after Send
-- ✅ Mark-read persisted (IMAP \\Seen + DB) + auto-mark-read on open
+- ✅ Mark-read persisted (IMAP \\Seen + DB) via Seen / Snooze buttons
 - ✅ Per-contact memory: remembers last-opened message per contact
 - ✅ Client-side search across loaded messages
 - ✅ Filter tabs (Now/All/In/Out/Draft/Deleted)

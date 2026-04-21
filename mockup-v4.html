@@ -72,7 +72,7 @@ const { useState, useMemo, useRef, useEffect, useCallback } = React;
 
 // ─── Constants ───────────────────────────────────────────────────────────────
 
-const APP_VERSION = "0.0.22"; // bumped on every deploy — keep in sync with version.json
+const APP_VERSION = "0.0.23"; // bumped on every deploy — keep in sync with version.json
 
 // ─── Backend + Supabase config ───────────────────────────────────────────────
 const SUPABASE_URL = "https://oyrlzqbjcsliesvunbwj.supabase.co";
@@ -3592,6 +3592,8 @@ function App({onSignOut}) {
   }
   // Persist a seen=true flag to backend (IMAP \Seen + DB). Optimistic flip is
   // already applied by the caller; we only need to revert on failure.
+  // Only triggered by explicit Seen / Snooze actions — opening a message does
+  // NOT auto-mark it read (by design).
   function persistSeen(id) {
     return apiFetch(`/messages/${id}/flags`, { method:'PATCH', body: JSON.stringify({ seen: true }) })
       .catch(e => {
@@ -3599,16 +3601,6 @@ function App({onSignOut}) {
         setActionToast('Mark read failed: ' + e.message);
       });
   }
-  // Auto-mark-read when the user opens an unread incoming message. Fires only
-  // for messages that actually need the flag flipped; skips drafts & deleted.
-  useEffect(() => {
-    if (selMsg == null) return;
-    const m = messageList.find(x => x.id === selMsg);
-    if (!m || m.read || m.draft || m.dir !== 'in' || deletedIds.includes(m.id)) return;
-    setMessageList(prev => prev.map(x => x.id === selMsg ? {...x, read: true} : x));
-    persistSeen(selMsg);
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selMsg]);
 
   function handleMarkRead(id){
     captureAlert(id);
