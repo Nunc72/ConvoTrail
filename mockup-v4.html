@@ -72,7 +72,7 @@ const { useState, useMemo, useRef, useEffect, useCallback } = React;
 
 // ─── Constants ───────────────────────────────────────────────────────────────
 
-const APP_VERSION = "0.0.31"; // bumped on every deploy — keep in sync with version.json
+const APP_VERSION = "0.0.32"; // bumped on every deploy — keep in sync with version.json
 
 // ─── Backend + Supabase config ───────────────────────────────────────────────
 const SUPABASE_URL = "https://oyrlzqbjcsliesvunbwj.supabase.co";
@@ -292,7 +292,8 @@ function quoteHeader(msg) {
   const d=new Date(msg.date);
   const date=`${pad(d.getDate())}-${pad(d.getMonth()+1)}-${d.getFullYear()}`;
   const time=`${pad(d.getHours())}:${pad(d.getMinutes())}`;
-  const sender = msg.dir==="out" ? `${msg.from} (${CURRENT_USER.name})` : msg.from;
+  const myName = msg.sender?.name || (msg.from || '').split('@')[0];
+  const sender = msg.dir==="out" ? `${msg.from} (${myName})` : msg.from;
   return `—————————————————————————————————\n${DAYS[d.getDay()]} ${date} ${time}  ${sender}\n\n${msg.body}`;
 }
 function softBg(hex) {
@@ -1172,7 +1173,7 @@ function ComposePane({replyTo, toContact, draft, initTo:initToOverride="", initC
   const initBody = draft?.body ?? (replyTo ? "\n\n"+quoteHeader(replyTo) : "");
 
   // Compute initial auto-signature (only for new messages, not replies/drafts)
-  const initFromAcct = selAccounts[0]??CURRENT_USER.emails[0];
+  const initFromAcct = selAccounts[0] || '';
   const initAcctSig  = accountSigs[initFromAcct]||{linked:[],autoId:null};
   const initAutoSig  = (!draft&&!replyTo&&initAcctSig.autoId)
     ? signatures.find(s=>s.id===initAcctSig.autoId)||null : null;
@@ -1643,7 +1644,7 @@ function MessageDetail({message,contact,isDeleted,msgTags,allTags,onReply,onDele
     </div>
   );
   const isDraft=!!message.draft;
-  const senderPerson = message.dir==="out"?CURRENT_USER:contact;
+  const senderPerson = message.dir==="out" ? (message.sender || {name:'Me',avatar:'Me',color:'#6366f1',portrait:null}) : contact;
   // When fadingAlert is set (during action), freeze banner so alert stays until toast is gone
   const showAmberBanner = fadingAlert ? fadingAlert.amber : (message.revert2me&&message.dir==="out"&&!isDeleted);
   const showBlueBanner  = fadingAlert ? fadingAlert.blue  : (!message.read&&message.dir==="in"&&!isDraft&&!isDeleted);
@@ -1741,9 +1742,11 @@ function MessageDetail({message,contact,isDeleted,msgTags,allTags,onReply,onDele
       </div>
 
       <div className={`${isMobile?'':'flex-1 overflow-y-auto scroll'} px-5 py-4 text-sm text-gray-700 leading-relaxed`}>
-        {message.body.split("\n").map((line,i)=>(
-          <p key={i} className={line.startsWith("—")||line.startsWith("——")?"text-gray-300 mt-3":"min-h-[1em]"}>{line}</p>
-        ))}
+        {message.body?.trim()
+          ? message.body.split("\n").map((line,i)=>(
+              <p key={i} className={line.startsWith("—")||line.startsWith("——")?"text-gray-300 mt-3":"min-h-[1em]"}>{line}</p>
+            ))
+          : <p className="italic text-gray-300">(no body text)</p>}
       </div>
       </div>{/* end mobile bounce wrapper */}
       </div>{/* end scrollable middle */}
@@ -2039,7 +2042,7 @@ const ROLE_OPTIONS = ["", "To", "CC", "BCC"];
 
 // ─── Tag View ─────────────────────────────────────────────────────────────────
 
-function TagView({tag, messages, contacts, deletedIds, msgTags, emailRoles, msgMatchesSearch, selectedMsgId, onSelectMsg, onSelectDraft,
+function TagView({tag, messages, contacts, deletedIds, msgTags, emailRoles, myEmails, msgMatchesSearch, selectedMsgId, onSelectMsg, onSelectDraft,
                   onEditTag, onUpdateRoles, onNewTagMsg, savedFilter, onFilterChange, onSelectContact, mobileBack}) {
   const isMobile = typeof window !== 'undefined' && window.innerWidth < 768;
   const tagFilter = savedFilter||'all';
@@ -2057,8 +2060,9 @@ function TagView({tag, messages, contacts, deletedIds, msgTags, emailRoles, msgM
   });
 
   // Stats and emails always based on ALL tagged messages (not the filtered subset)
+  const myEmailSet = new Set((myEmails || []).map(x => x.toLowerCase()));
   const involvedEmails = [...new Set(
-    allTaggedMsgs.flatMap(m=>[m.from,m.to]).filter(e=>!CURRENT_USER.emails.includes(e))
+    allTaggedMsgs.flatMap(m=>[m.from,m.to]).filter(e => e && !myEmailSet.has(e.toLowerCase()))
   )];
   const oldest = allTaggedMsgs.length ? allTaggedMsgs[allTaggedMsgs.length-1].date : null;
   const newest = allTaggedMsgs.length ? allTaggedMsgs[0].date : null;
@@ -2152,8 +2156,8 @@ function TagView({tag, messages, contacts, deletedIds, msgTags, emailRoles, msgM
           const contact=contacts.find(c=>c.id===msg.contactId);
           const isDraft=!!msg.draft;
           const isOut=msg.dir==="out"||isDraft;
-          const rowAvatar=isOut?CURRENT_USER:contact;
-          const rowName=isOut?CURRENT_USER.name:contact?.name;
+          const rowAvatar=isOut?(msg.sender||null):contact;
+          const rowName=isOut?(msg.sender?.name||'Me'):contact?.name;
           return (
             <div key={msg.id} onClick={()=>isDraft?onSelectDraft(msg):onSelectMsg(msg.id)}
               className={`${isOut?"pl-10":"pl-4"} pr-4 py-2.5 border-b border-gray-100 cursor-pointer transition-colors ${deletedIds.includes(msg.id)?"opacity-50":""}
@@ -2278,8 +2282,8 @@ function GlobalSearchResults({messages, contacts, deletedIds, msgTags, msgMatche
           const contact=contacts.find(c=>c.id===msg.contactId);
           const isDraft=!!msg.draft;
           const isOut=msg.dir==='out'||isDraft;
-          const rowContact=isOut?CURRENT_USER:contact;
-          const rowName=isOut?CURRENT_USER.name:contact?.name??msg.from;
+          const rowContact=isOut?(msg.sender||null):contact;
+          const rowName=isOut?(msg.sender?.name||'Me'):contact?.name??msg.from;
           const isSel=msg.id===selectedMsgId;
           return (
             <div key={msg.id} onClick={()=>isDraft?onSelectDraft(msg):onSelectMsg(msg.id)}
@@ -3156,6 +3160,9 @@ function App({onSignOut}) {
           if (m.direction === 'in' && m.thread_id) repliedRfcIds.add(m.thread_id);
         }
 
+        // Lookup of the full account row by id, for outgoing-sender identity
+        const accountById = new Map((mail_accounts || []).map(a => [a.id, a]));
+
         // Shape messages first (we need them to compute per-contact accountEmails)
         const shapedMessages = messages.map(m => {
           const accountEmail = accountEmailById.get(m.mail_account_id) ?? '';
@@ -3168,6 +3175,20 @@ function App({onSignOut}) {
           // same RFC thread exists — i.e. the recipient has already replied.
           const r2mActive = isR2mActive(r2mRow)
             && !(m.direction === 'out' && m.message_id && repliedRfcIds.has(m.message_id));
+          // Sender identity for outgoing messages = the sending mail account.
+          // Avatar component wants { name, avatar, color, portrait }.
+          let sender = null;
+          if (m.direction === 'out') {
+            const acc = accountById.get(m.mail_account_id);
+            const name = acc?.display_name || acc?.email || accountEmail || 'Me';
+            sender = {
+              name,
+              emails: [accountEmail],
+              avatar: initialsOf(name),
+              color: acc?.color || '#6366f1',
+              portrait: null,
+            };
+          }
           return {
             id: m.id,
             accountId: m.mail_account_id,
@@ -3184,6 +3205,7 @@ function App({onSignOut}) {
             draft: !!m.flags?.draft,
             body: m.body_text || m.snippet || '',
             hasAttachments: !!m.has_attachments,
+            sender,
           };
         }).filter(m => m.contactId !== null);
 
@@ -3192,6 +3214,8 @@ function App({onSignOut}) {
           const accountEmail = accountEmailById.get(d.mail_account_id) ?? '';
           const firstTo = (d.to_emails?.[0]?.email || '').toLowerCase();
           const contactId = emailToContactId.get(firstTo) ?? null;
+          const acc = accountById.get(d.mail_account_id);
+          const senderName = acc?.display_name || acc?.email || accountEmail || 'Me';
           return {
             id: d.id,
             accountId: d.mail_account_id,
@@ -3210,6 +3234,13 @@ function App({onSignOut}) {
             draft: true,
             body: d.body || '',
             replyToId: d.reply_to_message_id || null,
+            sender: {
+              name: senderName,
+              emails: [accountEmail],
+              avatar: initialsOf(senderName),
+              color: acc?.color || '#6366f1',
+              portrait: null,
+            },
           };
         }).filter(m => m.contactId !== null);
 
@@ -4087,9 +4118,10 @@ function App({onSignOut}) {
       onSave={handleSaveContact} onCancel={()=>setEditingContact(null)}
       onDelete={()=>{setContactList(prev=>prev.filter(c=>c.id!==selContact));setSelContact(null);setEditingContact(null);}}/>;
   } else if(editingTag){
+    const myEmailSet = new Set(mailAccounts.map(a => (a.email||'').toLowerCase()));
     const involvedEmails=[...new Set(
       messageList.filter(m=>(msgTags[m.id]||[]).includes(editingTag))
-        .flatMap(m=>[m.from,m.to]).filter(e=>!CURRENT_USER.emails.includes(e))
+        .flatMap(m=>[m.from,m.to]).filter(e=> e && !myEmailSet.has(e.toLowerCase()))
     )];
     col2=<TagEditForm tag={editingTag} emailRoles={tagRoles[editingTag]||{}}
       involvedEmails={involvedEmails} contacts={contactList}
@@ -4106,7 +4138,9 @@ function App({onSignOut}) {
       }}/>;
   } else if(selTag){
     col2=<TagView tag={selTag} messages={messageList} contacts={contactList} deletedIds={deletedIds}
-      msgTags={msgTags} emailRoles={tagRoles[selTag]||{}} msgMatchesSearch={msgMatchesSearch}
+      msgTags={msgTags} emailRoles={tagRoles[selTag]||{}}
+      myEmails={mailAccounts.map(a=>(a.email||'').toLowerCase())}
+      msgMatchesSearch={msgMatchesSearch}
       selectedMsgId={selMsg}
       onSelectMsg={id=>handleSelectMsg(id)}
       onSelectDraft={msg=>{handleSelectDraft(msg);}}
