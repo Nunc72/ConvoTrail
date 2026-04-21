@@ -72,7 +72,7 @@ const { useState, useMemo, useRef, useEffect, useCallback } = React;
 
 // ─── Constants ───────────────────────────────────────────────────────────────
 
-const APP_VERSION = "0.0.38"; // bumped on every deploy — keep in sync with version.json
+const APP_VERSION = "0.0.39"; // bumped on every deploy — keep in sync with version.json
 
 // ─── Backend + Supabase config ───────────────────────────────────────────────
 const SUPABASE_URL = "https://oyrlzqbjcsliesvunbwj.supabase.co";
@@ -1661,6 +1661,47 @@ function MsgLabel({dir,isDraft,isDeleted}) {
 
 // ─── Message Detail ───────────────────────────────────────────────────────────
 
+// ─── HTML message body (sandboxed iframe) ─────────────────────────────────
+// HTML emails are rendered in a sandboxed iframe so any scripts / event
+// handlers / form submissions in the source can't touch our app. We keep
+// allow-same-origin so the onLoad handler can read contentDocument and
+// resize the iframe to fit its content, and allow-popups so link clicks
+// can open in a new tab without being trapped in the sandbox.
+function HtmlMessageBody({html}) {
+  const ref = useRef(null);
+  function onLoad(e) {
+    try {
+      const doc = e.target.contentDocument;
+      if (doc && doc.body) {
+        e.target.style.height = (doc.body.scrollHeight + 24) + 'px';
+      }
+    } catch { /* ignore cross-origin issues */ }
+  }
+  // <base target="_blank"> makes every link open in a new tab instead of
+  // hijacking the iframe. A tiny default stylesheet keeps things readable
+  // when the source has no CSS of its own.
+  const srcDoc = `<!doctype html>
+<html><head><base target="_blank"><meta charset="utf-8">
+<style>
+  body { margin:0; padding:0; font: 14px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; color:#374151; word-wrap: break-word; overflow-wrap: break-word; }
+  img, video, iframe { max-width: 100%; height: auto; }
+  table { max-width: 100%; }
+  a { color: #4f46e5; }
+  blockquote { margin: 0.5em 0; padding-left: 0.75em; border-left: 3px solid #e5e7eb; color: #6b7280; }
+  pre, code { white-space: pre-wrap; word-break: break-word; }
+</style>
+</head><body>${html}</body></html>`;
+  return (
+    <iframe ref={ref}
+      title="Message body"
+      className="w-full border-0 bg-white"
+      sandbox="allow-same-origin allow-popups allow-popups-to-escape-sandbox"
+      srcDoc={srcDoc}
+      onLoad={onLoad}
+      style={{minHeight:200, display:'block'}}/>
+  );
+}
+
 function fibSnoozeDays(count) {
   // Fibonacci snooze sequence: 3, 5, 8, 13, 21, 34 …
   if(count<=0) return 3;
@@ -1812,11 +1853,13 @@ function MessageDetail({message,contact,isDeleted,msgTags,allTags,onReply,onRepl
       </div>
 
       <div className={`${isMobile?'':'flex-1 overflow-y-auto scroll'} px-5 py-4 text-sm text-gray-700 leading-relaxed`}>
-        {message.body?.trim()
-          ? message.body.split("\n").map((line,i)=>(
-              <p key={i} className={line.startsWith("—")||line.startsWith("——")?"text-gray-300 mt-3":"min-h-[1em]"}>{line}</p>
-            ))
-          : <p className="italic text-gray-300">(no body text)</p>}
+        {message.bodyHtml
+          ? <HtmlMessageBody html={message.bodyHtml}/>
+          : message.body?.trim()
+            ? message.body.split("\n").map((line,i)=>(
+                <p key={i} className={line.startsWith("—")||line.startsWith("——")?"text-gray-300 mt-3":"min-h-[1em]"}>{line}</p>
+              ))
+            : <p className="italic text-gray-300">(no body text)</p>}
       </div>
       </div>{/* end mobile bounce wrapper */}
       </div>{/* end scrollable middle */}
@@ -3281,6 +3324,7 @@ function App({onSignOut}) {
             r2mArmed: !!r2mRow && !r2mRow.dismissed_at,
             draft: !!m.flags?.draft,
             body: m.body_text || m.snippet || '',
+            bodyHtml: (typeof m.body_html === 'string' && m.body_html.trim()) ? m.body_html : null,
             hasAttachments: !!m.has_attachments,
             sender,
           };

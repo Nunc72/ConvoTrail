@@ -1,6 +1,6 @@
 # ConvoTrail — handover
 
-_Last updated: 2026-04-21, v0.0.38_
+_Last updated: 2026-04-21, v0.0.39_
 
 A conversation-centric email client. Mail stays on IMAP (Gmail/iCloud/own);
 ConvoTrail adds grouping per contact, tags, revert-to-me, merge/unmerge,
@@ -128,6 +128,7 @@ auth.users                        (managed by Supabase)
 
 ## Recent history (terse)
 
+- v0.0.39 — Render HTML emails via a sandboxed iframe with auto-height; falls back to plain text when body_html is absent
 - v0.0.38 — Get-mail button wired; auto-sync poll (2 min + window focus) respects mail_accounts.auto_sync; onboarding nudge opens Settings → Mail accounts when account list is empty
 - v0.0.37 — Signatures CRUD persisted + per-account linkage (signatures + account_signatures tables; auto-insert still one-per-sig, one-per-account)
 - v0.0.36 — drop "Tags:" label in compose (new mail + draft) to match IN/OUT mails
