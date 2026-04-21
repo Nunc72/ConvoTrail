@@ -9,7 +9,7 @@ export async function registerDataRoutes(app: FastifyInstance) {
   app.get<{ Querystring: { limit?: string } }>("/bootstrap", auth, async (req, reply) => {
     const limit = Math.min(Number(req.query.limit) || 500, 2000);
     const sb = supabaseWithJwt(req.authJwt!);
-    const [accountsRes, contactsRes, messagesRes, draftsRes] = await Promise.all([
+    const [accountsRes, contactsRes, messagesRes, draftsRes, tagsRes, msgTagsRes] = await Promise.all([
       sb.from("mail_accounts").select(
         "id, email, display_name, provider, last_sync_at, auto_sync, " +
         "retention_deleted_days, retention_spam_days",
@@ -26,16 +26,23 @@ export async function registerDataRoutes(app: FastifyInstance) {
         "id, mail_account_id, to_emails, cc_emails, bcc_emails, subject, body, " +
         "reply_to_message_id, created_at, modified_at",
       ).order("modified_at", { ascending: false }),
+      sb.from("tags").select("id, name, archived_at, created_at")
+        .order("name", { ascending: true }),
+      sb.from("message_tags").select("message_id, tag_id"),
     ]);
     if (accountsRes.error) return reply.internalServerError(accountsRes.error.message);
     if (contactsRes.error) return reply.internalServerError(contactsRes.error.message);
     if (messagesRes.error) return reply.internalServerError(messagesRes.error.message);
     if (draftsRes.error)   return reply.internalServerError(draftsRes.error.message);
+    if (tagsRes.error)     return reply.internalServerError(tagsRes.error.message);
+    if (msgTagsRes.error)  return reply.internalServerError(msgTagsRes.error.message);
     return {
       mail_accounts: accountsRes.data,
       contacts: contactsRes.data,
       messages: messagesRes.data,
       drafts: draftsRes.data,
+      tags: tagsRes.data,
+      message_tags: msgTagsRes.data,
     };
   });
 

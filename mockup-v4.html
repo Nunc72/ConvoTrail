@@ -72,7 +72,7 @@ const { useState, useMemo, useRef, useEffect, useCallback } = React;
 
 // ─── Constants ───────────────────────────────────────────────────────────────
 
-const APP_VERSION = "0.0.25"; // bumped on every deploy — keep in sync with version.json
+const APP_VERSION = "0.0.26"; // bumped on every deploy — keep in sync with version.json
 
 // ─── Backend + Supabase config ───────────────────────────────────────────────
 const SUPABASE_URL = "https://oyrlzqbjcsliesvunbwj.supabase.co";
@@ -3111,7 +3111,7 @@ function App({onSignOut}) {
     (async () => {
       setDataLoading(true); setDataError('');
       try {
-        const { mail_accounts, contacts, messages, drafts } = await apiFetch('/bootstrap?limit=500');
+        const { mail_accounts, contacts, messages, drafts, tags, message_tags } = await apiFetch('/bootstrap?limit=500');
         if (cancelled) return;
 
         // accountId → email lookup
@@ -3213,9 +3213,25 @@ function App({onSignOut}) {
           };
         });
 
+        // Tags: hydrate the server-side tag list + per-message-tag map, plus a
+        // name→id lookup used by the detach path (API takes tag_id, UI uses name).
+        const tagList = tags || [];
+        const tagById = new Map(tagList.map(t => [t.id, t]));
+        const idByName = new Map(tagList.map(t => [t.name, t.id]));
+        const mt = {};
+        for (const row of (message_tags || [])) {
+          const t = tagById.get(row.tag_id);
+          if (!t) continue;
+          if (!mt[row.message_id]) mt[row.message_id] = [];
+          mt[row.message_id].push(t.name);
+        }
+
         setMailAccounts(mail_accounts);
         setContactList(shapedContacts);
         setMessageList([...shapedMessages, ...shapedDrafts]);
+        setTagList(tagList);
+        setTagIdByName(idByName);
+        setMsgTags(mt);
         // Initialize deletedIds from server state (soft-delete column)
         setDeletedIds(messages.filter(m => m.deleted_at != null).map(m => m.id));
       } catch (e) {
@@ -3229,7 +3245,9 @@ function App({onSignOut}) {
 
   const refreshData = useCallback(() => setDataRefreshTick(t => t + 1), []);
   const [deletedIds,   setDeletedIds]   = useState(INIT_DELETED);
-  const [msgTags,      setMsgTags]      = useState(INIT_MSG_TAGS);
+  const [msgTags,      setMsgTags]      = useState({});            // {msgId: [tagName,...]}
+  const [tagList,      setTagList]      = useState([]);             // [{id, name, archived_at}]
+  const [tagIdByName,  setTagIdByName]  = useState(()=>new Map());  // name → id (for detach)
   const [conTags,      setConTags]      = useState(INIT_CON_TAGS);
   const [tagRoles,     setTagRoles]     = useState(INIT_TAG_EMAIL_ROLES);
   // Selection
@@ -3846,8 +3864,43 @@ function App({onSignOut}) {
       alert('Unmerge failed: ' + e.message);
     }
   }
-  function handleAddMsgTag(msgId,tag){setMsgTags(prev=>({...prev,[msgId]:[...(prev[msgId]||[]).filter(t=>t!==tag),tag]}));}
-  function handleRemoveMsgTag(msgId,tag){setMsgTags(prev=>({...prev,[msgId]:(prev[msgId]||[]).filter(t=>t!==tag)}));}
+  async function handleAddMsgTag(msgId, tagName) {
+    const prev = msgTags[msgId] || [];
+    if (prev.includes(tagName)) return;
+    // Optimistic
+    setMsgTags(m => ({...m, [msgId]: [...prev.filter(t=>t!==tagName), tagName]}));
+    try {
+      const r = await apiFetch(`/messages/${msgId}/tags`, {
+        method: 'POST',
+        body: JSON.stringify({ name: tagName }),
+      });
+      // Register the (possibly newly-created) tag id so detach can find it.
+      if (r.tag) {
+        setTagIdByName(map => {
+          if (map.get(r.tag.name) === r.tag.id) return map;
+          const next = new Map(map); next.set(r.tag.name, r.tag.id); return next;
+        });
+        setTagList(list => list.find(t => t.id === r.tag.id) ? list : [...list, r.tag]);
+      }
+    } catch (e) {
+      setMsgTags(m => ({...m, [msgId]: (m[msgId]||[]).filter(t=>t!==tagName)}));
+      setActionToast('Tag add failed: ' + e.message);
+    }
+  }
+  async function handleRemoveMsgTag(msgId, tagName) {
+    const prev = msgTags[msgId] || [];
+    if (!prev.includes(tagName)) return;
+    // Optimistic
+    setMsgTags(m => ({...m, [msgId]: (m[msgId]||[]).filter(t=>t!==tagName)}));
+    const tagId = tagIdByName.get(tagName);
+    if (!tagId) return; // nothing to detach server-side (tag wasn't server-created)
+    try {
+      await apiFetch(`/messages/${msgId}/tags/${tagId}`, { method: 'DELETE' });
+    } catch (e) {
+      setMsgTags(m => ({...m, [msgId]: [...(m[msgId]||[]).filter(t=>t!==tagName), tagName]}));
+      setActionToast('Tag remove failed: ' + e.message);
+    }
+  }
   function handleRenameTag(oldTag,newTag){
     setMsgTags(prev=>{const n={};for(const[k,v]of Object.entries(prev))n[k]=v.map(t=>t===oldTag?newTag:t);return n;});
     setConTags(prev=>{const n={};for(const[k,v]of Object.entries(prev))n[k]=v.map(t=>t===oldTag?newTag:t);return n;});

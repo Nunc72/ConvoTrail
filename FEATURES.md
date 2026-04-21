@@ -1,6 +1,6 @@
 # ConvoTrail — feature roadmap
 
-_Last updated: 2026-04-21, v0.0.25_
+_Last updated: 2026-04-21, v0.0.26_
 
 Status legend:
 - ✅ **Done** — works end-to-end, persists where relevant
@@ -26,6 +26,7 @@ this doc covers product.
 - ✅ Drafts: save / edit / delete (synced across devices), auto-deleted after Send
 - ✅ Mark-read persisted (IMAP \\Seen + DB) via Seen / Snooze buttons
 - ✅ Soft-delete + Recover persisted (deleted_at column; IMAP EXPUNGE deferred to retention cron)
+- ✅ Tags on messages: CRUD + attach/detach (POST by name auto-creates)
 - ✅ Per-contact memory: remembers last-opened message per contact
 - ✅ Client-side search across loaded messages
 - ✅ Filter tabs (Now/All/In/Out/Draft/Deleted)
@@ -33,7 +34,6 @@ this doc covers product.
 
 **UI works but mutations don't persist** (lost on refresh)
 - 🚧 Revert-to-me dismiss / snooze / seen
-- 🚧 Tags on messages (add/remove)
 - 🚧 Tags on contacts (add/remove)
 - 🚧 Tag rename / archive
 - 🚧 Tag roles (To / CC per email address)
@@ -80,8 +80,8 @@ Turns in-memory actions into durable ones. Highest value for daily usability.
 4. ✅ **1.4 — Save draft persisted + active-message-per-contact memory** — shipped v0.0.19
 5. ✅ **1.5 — Mark-read persisted** (flags.seen → IMAP \\Seen + DB) — shipped v0.0.21
 6. ✅ **1.6 — Delete persisted** (soft-delete in DB; IMAP EXPUNGE deferred to Tier 2.5 retention cron) — shipped v0.0.24
-7. ⬜ **1.7 — Tags on messages** (CRUD + persist) ← *next*
-8. ⬜ **1.8 — Tags on contacts** (CRUD + persist)
+7. ✅ **1.7 — Tags on messages** (CRUD + persist) — shipped v0.0.26
+8. ⬜ **1.8 — Tags on contacts** (CRUD + persist) ← *next*
 9. ⬜ **1.9 — Contact edit (name/org/color/r2m_days)** persist
 10. ⬜ **1.10 — Automatic sync** (poll per 2 min + on window focus)
 11. ⬜ **1.11 — Onboarding nudge**: after login with zero accounts, open Add-account flow
@@ -98,10 +98,7 @@ Turns in-memory actions into durable ones. Highest value for daily usability.
 
 **1.6 Delete** — shipped v0.0.24. Soft-delete only; retention/EXPUNGE moves to Tier 2.5.
 
-**1.7 Tags on messages** (1 day)
-- Backend: `GET /tags`, `POST /tags { name }`, `POST /messages/:id/tags { tag_id }`, `DELETE /messages/:id/tags/:tag_id`.
-- Return tag list via `/bootstrap`.
-- Frontend: replace in-memory `msgTags` with real data; optimistic ops.
+**1.7 Tags on messages** — shipped v0.0.26.
 
 **1.8 Tags on contacts** (½ day) — same pattern as 1.7.
 
