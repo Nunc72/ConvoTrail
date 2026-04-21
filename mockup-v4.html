@@ -72,7 +72,7 @@ const { useState, useMemo, useRef, useEffect, useCallback } = React;
 
 // ─── Constants ───────────────────────────────────────────────────────────────
 
-const APP_VERSION = "0.0.18"; // bumped on every deploy — keep in sync with version.json
+const APP_VERSION = "0.0.19"; // bumped on every deploy — keep in sync with version.json
 
 // ─── Backend + Supabase config ───────────────────────────────────────────────
 const SUPABASE_URL = "https://oyrlzqbjcsliesvunbwj.supabase.co";
@@ -1126,7 +1126,7 @@ function SettingsModal({onClose, initialTab='profile', signatures, setSignatures
 
 const SIG_SEP = '\n\n';
 
-function ComposePane({replyTo, toContact, draft, initTo:initToOverride="", initCC="", initBCC="", initTag=null, initMsgTags=[], allKnownTags=[], selAccounts=[], signatures=[], accountSigs={}, onSend, onClose, mobileBack, mobileBackLabel}) {
+function ComposePane({replyTo, toContact, draft, initTo:initToOverride="", initCC="", initBCC="", initTag=null, initMsgTags=[], allKnownTags=[], selAccounts=[], signatures=[], accountSigs={}, onSend, onSaveDraft, onDeleteDraft, onClose, mobileBack, mobileBackLabel}) {
   const isMobile = typeof window !== 'undefined' && window.innerWidth < 768;
   const initTo = draft?.to ?? (replyTo ? (replyTo.dir==="out"?replyTo.to:replyTo.from) : (initToOverride||toContact?.emails[0]||""));
   const initSubj = draft?.subject ?? (replyTo ? "Re: "+replyTo.subject : "");
@@ -1155,6 +1155,10 @@ function ComposePane({replyTo, toContact, draft, initTo:initToOverride="", initC
   const [showFromDrop,setShowFromDrop]= useState(false);
   const [sending,     setSending]     = useState(false);
   const [sendErr,     setSendErr]     = useState('');
+  const [savingDraft, setSavingDraft] = useState(false);
+  // Local draft id — set once we POST a new draft, reused for subsequent PATCHes
+  // so the user can keep saving the same draft without remounting the pane.
+  const [draftId,     setDraftId]     = useState(draft?.id || null);
   const dropRef     = useRef(null);
   const fromDropRef = useRef(null);
   const multiFrom = selAccounts.length > 1;
@@ -1167,11 +1171,37 @@ function ComposePane({replyTo, toContact, draft, initTo:initToOverride="", initC
         from, to, cc: showCC ? cc : '', bcc: showBCC ? bcc : '',
         subject: subj, body,
         reply_to_id: replyTo?.id,
+        draft_id_to_delete: draftId,
       });
-      // Parent closes this pane on success; no further state updates needed.
     } catch (e) {
       setSendErr(e?.message || 'Send failed');
       setSending(false);
+    }
+  }
+  async function handleSaveDraftClick() {
+    if (savingDraft) return;
+    setSavingDraft(true); setSendErr('');
+    try {
+      const newId = await onSaveDraft?.({
+        from, to, cc: showCC ? cc : '', bcc: showBCC ? bcc : '',
+        subject: subj, body,
+        reply_to_id: replyTo?.id,
+      }, draftId);
+      if (newId && !draftId) setDraftId(newId);
+    } catch (e) {
+      setSendErr(e?.message || 'Save draft failed');
+    }
+    setSavingDraft(false);
+  }
+  async function handleDeleteDraftClick() {
+    if (savingDraft) return;
+    if (!confirm('Delete this draft?')) return;
+    setSavingDraft(true);
+    try {
+      await onDeleteDraft?.(draftId);
+    } catch (e) {
+      setSendErr(e?.message || 'Delete failed');
+      setSavingDraft(false);
     }
   }
 
@@ -1380,9 +1410,13 @@ function ComposePane({replyTo, toContact, draft, initTo:initToOverride="", initC
         </div>}
         <div className="flex-1"/>
         {sendErr && <span className="text-xs text-red-600 truncate flex-shrink min-w-0" title={sendErr}>{sendErr}</span>}
-        {draft
-          ? <button className="px-3 py-1.5 text-xs rounded bg-red-50 hover:bg-red-100 text-red-600 font-medium">Delete</button>
-          : <button className="px-3 py-1.5 text-xs rounded bg-gray-100 hover:bg-gray-200 text-gray-600">Save draft</button>}
+        {draftId
+          ? <button onClick={handleDeleteDraftClick} disabled={savingDraft||sending}
+              className="px-3 py-1.5 text-xs rounded bg-red-50 hover:bg-red-100 disabled:opacity-50 text-red-600 font-medium">Delete</button>
+          : <button onClick={handleSaveDraftClick} disabled={savingDraft||sending||(!to.trim()&&!subj.trim()&&!body.trim())}
+              className="px-3 py-1.5 text-xs rounded bg-gray-100 hover:bg-gray-200 disabled:opacity-50 text-gray-600">
+              {savingDraft?'Saving…':'Save draft'}
+            </button>}
         <button className="px-3 py-1.5 text-xs rounded bg-amber-400 hover:bg-amber-500 text-white font-medium">Revert2me</button>
         <button onClick={handleSendClick} disabled={sending || !to.trim()}
           className="px-4 py-1.5 text-xs rounded bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 text-white font-medium">
@@ -3028,7 +3062,7 @@ function App({onSignOut}) {
     (async () => {
       setDataLoading(true); setDataError('');
       try {
-        const { mail_accounts, contacts, messages } = await apiFetch('/bootstrap?limit=500');
+        const { mail_accounts, contacts, messages, drafts } = await apiFetch('/bootstrap?limit=500');
         if (cancelled) return;
 
         // accountId → email lookup
@@ -3069,6 +3103,32 @@ function App({onSignOut}) {
           };
         }).filter(m => m.contactId !== null);
 
+        // Shape drafts into the same shape as messages (dir='out', draft=true)
+        const shapedDrafts = (drafts || []).map(d => {
+          const accountEmail = accountEmailById.get(d.mail_account_id) ?? '';
+          const firstTo = (d.to_emails?.[0]?.email || '').toLowerCase();
+          const contactId = emailToContactId.get(firstTo) ?? null;
+          return {
+            id: d.id,
+            accountId: d.mail_account_id,
+            accountEmail,
+            contactId,
+            dir: 'out',
+            subject: d.subject || '(no subject)',
+            from: accountEmail,
+            to: d.to_emails?.[0]?.email || '',
+            cc: (d.cc_emails || []).map(x => x.email).join(', '),
+            bcc: (d.bcc_emails || []).map(x => x.email).join(', '),
+            date: d.modified_at,
+            modifiedAt: d.modified_at,
+            read: true,
+            revert2me: false,
+            draft: true,
+            body: d.body || '',
+            replyToId: d.reply_to_message_id || null,
+          };
+        }).filter(m => m.contactId !== null);
+
         // Per-contact: which account-emails have we seen activity from/to?
         const contactAccounts = new Map(); // contact_id → Set<accountEmail>
         for (const m of shapedMessages) {
@@ -3076,6 +3136,12 @@ function App({onSignOut}) {
           let s = contactAccounts.get(m.contactId);
           if (!s) { s = new Set(); contactAccounts.set(m.contactId, s); }
           s.add(m.accountEmail);
+        }
+        for (const d of shapedDrafts) {
+          if (!d.accountEmail) continue;
+          let s = contactAccounts.get(d.contactId);
+          if (!s) { s = new Set(); contactAccounts.set(d.contactId, s); }
+          s.add(d.accountEmail);
         }
 
         // Shape contacts
@@ -3100,7 +3166,7 @@ function App({onSignOut}) {
 
         setMailAccounts(mail_accounts);
         setContactList(shapedContacts);
-        setMessageList(shapedMessages);
+        setMessageList([...shapedMessages, ...shapedDrafts]);
       } catch (e) {
         if (!cancelled) setDataError(e.message);
       } finally {
@@ -3235,6 +3301,8 @@ function App({onSignOut}) {
   const [replyTo,      setReplyTo]      = useState(null);
   const [composeContact,setComposeContact]=useState(null);
   const [composeDraft, setComposeDraft] = useState(null);
+  // Per-contact memory: which message was last open in that contact's thread
+  const [lastMsgByContact, setLastMsgByContact] = useState(() => new Map());
   // Mobile compose origin: 'contacts' | 'thread' | 'tag' | 'search' | 'detail' | null
   const [composeOrigin, setComposeOrigin] = useState(null);
   const [tagComposeInit,setTagComposeInit]=useState(null);
@@ -3424,6 +3492,18 @@ function App({onSignOut}) {
     return {id:below[0]?.id||null, alwaysGo:true};
   }
 
+  // ── Per-contact memory: remember last-viewed message per contact ──
+  useEffect(() => {
+    if (selContact !== null && selMsg !== null) {
+      setLastMsgByContact(prev => {
+        if (prev.get(selContact) === selMsg) return prev; // no-op → avoid render loop
+        const m = new Map(prev);
+        m.set(selContact, selMsg);
+        return m;
+      });
+    }
+  }, [selContact, selMsg]);
+
   // ── Handlers ──
   function handleSelectContact(id,e){
     if(e?.shiftKey&&selContact!==null&&selContact!==id){setMergeContact(id);setShowCompose(false);setSelMsg(null);return;}
@@ -3431,7 +3511,15 @@ function App({onSignOut}) {
     setShowCompose(false);setReplyTo(null);setComposeContact(null);setComposeDraft(null);setEditingContact(null);
     setSearchQuery('');setSearchScope('all');
     if(isMobile) { setMobileCol(1); setSelMsg(null); return; }
-    // Auto-select: oldest actionable (unread in OR revert2me out, not deleted/draft), else newest
+    // 1. If we remember a previously-opened message for this contact, prefer that
+    //    (as long as it still exists and is visible under the current account filter).
+    const remembered = lastMsgByContact.get(id);
+    if (remembered != null) {
+      const rem = messageList.find(m=>m.id===remembered && !deletedIds.includes(m.id)
+        && (!m.accountEmail || selAccounts.includes(m.accountEmail)));
+      if (rem) { setSelMsg(remembered); return; }
+    }
+    // 2. Fallback: auto-select oldest actionable (unread-in or r2m-out), else newest.
     const contactMsgs = messageList.filter(m=>m.contactId===id&&!deletedIds.includes(m.id)&&!m.draft)
       .sort((a,b)=>a.date.localeCompare(b.date));
     const actionable = contactMsgs.filter(m=>(m.dir==='in'&&!m.read)||(m.dir==='out'&&m.revert2me));
@@ -3536,7 +3624,7 @@ function App({onSignOut}) {
       else setMobileCol(0);
     }
   }
-  async function handleSend({from, to, cc, bcc, subject, body, reply_to_id}) {
+  async function handleSend({from, to, cc, bcc, subject, body, reply_to_id, draft_id_to_delete}) {
     const acc = mailAccounts.find(a => (a.email||'').toLowerCase() === (from||'').toLowerCase());
     if (!acc) throw new Error(`Sending account "${from}" not found`);
     const result = await apiFetch(`/mail-accounts/${acc.id}/send`, {
@@ -3550,8 +3638,39 @@ function App({onSignOut}) {
         reply_to_id: reply_to_id || undefined,
       }),
     });
+    // Draft was sent — remove it (best-effort; send itself already succeeded)
+    if (draft_id_to_delete) {
+      try { await apiFetch(`/drafts/${draft_id_to_delete}`, { method: 'DELETE' }); } catch { /* ignore */ }
+    }
     handleCloseCompose();
     setActionToast(result.warning || 'Message sent');
+    refreshData();
+  }
+  // Returns the draft id (new or existing). Pane keeps it locally for subsequent PATCHes.
+  async function handleSaveDraft({from, to, cc, bcc, subject, body, reply_to_id}, existingId) {
+    const acc = mailAccounts.find(a => (a.email||'').toLowerCase() === (from||'').toLowerCase());
+    const body_ = {
+      mail_account_id: acc?.id || null,
+      to: to || '', cc: cc || '', bcc: bcc || '',
+      subject: subject || '', body: body || '',
+      reply_to_id: reply_to_id || null,
+    };
+    if (existingId) {
+      await apiFetch(`/drafts/${existingId}`, { method: 'PATCH', body: JSON.stringify(body_) });
+      setActionToast('Draft saved');
+      refreshData();
+      return existingId;
+    }
+    const r = await apiFetch('/drafts', { method: 'POST', body: JSON.stringify(body_) });
+    setActionToast('Draft saved');
+    refreshData();
+    return r.draft?.id ?? null;
+  }
+  async function handleDeleteDraft(id) {
+    if (!id) { handleCloseCompose(); return; }
+    await apiFetch(`/drafts/${id}`, { method: 'DELETE' });
+    handleCloseCompose();
+    setActionToast('Draft deleted');
     refreshData();
   }
   function handleEditContact(){setEditingContact(selContact);setShowCompose(false);}
@@ -3962,7 +4081,7 @@ function App({onSignOut}) {
                     initMsgTags={composeDraft?msgTags[composeDraft.id]||[]:replyTo?msgTags[replyTo.id]||[]:[]}
                     allKnownTags={allKnownTags} selAccounts={selAccounts}
                     signatures={signatures} accountSigs={accountSigs}
-                    onSend={handleSend}
+                    onSend={handleSend} onSaveDraft={handleSaveDraft} onDeleteDraft={handleDeleteDraft}
                     onClose={handleCloseCompose}
                     mobileBack={handleCloseCompose}
                     mobileBackLabel={
@@ -4025,7 +4144,7 @@ function App({onSignOut}) {
                   allKnownTags={allKnownTags}
                   selAccounts={selAccounts}
                   signatures={signatures} accountSigs={accountSigs}
-                  onSend={handleSend}
+                  onSend={handleSend} onSaveDraft={handleSaveDraft} onDeleteDraft={handleDeleteDraft}
                   onClose={handleCloseCompose}/>
               ):(
                 <MessageDetail message={selectedMsg} contact={detailContact}

@@ -1,6 +1,6 @@
 # ConvoTrail — feature roadmap
 
-_Last updated: 2026-04-20, v0.0.18_
+_Last updated: 2026-04-21, v0.0.19_
 
 Status legend:
 - ✅ **Done** — works end-to-end, persists where relevant
@@ -23,6 +23,8 @@ this doc covers product.
 - ✅ Left-column account switcher: toggle/combine real accounts; contact list, message list, and per-contact unread/r2m badges all filter by selection
 - ✅ Contact merge / unmerge (persisted)
 - ✅ Send mail (SMTP + best-effort IMAP APPEND to Sent)
+- ✅ Drafts: save / edit / delete (synced across devices), auto-deleted after Send
+- ✅ Per-contact memory: remembers last-opened message per contact
 - ✅ Client-side search across loaded messages
 - ✅ Filter tabs (Now/All/In/Out/Draft/Deleted)
 - ✅ Version banner + click-to-check-for-update
@@ -41,7 +43,6 @@ this doc covers product.
 - 🚧 Recover from deleted
 - 🚧 Spam (routes through delete state)
 - 🚧 Compose message (new / reply / reply-all / forward)
-- 🚧 Save draft
 - 🚧 Signatures CRUD + per-account auto-sig
 
 **Not implemented at all**
@@ -77,8 +78,8 @@ Turns in-memory actions into durable ones. Highest value for daily usability.
 1. ✅ **1.1 — Real accounts in column 1, switch/combine** — shipped v0.0.11–0.0.12
 2. ✅ **1.2 — Contact merge + unmerge persisted** — shipped v0.0.14–0.0.15
 3. ✅ **1.3 — Mail Send (SMTP + IMAP APPEND to Sent)** — shipped v0.0.18
-4. ⬜ **1.4 — Save draft persisted + active-message-per-contact memory** ← *next*
-5. ⬜ **1.5 — Mark-read persisted** (flags.seen → IMAP \\Seen + DB)
+4. ✅ **1.4 — Save draft persisted + active-message-per-contact memory** — shipped v0.0.19
+5. ⬜ **1.5 — Mark-read persisted** (flags.seen → IMAP \\Seen + DB) ← *next*
 6. ⬜ **1.6 — Delete persisted** (soft-delete in DB, IMAP EXPUNGE via retention cron)
 7. ⬜ **1.7 — Tags on messages** (CRUD + persist)
 8. ⬜ **1.8 — Tags on contacts** (CRUD + persist)
@@ -92,9 +93,7 @@ Turns in-memory actions into durable ones. Highest value for daily usability.
 
 **1.3 Send** — shipped v0.0.18.
 
-**1.4 Drafts** (½ day)
-- Backend: `/drafts` CRUD (POST/PATCH/DELETE, GET via bootstrap).
-- Frontend: on "Save draft", POST or PATCH; on close without save, nothing persisted. Remember last-opened message per contact in client state (Map).
+**1.4 Drafts + per-contact memory** — shipped v0.0.19.
 
 **1.5 Mark-read** (½ day)
 - Backend: `PATCH /messages/:id/flags { seen: true }` → update DB + IMAP `\Seen`.
