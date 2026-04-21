@@ -6,22 +6,49 @@ import { supabaseWithJwt } from "../supabase.js";
 export async function registerContactsRoutes(app: FastifyInstance) {
   const auth = { preHandler: authPreHandler };
 
-  // ─── Patch a contact (news/mute flags + archive) ─────────────────────────
-  // Name/org/color/r2m_days land in Tier 1.9 — keeping this route narrow for
-  // now so the per-contact News/Mute toggles and Archive can persist.
+  // ─── Patch a contact ─────────────────────────────────────────────────────
+  // Partial update. Nullish values clear the field where applicable
+  // (org/color → null; name cannot be blanked). primary_email must match one
+  // of the contact_emails rows to be accepted.
   app.patch<{
     Params: { id: string };
-    Body: { is_news?: boolean; is_muted?: boolean; archived?: boolean };
+    Body: {
+      is_news?: boolean; is_muted?: boolean; archived?: boolean;
+      name?: string; org?: string | null; color?: string | null;
+      r2m_days?: number; primary_email?: string;
+    };
   }>("/contacts/:id", auth, async (req, reply) => {
     const b = req.body || {};
     const patch: Record<string, unknown> = {};
-    if (typeof b.is_news  === "boolean") patch.is_news  = b.is_news;
-    if (typeof b.is_muted === "boolean") patch.is_muted = b.is_muted;
-    if (typeof b.archived === "boolean") patch.archived_at = b.archived ? new Date().toISOString() : null;
-    if (Object.keys(patch).length === 0) return reply.badRequest("nothing to update");
+    if (typeof b.is_news  === "boolean")  patch.is_news  = b.is_news;
+    if (typeof b.is_muted === "boolean")  patch.is_muted = b.is_muted;
+    if (typeof b.archived === "boolean")  patch.archived_at = b.archived ? new Date().toISOString() : null;
+    if (typeof b.name     === "string" && b.name.trim()) patch.name = b.name.trim();
+    if (b.org   !== undefined)            patch.org   = (typeof b.org   === "string" && b.org.trim())   ? b.org.trim()   : null;
+    if (b.color !== undefined)            patch.color = (typeof b.color === "string" && b.color.trim()) ? b.color.trim() : null;
+    if (typeof b.r2m_days === "number" && Number.isFinite(b.r2m_days)) patch.r2m_days = Math.max(0, Math.min(30, Math.round(b.r2m_days)));
+    if (Object.keys(patch).length === 0 && !b.primary_email) return reply.badRequest("nothing to update");
+
     const sb = supabaseWithJwt(req.authJwt!);
-    const { error } = await sb.from("contacts").update(patch).eq("id", req.params.id);
-    if (error) return reply.internalServerError(error.message);
+    if (Object.keys(patch).length > 0) {
+      const { error } = await sb.from("contacts").update(patch).eq("id", req.params.id);
+      if (error) return reply.internalServerError(error.message);
+    }
+
+    // primary_email is validated against contact_emails before being stored.
+    if (typeof b.primary_email === "string" && b.primary_email.trim()) {
+      const wanted = b.primary_email.trim().toLowerCase();
+      const { data: rows, error: selErr } = await sb
+        .from("contact_emails")
+        .select("email")
+        .eq("contact_id", req.params.id);
+      if (selErr) return reply.internalServerError(selErr.message);
+      const emails = (rows || []).map(r => (r.email as string).toLowerCase());
+      if (!emails.includes(wanted)) return reply.badRequest("primary_email is not linked to this contact");
+      const { error: updErr } = await sb.from("contacts").update({ primary_email: wanted }).eq("id", req.params.id);
+      if (updErr) return reply.internalServerError(updErr.message);
+    }
+
     return reply.code(204).send();
   });
 

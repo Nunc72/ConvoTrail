@@ -72,7 +72,7 @@ const { useState, useMemo, useRef, useEffect, useCallback } = React;
 
 // ─── Constants ───────────────────────────────────────────────────────────────
 
-const APP_VERSION = "0.0.28"; // bumped on every deploy — keep in sync with version.json
+const APP_VERSION = "0.0.29"; // bumped on every deploy — keep in sync with version.json
 
 // ─── Backend + Supabase config ───────────────────────────────────────────────
 const SUPABASE_URL = "https://oyrlzqbjcsliesvunbwj.supabase.co";
@@ -3199,9 +3199,12 @@ function App({onSignOut}) {
 
         // Shape contacts
         const shapedContacts = contacts.map(c => {
-          const emails = (c.contact_emails && c.contact_emails.length
+          const rawEmails = (c.contact_emails && c.contact_emails.length
             ? c.contact_emails.map(e => e.email)
             : [c.primary_email].filter(Boolean));
+          // Primary (if known) always leads the list so the UI shows it first.
+          const primary = c.primary_email && rawEmails.includes(c.primary_email) ? c.primary_email : rawEmails[0];
+          const emails = primary ? [primary, ...rawEmails.filter(e => e !== primary)] : rawEmails;
           const accEmails = [...(contactAccounts.get(c.id) || [])];
           return {
             id: c.id,
@@ -3800,23 +3803,34 @@ function App({onSignOut}) {
   function handleEditContact(){setEditingContact(selContact);setShowCompose(false);}
   function handleSaveContact({name,org,primary,r2mDays,tags,archived,isNews,isMuted}){
     const id = editingContact;
-    // Local-only: name/org/emails/r2mDays/tags persist server-side in Tier 1.9+1.8,
-    // but the contact-card News/Mute/Archive flags persist now via PATCH below.
+    const prevContact = contactList.find(c => c.id === id);
+    // Optimistic local update (covers the full form)
     setContactList(prev=>prev.map(c=>{
       if(c.id!==id)return c;
       const emails=[primary,...c.emails.filter(e=>e!==primary)];
       return{...c,name,org,emails,r2mDays,isNews:!!isNews,isMuted:!!isMuted};
     }));
     setConTags(prev=>({...prev,[id]:tags}));
-    // Archive has its own Set; keep it in sync with the checkbox before PATCHing.
     setArchivedContacts(prev=>{const n=new Set(prev);archived?n.add(id):n.delete(id);return n;});
     setEditingContact(null);
-    apiFetch(`/contacts/${id}`, { method:'PATCH', body: JSON.stringify({
-      is_news: !!isNews, is_muted: !!isMuted, archived: !!archived,
-    })}).catch(e => {
-      setActionToast('Contact flags save failed: ' + e.message);
-      refreshData();
-    });
+    // Persist everything that has a server column. primary_email only fires if
+    // it actually changed — the backend revalidates against contact_emails.
+    const body = {
+      name,
+      org: org || null,
+      r2m_days: Number(r2mDays) || 3,
+      is_news: !!isNews,
+      is_muted: !!isMuted,
+      archived: !!archived,
+    };
+    if (prevContact && primary && primary !== prevContact.emails[0]) {
+      body.primary_email = primary;
+    }
+    apiFetch(`/contacts/${id}`, { method:'PATCH', body: JSON.stringify(body) })
+      .catch(e => {
+        setActionToast('Contact save failed: ' + e.message);
+        refreshData();
+      });
   }
   function handleArchiveContact(id, archive){
     setArchivedContacts(prev=>{const s=new Set(prev);archive?s.add(id):s.delete(id);return s;});

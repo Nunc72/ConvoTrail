@@ -1,6 +1,6 @@
 # ConvoTrail — feature roadmap
 
-_Last updated: 2026-04-21, v0.0.28_
+_Last updated: 2026-04-21, v0.0.29_
 
 Status legend:
 - ✅ **Done** — works end-to-end, persists where relevant
@@ -29,6 +29,7 @@ this doc covers product.
 - ✅ Tags on messages: CRUD + attach/detach (POST by name auto-creates)
 - ✅ News/Mute per contact + Archive persisted (contacts.is_news / is_muted / archived_at)
 - ✅ Tag email-roles persisted (tags.email_roles JSONB — role per address in tag edit form)
+- ✅ Contact edit persisted: name / org / r2m_days / primary_email (color picker pending UI)
 - ✅ Per-contact memory: remembers last-opened message per contact
 - ✅ Client-side search across loaded messages
 - ✅ Filter tabs (Now/All/In/Out/Draft/Deleted)
@@ -36,9 +37,7 @@ this doc covers product.
 
 **UI works but mutations don't persist** (lost on refresh)
 - 🚧 Revert-to-me dismiss / snooze / seen
-- 🚧 Tags on contacts (add/remove)
 - 🚧 Tag rename / archive
-- 🚧 Contact edit (name, org, color, r2m_days)
 - 🚧 Contact archive
 - 🚧 Spam (routes through delete state)
 - 🚧 Compose message (new / reply / reply-all / forward)
@@ -81,10 +80,12 @@ Turns in-memory actions into durable ones. Highest value for daily usability.
 5. ✅ **1.5 — Mark-read persisted** (flags.seen → IMAP \\Seen + DB) — shipped v0.0.21
 6. ✅ **1.6 — Delete persisted** (soft-delete in DB; IMAP EXPUNGE deferred to Tier 2.5 retention cron) — shipped v0.0.24
 7. ✅ **1.7 — Tags on messages** (CRUD + persist) — shipped v0.0.26
-8. ⬜ **1.8 — Tags on contacts** (CRUD + persist) ← *next*
-9. ⬜ **1.9 — Contact edit (name/org/color/r2m_days)** persist
+8. 🔒 **1.8 — Tags on contacts** — **dropped** (Rik doesn't want it). `contact_tags` schema stays for later.
+9. ✅ **1.9 — Contact edit (name/org/r2m_days/primary_email)** persist — shipped v0.0.29 (color UI punted — no picker in edit form)
 10. ⬜ **1.10 — Automatic sync** (poll per 2 min + on window focus)
 11. ⬜ **1.11 — Onboarding nudge**: after login with zero accounts, open Add-account flow
+
+**User-picked order for remaining work** (2026-04-21): 1.9 → Tier 2.6 r2m state → reply-all/forward → Tier 2.7 signatures.
 
 ### Per-item rough plan
 
@@ -100,11 +101,9 @@ Turns in-memory actions into durable ones. Highest value for daily usability.
 
 **1.7 Tags on messages** — shipped v0.0.26.
 
-**1.8 Tags on contacts** (½ day) — same pattern as 1.7.
+**1.8 Tags on contacts** — dropped by design.
 
-**1.9 Contact edit** (½ day)
-- Backend: `PATCH /contacts/:id`.
-- Frontend: save from edit modal, refresh.
+**1.9 Contact edit** — shipped v0.0.29. Color picker still absent in UI; backend accepts a `color` patch when we add one.
 
 **1.10 Automatic sync** (½ day)
 - Frontend: `setInterval(sync, 2 * 60_000)` + `window.addEventListener('focus', sync)`.
