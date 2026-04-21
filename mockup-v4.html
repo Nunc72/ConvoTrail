@@ -72,7 +72,7 @@ const { useState, useMemo, useRef, useEffect, useCallback } = React;
 
 // ─── Constants ───────────────────────────────────────────────────────────────
 
-const APP_VERSION = "0.0.26"; // bumped on every deploy — keep in sync with version.json
+const APP_VERSION = "0.0.27"; // bumped on every deploy — keep in sync with version.json
 
 // ─── Backend + Supabase config ───────────────────────────────────────────────
 const SUPABASE_URL = "https://oyrlzqbjcsliesvunbwj.supabase.co";
@@ -3446,7 +3446,9 @@ function App({onSignOut}) {
   const usedTags = useMemo(()=>{
     const visibleContactIds = new Set(contactList.filter(c=>(c.accountEmails||[]).some(ae=>selAccounts.includes(ae))).map(c=>c.id));
     return [...new Set(Object.entries(msgTags).filter(([msgId])=>{
-      const msg=messageList.find(m=>m.id===Number(msgId));
+      // Message ids are UUID strings from Postgres; the old mock used numbers.
+      // The match is against the raw string key.
+      const msg=messageList.find(m=>m.id===msgId);
       return msg && visibleContactIds.has(msg.contactId);
     }).flatMap(([,tags])=>tags))];
   },[msgTags,contactList,messageList,selAccounts]);
