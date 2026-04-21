@@ -1,6 +1,6 @@
 # ConvoTrail — feature roadmap
 
-_Last updated: 2026-04-21, v0.0.29_
+_Last updated: 2026-04-21, v0.0.30_
 
 Status legend:
 - ✅ **Done** — works end-to-end, persists where relevant
@@ -30,13 +30,13 @@ this doc covers product.
 - ✅ News/Mute per contact + Archive persisted (contacts.is_news / is_muted / archived_at)
 - ✅ Tag email-roles persisted (tags.email_roles JSONB — role per address in tag edit form)
 - ✅ Contact edit persisted: name / org / r2m_days / primary_email (color picker pending UI)
+- ✅ Revert2Me: arm-on-send (toggle in compose) + dismiss/seen/snooze persisted in r2m_state; 0-day timer = instant
 - ✅ Per-contact memory: remembers last-opened message per contact
 - ✅ Client-side search across loaded messages
 - ✅ Filter tabs (Now/All/In/Out/Draft/Deleted)
 - ✅ Version banner + click-to-check-for-update
 
 **UI works but mutations don't persist** (lost on refresh)
-- 🚧 Revert-to-me dismiss / snooze / seen
 - 🚧 Tag rename / archive
 - 🚧 Contact archive
 - 🚧 Spam (routes through delete state)
@@ -126,7 +126,7 @@ Makes the app feel polished and complete enough for friendly testers.
 - ⬜ **2.3 Gmail OAuth** (1 day) — Google Cloud project + OAuth consent screen + backend OAuth flow + refresh-token handling.
 - ⬜ **2.4 Progressive search** (2 days) — Postgres FTS for synced range, IMAP SEARCH for older archive, stream results via SSE, spinner + "all done" signal.
 - ⬜ **2.5 Retention cleanup** (½ day) — cron: `deleted_at > 90d ago` → IMAP `\Deleted` + EXPUNGE + DB purge.
-- ⬜ **2.6 r2m backend state** (1 day) — dismiss/snooze/count persisted in `r2m_state`.
+- ✅ **2.6 r2m backend state** — shipped v0.0.30. PATCH /messages/:id/r2m + arm-on-send via revert2me_days; r2m_state row hydrates bootstrap. `contact.r2m_days=0` arms instantly.
 - ⬜ **2.7 Signatures** (½ day) — CRUD + per-account auto-apply.
 - ⬜ **2.8 News/Mute flags** (¼ day) — persist per-address.
 - ⬜ **2.9 Drafts/Trash/Spam folder detection** (½ day) — sync those IMAP folders too.

@@ -1,6 +1,6 @@
 # ConvoTrail — handover
 
-_Last updated: 2026-04-21, v0.0.29_
+_Last updated: 2026-04-21, v0.0.30_
 
 A conversation-centric email client. Mail stays on IMAP (Gmail/iCloud/own);
 ConvoTrail adds grouping per contact, tags, revert-to-me, merge/unmerge,
@@ -128,6 +128,7 @@ auth.users                        (managed by Supabase)
 
 ## Recent history (terse)
 
+- v0.0.30 — Revert2Me persisted (r2m_state); compose Revert2Me toggles arming on send; r2m_days now allows 0 (instant) for testing
 - v0.0.29 — Contact edit persist: name/org/r2m_days/primary_email via PATCH /contacts/:id (Tier 1.9)
 - v0.0.28 — News/Mute per contact (not per address) + Archive persisted; tag email-roles persisted to tags.email_roles JSONB; migration 0003
 - v0.0.27 — fix: tags list was empty because usedTags did `Number(msgId)` on UUID message ids

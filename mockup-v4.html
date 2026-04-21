@@ -72,7 +72,7 @@ const { useState, useMemo, useRef, useEffect, useCallback } = React;
 
 // ─── Constants ───────────────────────────────────────────────────────────────
 
-const APP_VERSION = "0.0.29"; // bumped on every deploy — keep in sync with version.json
+const APP_VERSION = "0.0.30"; // bumped on every deploy — keep in sync with version.json
 
 // ─── Backend + Supabase config ───────────────────────────────────────────────
 const SUPABASE_URL = "https://oyrlzqbjcsliesvunbwj.supabase.co";
@@ -1194,6 +1194,7 @@ function ComposePane({replyTo, toContact, draft, initTo:initToOverride="", initC
   const [showFromDrop,setShowFromDrop]= useState(false);
   const [sending,     setSending]     = useState(false);
   const [sendErr,     setSendErr]     = useState('');
+  const [r2mArmed,    setR2mArmed]    = useState(false);
   const [savingDraft, setSavingDraft] = useState(false);
   // Local draft id — set once we POST a new draft, reused for subsequent PATCHes
   // so the user can keep saving the same draft without remounting the pane.
@@ -1211,6 +1212,7 @@ function ComposePane({replyTo, toContact, draft, initTo:initToOverride="", initC
         subject: subj, body,
         reply_to_id: replyTo?.id,
         draft_id_to_delete: draftId,
+        revert2me_days: r2mArmed ? Number(r2mDays) || 0 : undefined,
       });
     } catch (e) {
       setSendErr(e?.message || 'Send failed');
@@ -1442,10 +1444,10 @@ function ComposePane({replyTo, toContact, draft, initTo:initToOverride="", initC
           onMouseEnter={()=>setR2mHover(true)} onMouseLeave={()=>setR2mHover(false)}>
           <span className="text-xs text-gray-400">R2M:</span>
           {r2mHover
-            ? <input autoFocus type="number" min="1" max="30" value={r2mDays} onChange={e=>setR2mDays(e.target.value)}
+            ? <input autoFocus type="number" min="0" max="30" value={r2mDays} onChange={e=>setR2mDays(e.target.value)}
                 className="w-10 text-xs text-center outline-none border border-gray-300 rounded px-1 py-0.5 bg-white text-gray-700"/>
             : <span className="text-xs font-medium text-gray-600 min-w-[1.5rem] text-center">{r2mDays}</span>}
-          <span className="text-xs text-gray-400">days</span>
+          <span className="text-xs text-gray-400">days{Number(r2mDays)===0?' (instant)':''}</span>
         </div>}
         <div className="flex-1"/>
         {sendErr && <span className="text-xs text-red-600 truncate flex-shrink min-w-0" title={sendErr}>{sendErr}</span>}
@@ -1456,7 +1458,15 @@ function ComposePane({replyTo, toContact, draft, initTo:initToOverride="", initC
               className="px-3 py-1.5 text-xs rounded bg-gray-100 hover:bg-gray-200 disabled:opacity-50 text-gray-600">
               {savingDraft?'Saving…':'Save draft'}
             </button>}
-        <button className="px-3 py-1.5 text-xs rounded bg-amber-400 hover:bg-amber-500 text-white font-medium">Revert2me</button>
+        <button onClick={()=>setR2mArmed(v=>!v)} disabled={sending}
+          title={r2mArmed
+            ? `Revert2Me armed — if no reply within ${r2mDays} day${r2mDays==1?'':'s'}, this mail will resurface.`
+            : 'Click to arm Revert2Me for this mail'}
+          className={`px-3 py-1.5 text-xs rounded font-medium transition-colors ${r2mArmed
+            ? 'bg-amber-400 hover:bg-amber-500 text-white'
+            : 'bg-amber-50 hover:bg-amber-100 text-amber-700 border border-amber-300'}`}>
+          {r2mArmed ? `Revert2me · ${r2mDays}d` : 'Revert2me'}
+        </button>
         <button onClick={handleSendClick} disabled={sending || !to.trim()}
           className="px-4 py-1.5 text-xs rounded bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 text-white font-medium">
           {sending ? 'Sending…' : 'Send'}
@@ -1530,9 +1540,9 @@ function ContactEditForm({contact, contactTags, allKnownTags, isArchived, onSave
         <div>
           <div className="text-xs text-gray-400 mb-1">Default Revert2Me period</div>
           <div className="flex items-center gap-2">
-            <input type="number" min="1" max="30" value={r2m} onChange={e=>setR2m(Number(e.target.value))}
+            <input type="number" min="0" max="30" value={r2m} onChange={e=>setR2m(Number(e.target.value))}
               className="border border-gray-200 rounded px-2 py-1 text-sm outline-none focus:border-indigo-400 w-16 text-center"/>
-            <span className="text-sm text-gray-500">days <span className="text-gray-400">(global default: 3 days)</span></span>
+            <span className="text-sm text-gray-500">days <span className="text-gray-400">(0 = instant · global default: 3)</span></span>
           </div>
         </div>
         {/* Tags */}
@@ -3115,7 +3125,7 @@ function App({onSignOut}) {
     (async () => {
       setDataLoading(true); setDataError('');
       try {
-        const { mail_accounts, contacts, messages, drafts, tags, message_tags } = await apiFetch('/bootstrap?limit=500');
+        const { mail_accounts, contacts, messages, drafts, tags, message_tags, r2m_state } = await apiFetch('/bootstrap?limit=500');
         if (cancelled) return;
 
         // accountId → email lookup
@@ -3131,6 +3141,16 @@ function App({onSignOut}) {
           if (c.primary_email) emailToContactId.set(c.primary_email.toLowerCase(), c.id);
         }
 
+        // Revert-to-me rows, keyed by message_id
+        const r2mByMsg = new Map((r2m_state || []).map(r => [r.message_id, r]));
+        const nowMs = Date.now();
+        function isR2mActive(row) {
+          if (!row) return false;
+          if (row.dismissed_at) return false;
+          if (!row.snooze_until) return true;
+          return new Date(row.snooze_until).getTime() <= nowMs;
+        }
+
         // Shape messages first (we need them to compute per-contact accountEmails)
         const shapedMessages = messages.map(m => {
           const accountEmail = accountEmailById.get(m.mail_account_id) ?? '';
@@ -3138,6 +3158,7 @@ function App({onSignOut}) {
             ? (m.from_email || '').toLowerCase()
             : (m.to_emails?.[0]?.email || '').toLowerCase();
           const contactId = emailToContactId.get(otherEmail) ?? null;
+          const r2mRow = r2mByMsg.get(m.id);
           return {
             id: m.id,
             accountId: m.mail_account_id,
@@ -3149,7 +3170,8 @@ function App({onSignOut}) {
             to: m.to_emails?.[0]?.email || '',
             date: m.date,
             read: !!m.flags?.seen,
-            revert2me: false,
+            revert2me: isR2mActive(r2mRow),
+            r2mArmed: !!r2mRow && !r2mRow.dismissed_at,
             draft: !!m.flags?.draft,
             body: m.body_text || m.snippet || '',
             hasAttachments: !!m.has_attachments,
@@ -3256,6 +3278,11 @@ function App({onSignOut}) {
         }
         // Initialize deletedIds from server state (soft-delete column)
         setDeletedIds(messages.filter(m => m.deleted_at != null).map(m => m.id));
+        // Hydrate snooze-counts from r2m_state so the next snooze continues
+        // the Fibonacci series from where it left off.
+        setMsgSnoozeCounts(Object.fromEntries(
+          (r2m_state || []).map(r => [r.message_id, r.snooze_count || 0]),
+        ));
       } catch (e) {
         if (!cancelled) setDataError(e.message);
       } finally {
@@ -3683,25 +3710,39 @@ function App({onSignOut}) {
     setActionToast('Mail was reported as spam');
     persistDelete(id);
   }
-  function handleDismissR2m(id){setMessageList(prev=>prev.map(m=>m.id===id?{...m,revert2me:false}:m));}
+  // Persist an r2m action (dismiss / snooze). Optimistic flip is already
+  // applied by the caller; on failure we revert and re-arm the banner.
+  function persistR2m(id, body) {
+    return apiFetch(`/messages/${id}/r2m`, { method:'PATCH', body: JSON.stringify(body) })
+      .catch(e => {
+        setMessageList(prev=>prev.map(m=>m.id===id?{...m,revert2me:true}:m));
+        setActionToast('Revert2Me save failed: ' + e.message);
+      });
+  }
+  function handleDismissR2m(id){
+    setMessageList(prev=>prev.map(m=>m.id===id?{...m,revert2me:false,r2mArmed:false}:m));
+    persistR2m(id, { dismiss: true });
+  }
   function handleR2mSeen(id){
     captureAlert(id);
     const {id:nid,alwaysGo,switchTab,forceFade}=getDestination(id,'r2m');
-    setMessageList(prev=>prev.map(m=>m.id===id?{...m,revert2me:false}:m));
+    setMessageList(prev=>prev.map(m=>m.id===id?{...m,revert2me:false,r2mArmed:false}:m));
 
     navigateTo(nid,alwaysGo, forceFade ? 'fade-fast' : (nid ? 'slide' : 'none'));
     setActionToast('Mail has been seen');
+    persistR2m(id, { dismiss: true });
   }
   function handleR2mSnooze(id){
     captureAlert(id);
-    const msg=messageList.find(m=>m.id===id);
-    const ctc=contactList.find(c=>c.id===msg?.contactId);
-    const days=ctc?.r2mDays||3;
+    const prevCount = msgSnoozeCounts[id] || 0;
+    const days = fibSnoozeDays(prevCount);
     const {id:nid,alwaysGo,switchTab,forceFade}=getDestination(id,'r2m');
     setMessageList(prev=>prev.map(m=>m.id===id?{...m,revert2me:false}:m));
+    setMsgSnoozeCounts(prev=>({...prev,[id]:prevCount+1}));
 
     navigateTo(nid,alwaysGo, forceFade ? 'fade-fast' : (nid ? 'slide' : 'none'));
     setActionToast(`Mail was snoozed for ${days} days`);
+    persistR2m(id, { snooze: true });
   }
   // Persist a seen=true flag to backend (IMAP \Seen + DB). Optimistic flip is
   // already applied by the caller; we only need to revert on failure.
@@ -3751,7 +3792,7 @@ function App({onSignOut}) {
       else setMobileCol(0);
     }
   }
-  async function handleSend({from, to, cc, bcc, subject, body, reply_to_id, draft_id_to_delete}) {
+  async function handleSend({from, to, cc, bcc, subject, body, reply_to_id, draft_id_to_delete, revert2me_days}) {
     const acc = mailAccounts.find(a => (a.email||'').toLowerCase() === (from||'').toLowerCase());
     if (!acc) throw new Error(`Sending account "${from}" not found`);
     const result = await apiFetch(`/mail-accounts/${acc.id}/send`, {
@@ -3763,6 +3804,7 @@ function App({onSignOut}) {
         subject: subject || '',
         body: body || '',
         reply_to_id: reply_to_id || undefined,
+        revert2me_days: (typeof revert2me_days === 'number' && revert2me_days >= 0) ? revert2me_days : undefined,
       }),
     });
     // Draft was sent — remove it (best-effort; send itself already succeeded)

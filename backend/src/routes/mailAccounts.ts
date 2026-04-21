@@ -6,6 +6,7 @@ import { authPreHandler } from "../auth.js";
 import { syncAccount } from "../sync.js";
 import { requirePool } from "../db.js";
 import { sendMail, splitAddresses } from "../smtp.js";
+import { armR2m } from "../r2m.js";
 
 interface AccountInput {
   email: string;
@@ -177,7 +178,14 @@ export async function registerMailAccountsRoutes(app: FastifyInstance) {
   // ─── Send a mail (SMTP + best-effort APPEND to Sent) ─────────────────────
   app.post<{
     Params: { id: string };
-    Body: { to: string; cc?: string; bcc?: string; subject?: string; body?: string; reply_to_id?: string };
+    Body: {
+      to: string; cc?: string; bcc?: string; subject?: string; body?: string;
+      reply_to_id?: string;
+      // When set, arm revert-to-me on the new outgoing message. 0 days =
+      // active immediately (useful for testing); higher values delay until
+      // that many days after send.
+      revert2me_days?: number;
+    };
   }>("/mail-accounts/:id/send", auth, async (req, reply) => {
     const { id } = req.params;
     const b = req.body || ({} as typeof req.body);
@@ -235,13 +243,14 @@ export async function registerMailAccountsRoutes(app: FastifyInstance) {
         .concat(splitAddresses(b.bcc).map(email => ({ email, role: "bcc" })));
       const snippet = (b.body || "").substring(0, 200);
       try {
-        await pool.query(
+        const ins = await pool.query<{ id: string }>(
           `INSERT INTO messages (
              user_id, mail_account_id, folder, uid, uidvalidity, message_id,
              from_email, from_name, to_emails, subject, body_text, snippet,
              date, flags, direction
            ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9::jsonb,$10,$11,$12, now(), $13::jsonb, 'out')
-           ON CONFLICT DO NOTHING`,
+           ON CONFLICT DO NOTHING
+           RETURNING id`,
           [
             req.authUser!.id, id,
             result.appended.folder, result.appended.uid, result.appended.uidValidity, result.messageId || null,
@@ -250,6 +259,15 @@ export async function registerMailAccountsRoutes(app: FastifyInstance) {
             JSON.stringify({ seen: true }),
           ],
         );
+        const newMessageId = ins.rows[0]?.id;
+        // Arm revert-to-me if requested.
+        if (newMessageId && typeof b.revert2me_days === "number" && b.revert2me_days >= 0) {
+          try {
+            await armR2m(newMessageId, req.authUser!.id, b.revert2me_days);
+          } catch (e) {
+            req.log.warn({ err: e }, "send: arming r2m failed");
+          }
+        }
       } catch (e) {
         // Non-fatal — the mail is delivered and sits in the server's Sent folder.
         req.log.warn({ err: e }, "send: insert into messages failed");
