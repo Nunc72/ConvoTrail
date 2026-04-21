@@ -20,7 +20,7 @@ export async function registerDataRoutes(app: FastifyInstance) {
         "contact_emails(email, is_news, is_muted)",
       ).order("name", { ascending: true }),
       sb.from("messages").select(
-        "id, mail_account_id, folder, uid, thread_id, from_email, from_name, to_emails, " +
+        "id, mail_account_id, folder, uid, message_id, thread_id, from_email, from_name, to_emails, " +
         "subject, snippet, body_text, date, flags, direction, deleted_at, has_attachments",
       ).order("date", { ascending: false }).limit(limit),
       sb.from("drafts").select(

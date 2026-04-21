@@ -72,7 +72,7 @@ const { useState, useMemo, useRef, useEffect, useCallback } = React;
 
 // ─── Constants ───────────────────────────────────────────────────────────────
 
-const APP_VERSION = "0.0.30"; // bumped on every deploy — keep in sync with version.json
+const APP_VERSION = "0.0.31"; // bumped on every deploy — keep in sync with version.json
 
 // ─── Backend + Supabase config ───────────────────────────────────────────────
 const SUPABASE_URL = "https://oyrlzqbjcsliesvunbwj.supabase.co";
@@ -1194,7 +1194,6 @@ function ComposePane({replyTo, toContact, draft, initTo:initToOverride="", initC
   const [showFromDrop,setShowFromDrop]= useState(false);
   const [sending,     setSending]     = useState(false);
   const [sendErr,     setSendErr]     = useState('');
-  const [r2mArmed,    setR2mArmed]    = useState(false);
   const [savingDraft, setSavingDraft] = useState(false);
   // Local draft id — set once we POST a new draft, reused for subsequent PATCHes
   // so the user can keep saving the same draft without remounting the pane.
@@ -1203,7 +1202,9 @@ function ComposePane({replyTo, toContact, draft, initTo:initToOverride="", initC
   const fromDropRef = useRef(null);
   const multiFrom = selAccounts.length > 1;
 
-  async function handleSendClick() {
+  // Both Send and Revert2me are send actions; Revert2me additionally arms
+  // revert-to-me on the new outgoing row using the current r2mDays value.
+  async function handleSendClick(withR2m = false) {
     if (!to.trim() || sending) return;
     setSending(true); setSendErr('');
     try {
@@ -1212,7 +1213,7 @@ function ComposePane({replyTo, toContact, draft, initTo:initToOverride="", initC
         subject: subj, body,
         reply_to_id: replyTo?.id,
         draft_id_to_delete: draftId,
-        revert2me_days: r2mArmed ? Number(r2mDays) || 0 : undefined,
+        revert2me_days: withR2m ? Number(r2mDays) || 0 : undefined,
       });
     } catch (e) {
       setSendErr(e?.message || 'Send failed');
@@ -1458,16 +1459,12 @@ function ComposePane({replyTo, toContact, draft, initTo:initToOverride="", initC
               className="px-3 py-1.5 text-xs rounded bg-gray-100 hover:bg-gray-200 disabled:opacity-50 text-gray-600">
               {savingDraft?'Saving…':'Save draft'}
             </button>}
-        <button onClick={()=>setR2mArmed(v=>!v)} disabled={sending}
-          title={r2mArmed
-            ? `Revert2Me armed — if no reply within ${r2mDays} day${r2mDays==1?'':'s'}, this mail will resurface.`
-            : 'Click to arm Revert2Me for this mail'}
-          className={`px-3 py-1.5 text-xs rounded font-medium transition-colors ${r2mArmed
-            ? 'bg-amber-400 hover:bg-amber-500 text-white'
-            : 'bg-amber-50 hover:bg-amber-100 text-amber-700 border border-amber-300'}`}>
-          {r2mArmed ? `Revert2me · ${r2mDays}d` : 'Revert2me'}
+        <button onClick={()=>handleSendClick(true)} disabled={sending || !to.trim()}
+          title={`Send and arm Revert2Me — if no reply within ${r2mDays} day${r2mDays==1?'':'s'}, this mail resurfaces. 0 = instant.`}
+          className="px-3 py-1.5 text-xs rounded bg-amber-400 hover:bg-amber-500 disabled:opacity-50 text-white font-medium">
+          {sending ? 'Sending…' : `Revert2me${Number(r2mDays)===0?' · 0d':''}`}
         </button>
-        <button onClick={handleSendClick} disabled={sending || !to.trim()}
+        <button onClick={()=>handleSendClick(false)} disabled={sending || !to.trim()}
           className="px-4 py-1.5 text-xs rounded bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 text-white font-medium">
           {sending ? 'Sending…' : 'Send'}
         </button>
@@ -3141,7 +3138,7 @@ function App({onSignOut}) {
           if (c.primary_email) emailToContactId.set(c.primary_email.toLowerCase(), c.id);
         }
 
-        // Revert-to-me rows, keyed by message_id
+        // Revert-to-me rows, keyed by message UUID
         const r2mByMsg = new Map((r2m_state || []).map(r => [r.message_id, r]));
         const nowMs = Date.now();
         function isR2mActive(row) {
@@ -3149,6 +3146,14 @@ function App({onSignOut}) {
           if (row.dismissed_at) return false;
           if (!row.snooze_until) return true;
           return new Date(row.snooze_until).getTime() <= nowMs;
+        }
+        // Reply-detection: a reply's RFC thread_id points at the original's
+        // RFC message_id (set by sync.ts from In-Reply-To/References). We use
+        // the SET of incoming thread_ids to suppress r2m on any outgoing mail
+        // that has already been replied to.
+        const repliedRfcIds = new Set();
+        for (const m of messages) {
+          if (m.direction === 'in' && m.thread_id) repliedRfcIds.add(m.thread_id);
         }
 
         // Shape messages first (we need them to compute per-contact accountEmails)
@@ -3159,6 +3164,10 @@ function App({onSignOut}) {
             : (m.to_emails?.[0]?.email || '').toLowerCase();
           const contactId = emailToContactId.get(otherEmail) ?? null;
           const r2mRow = r2mByMsg.get(m.id);
+          // r2m is suppressed as soon as any later incoming message in the
+          // same RFC thread exists — i.e. the recipient has already replied.
+          const r2mActive = isR2mActive(r2mRow)
+            && !(m.direction === 'out' && m.message_id && repliedRfcIds.has(m.message_id));
           return {
             id: m.id,
             accountId: m.mail_account_id,
@@ -3170,7 +3179,7 @@ function App({onSignOut}) {
             to: m.to_emails?.[0]?.email || '',
             date: m.date,
             read: !!m.flags?.seen,
-            revert2me: isR2mActive(r2mRow),
+            revert2me: r2mActive,
             r2mArmed: !!r2mRow && !r2mRow.dismissed_at,
             draft: !!m.flags?.draft,
             body: m.body_text || m.snippet || '',

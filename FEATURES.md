@@ -1,6 +1,6 @@
 # ConvoTrail — feature roadmap
 
-_Last updated: 2026-04-21, v0.0.30_
+_Last updated: 2026-04-21, v0.0.31_
 
 Status legend:
 - ✅ **Done** — works end-to-end, persists where relevant
@@ -30,7 +30,7 @@ this doc covers product.
 - ✅ News/Mute per contact + Archive persisted (contacts.is_news / is_muted / archived_at)
 - ✅ Tag email-roles persisted (tags.email_roles JSONB — role per address in tag edit form)
 - ✅ Contact edit persisted: name / org / r2m_days / primary_email (color picker pending UI)
-- ✅ Revert2Me: arm-on-send (toggle in compose) + dismiss/seen/snooze persisted in r2m_state; 0-day timer = instant
+- ✅ Revert2Me: second Send button in compose arms r2m on dispatch; dismiss/seen/snooze persisted in r2m_state; 0-day timer = instant; auto-suppressed once a reply in the same RFC thread arrives
 - ✅ Per-contact memory: remembers last-opened message per contact
 - ✅ Client-side search across loaded messages
 - ✅ Filter tabs (Now/All/In/Out/Draft/Deleted)
