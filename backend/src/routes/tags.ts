@@ -47,20 +47,25 @@ export async function registerTagsRoutes(app: FastifyInstance) {
     return { tag: sel.data };
   });
 
-  // ─── Rename / archive / unarchive ────────────────────────────────────────
-  app.patch<{ Params: { id: string }; Body: { name?: string; archived?: boolean } }>(
-    "/tags/:id", auth, async (req, reply) => {
-      const b = req.body || {};
-      const patch: Record<string, unknown> = {};
-      if (typeof b.name === "string" && b.name.trim()) patch.name = b.name.trim();
-      if (typeof b.archived === "boolean") patch.archived_at = b.archived ? new Date().toISOString() : null;
-      if (Object.keys(patch).length === 0) return reply.badRequest("nothing to update");
-      const sb = supabaseWithJwt(req.authJwt!);
-      const { error } = await sb.from("tags").update(patch).eq("id", req.params.id);
-      if (error) return reply.internalServerError(error.message);
-      return reply.code(204).send();
-    },
-  );
+  // ─── Rename / archive / set per-email roles ──────────────────────────────
+  // email_roles is a JSONB map { email: role } that governs how messages
+  // addressed to/from each participant get tagged. Passing an explicit {}
+  // clears it.
+  app.patch<{
+    Params: { id: string };
+    Body: { name?: string; archived?: boolean; email_roles?: Record<string, string> };
+  }>("/tags/:id", auth, async (req, reply) => {
+    const b = req.body || {};
+    const patch: Record<string, unknown> = {};
+    if (typeof b.name === "string" && b.name.trim()) patch.name = b.name.trim();
+    if (typeof b.archived === "boolean") patch.archived_at = b.archived ? new Date().toISOString() : null;
+    if (b.email_roles && typeof b.email_roles === "object") patch.email_roles = b.email_roles;
+    if (Object.keys(patch).length === 0) return reply.badRequest("nothing to update");
+    const sb = supabaseWithJwt(req.authJwt!);
+    const { error } = await sb.from("tags").update(patch).eq("id", req.params.id);
+    if (error) return reply.internalServerError(error.message);
+    return reply.code(204).send();
+  });
 
   // ─── Attach a tag to a message (create-or-get by name if no tag_id) ──────
   app.post<{ Params: { id: string }; Body: AttachInput }>(

@@ -1,9 +1,29 @@
 import type { FastifyInstance } from "fastify";
 import { authPreHandler } from "../auth.js";
 import { requirePool } from "../db.js";
+import { supabaseWithJwt } from "../supabase.js";
 
 export async function registerContactsRoutes(app: FastifyInstance) {
   const auth = { preHandler: authPreHandler };
+
+  // ─── Patch a contact (news/mute flags + archive) ─────────────────────────
+  // Name/org/color/r2m_days land in Tier 1.9 — keeping this route narrow for
+  // now so the per-contact News/Mute toggles and Archive can persist.
+  app.patch<{
+    Params: { id: string };
+    Body: { is_news?: boolean; is_muted?: boolean; archived?: boolean };
+  }>("/contacts/:id", auth, async (req, reply) => {
+    const b = req.body || {};
+    const patch: Record<string, unknown> = {};
+    if (typeof b.is_news  === "boolean") patch.is_news  = b.is_news;
+    if (typeof b.is_muted === "boolean") patch.is_muted = b.is_muted;
+    if (typeof b.archived === "boolean") patch.archived_at = b.archived ? new Date().toISOString() : null;
+    if (Object.keys(patch).length === 0) return reply.badRequest("nothing to update");
+    const sb = supabaseWithJwt(req.authJwt!);
+    const { error } = await sb.from("contacts").update(patch).eq("id", req.params.id);
+    if (error) return reply.internalServerError(error.message);
+    return reply.code(204).send();
+  });
 
   // ─── Merge two contacts ────────────────────────────────────────────────
   // Moves contact_emails + contact_tags from discard → keep, then deletes

@@ -1,6 +1,6 @@
 # ConvoTrail — feature roadmap
 
-_Last updated: 2026-04-21, v0.0.27_
+_Last updated: 2026-04-21, v0.0.28_
 
 Status legend:
 - ✅ **Done** — works end-to-end, persists where relevant
@@ -27,6 +27,8 @@ this doc covers product.
 - ✅ Mark-read persisted (IMAP \\Seen + DB) via Seen / Snooze buttons
 - ✅ Soft-delete + Recover persisted (deleted_at column; IMAP EXPUNGE deferred to retention cron)
 - ✅ Tags on messages: CRUD + attach/detach (POST by name auto-creates)
+- ✅ News/Mute per contact + Archive persisted (contacts.is_news / is_muted / archived_at)
+- ✅ Tag email-roles persisted (tags.email_roles JSONB — role per address in tag edit form)
 - ✅ Per-contact memory: remembers last-opened message per contact
 - ✅ Client-side search across loaded messages
 - ✅ Filter tabs (Now/All/In/Out/Draft/Deleted)
@@ -36,8 +38,6 @@ this doc covers product.
 - 🚧 Revert-to-me dismiss / snooze / seen
 - 🚧 Tags on contacts (add/remove)
 - 🚧 Tag rename / archive
-- 🚧 Tag roles (To / CC per email address)
-- 🚧 News / Mute flags per email address
 - 🚧 Contact edit (name, org, color, r2m_days)
 - 🚧 Contact archive
 - 🚧 Spam (routes through delete state)

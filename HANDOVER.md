@@ -1,6 +1,6 @@
 # ConvoTrail — handover
 
-_Last updated: 2026-04-21, v0.0.27_
+_Last updated: 2026-04-21, v0.0.28_
 
 A conversation-centric email client. Mail stays on IMAP (Gmail/iCloud/own);
 ConvoTrail adds grouping per contact, tags, revert-to-me, merge/unmerge,
@@ -128,6 +128,7 @@ auth.users                        (managed by Supabase)
 
 ## Recent history (terse)
 
+- v0.0.28 — News/Mute per contact (not per address) + Archive persisted; tag email-roles persisted to tags.email_roles JSONB; migration 0003
 - v0.0.27 — fix: tags list was empty because usedTags did `Number(msgId)` on UUID message ids
 - v0.0.26 — message tags persisted (tags + message_tags via /bootstrap; POST/DELETE /messages/:id/tags with create-or-get by name)
 - v0.0.25 — mail-account detail: retention dropdowns (deleted/spam) + auto-sync checkbox + shorter Test/Sync buttons; migration 0002

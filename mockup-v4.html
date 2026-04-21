@@ -72,7 +72,7 @@ const { useState, useMemo, useRef, useEffect, useCallback } = React;
 
 // ─── Constants ───────────────────────────────────────────────────────────────
 
-const APP_VERSION = "0.0.27"; // bumped on every deploy — keep in sync with version.json
+const APP_VERSION = "0.0.28"; // bumped on every deploy — keep in sync with version.json
 
 // ─── Backend + Supabase config ───────────────────────────────────────────────
 const SUPABASE_URL = "https://oyrlzqbjcsliesvunbwj.supabase.co";
@@ -1475,6 +1475,8 @@ function ContactEditForm({contact, contactTags, allKnownTags, isArchived, onSave
   const [r2m,    setR2m]    = useState(contact.r2mDays||3);
   const [tags,   setTags]   = useState([...(contactTags||[])]);
   const [archived, setArchived] = useState(!!isArchived);
+  const [isNews,   setIsNews]   = useState(!!contact.isNews);
+  const [isMuted,  setIsMuted]  = useState(!!contact.isMuted);
 
   function addTag(t) { if(!tags.includes(t)) setTags([...tags,t]); }
   function removeTag(t) { setTags(tags.filter(x=>x!==t)); }
@@ -1538,16 +1540,26 @@ function ContactEditForm({contact, contactTags, allKnownTags, isArchived, onSave
           <div className="text-xs text-gray-400 mb-1">Tags <span className="text-gray-300">(internal, not sent)</span></div>
           <TagPicker current={tags} suggestions={allKnownTags} onAdd={addTag} onRemove={removeTag}/>
         </div>
-        <label className="flex items-center gap-2 cursor-pointer">
-          <input type="checkbox" checked={archived} onChange={e=>setArchived(e.target.checked)} className="accent-indigo-600"/>
-          <span className="text-sm text-gray-700">Archive this contact</span>
-        </label>
+        <div className="space-y-2">
+          <label className="flex items-center gap-2 cursor-pointer">
+            <input type="checkbox" checked={isNews} onChange={e=>setIsNews(e.target.checked)} className="accent-indigo-600"/>
+            <span className="text-sm text-gray-700">News (newsletters — moves to News tab)</span>
+          </label>
+          <label className="flex items-center gap-2 cursor-pointer">
+            <input type="checkbox" checked={isMuted} onChange={e=>setIsMuted(e.target.checked)} className="accent-indigo-600"/>
+            <span className="text-sm text-gray-700">Mute (hide from Now / notifications)</span>
+          </label>
+          <label className="flex items-center gap-2 cursor-pointer">
+            <input type="checkbox" checked={archived} onChange={e=>setArchived(e.target.checked)} className="accent-indigo-600"/>
+            <span className="text-sm text-gray-700">Archive this contact</span>
+          </label>
+        </div>
       </div>
       <div className="px-4 py-3 border-t border-gray-200 flex items-center gap-2 flex-shrink-0">
         <button onClick={onDelete} className="px-3 py-1.5 text-xs rounded bg-gray-100 hover:bg-red-100 text-red-500">Delete</button>
         <div className="flex-1"/>
         <button onClick={onCancel} className="px-4 py-1.5 text-xs rounded bg-gray-100 hover:bg-gray-200 text-gray-600">Cancel</button>
-        <button onClick={()=>onSave({name,org,primary,r2mDays:r2m,tags,archived})}
+        <button onClick={()=>onSave({name,org,primary,r2mDays:r2m,tags,archived,isNews,isMuted})}
           className="px-4 py-1.5 text-xs rounded bg-indigo-600 hover:bg-indigo-700 text-white font-medium">Save</button>
       </div>
     </div>
@@ -1844,19 +1856,14 @@ function ThreadColumn({contact,allMsgs,deletedIds,selectedMsgId,msgTags,onSelect
               </button>
               {flagsOpen&&(
                 <div className="absolute right-0 top-full mt-1 z-20 bg-white border border-gray-200 rounded-lg shadow-lg overflow-hidden" style={{minWidth:140}}>
-                  {['News','Mute'].map(flag=>{
-                    const key=flag.toLowerCase();
-                    const ef=emailFlags?.[contact.id]||{};
-                    const count=contact.emails.filter(e=>ef[e]?.[key]).length;
-                    const state=count===0?'none':count===contact.emails.length?'all':'some';
-                    const checked=state==='all';
-                    return <button key={flag} onClick={()=>onToggleFlag?.(contact.id,key)}
+                  {[['News','isNews'],['Mute','isMuted']].map(([label,key])=>{
+                    const checked=!!contact[key];
+                    return <button key={label} onClick={()=>onToggleFlag?.(contact.id,key)}
                       className="w-full flex items-center gap-2 px-3 py-2 text-sm text-gray-700 hover:bg-gray-50">
-                      <span className={`w-4 h-4 rounded border flex items-center justify-center flex-shrink-0 ${checked?'bg-indigo-500 border-indigo-500':state==='some'?'bg-indigo-100 border-indigo-300':'border-gray-300'}`}>
+                      <span className={`w-4 h-4 rounded border flex items-center justify-center flex-shrink-0 ${checked?'bg-indigo-500 border-indigo-500':'border-gray-300'}`}>
                         {checked&&<svg width="10" height="10" viewBox="0 0 10 10" fill="none"><path d="M1.5 5L4 7.5L8.5 2.5" stroke="white" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/></svg>}
-                        {state==='some'&&<span className="text-xs text-indigo-600 font-bold leading-none">·</span>}
                       </span>
-                      <span>{flag}</span>
+                      <span>{label}</span>
                     </button>;
                   })}
                 </div>
@@ -1947,17 +1954,13 @@ function ThreadColumn({contact,allMsgs,deletedIds,selectedMsgId,msgTags,onSelect
                   <PencilIcon size={11}/>
                 </span>
               </div>
-              {['News','Mute'].map(flag=>{
-                const key=flag.toLowerCase();
-                const ef=emailFlags?.[contact.id]||{};
-                const count=contact.emails.filter(e=>ef[e]?.[key]).length;
-                const state=count===0?'none':count===contact.emails.length?'all':'some';
-                const cls=state==='all'?'bg-indigo-50 border-indigo-300 text-indigo-600'
-                  :state==='some'?'bg-gray-50 border-gray-300 text-gray-400'
+              {[['News','isNews'],['Mute','isMuted']].map(([label,key])=>{
+                const on=!!contact[key];
+                const cls=on?'bg-indigo-50 border-indigo-300 text-indigo-600'
                   :'border-gray-200 text-gray-300 hover:border-gray-300 hover:text-gray-500';
-                return <button key={flag} onClick={()=>onToggleFlag?.(contact.id,key)}
+                return <button key={label} onClick={()=>onToggleFlag?.(contact.id,key)}
                   className={`text-xs px-1.5 py-0.5 rounded border flex-shrink-0 transition-colors ${cls}`}>
-                  {flag}
+                  {label}
                 </button>;
               })}
             </div>
@@ -2335,11 +2338,12 @@ function LeftColumn({contactMeta, archivedContacts, selectedId, mergeId, onSelec
     return()=>document.removeEventListener("mousedown",h);
   },[accDropOpen]);
 
-  function getTab(id, emails){
-    const ef=emailFlags?.[id]||{};
-    if(archivedContacts.has(id)||emails.some(e=>ef[e]?.archive)) return 'Archive';
-    if(emails.some(e=>ef[e]?.mute))  return 'Muted';
-    if(emails.some(e=>ef[e]?.news))  return 'News';
+  function getTab(id){
+    const c = contactMeta.find(m => m.contact.id === id)?.contact;
+    if (!c) return 'Convo';
+    if (archivedContacts.has(id)) return 'Archive';
+    if (c.isMuted) return 'Muted';
+    if (c.isNews)  return 'News';
     return 'Convo';
   }
   const activeContacts  = contactMeta
@@ -3208,6 +3212,9 @@ function App({onSignOut}) {
             color: c.color || colorFromSeed(c.name || emails[0] || ''),
             portrait: c.portrait_url || null,
             r2mDays: c.r2m_days || 3,
+            isNews: !!c.is_news,
+            isMuted: !!c.is_muted,
+            archivedAt: c.archived_at || null,
             accountEmails: accEmails,                 // array of all account-emails this contact has activity in
             account: accEmails[0] || null,            // "primary" account (first seen) — kept for back-compat
           };
@@ -3232,6 +3239,18 @@ function App({onSignOut}) {
         setTagList(tagList);
         setTagIdByName(idByName);
         setMsgTags(mt);
+        // Hydrate archived contacts set from server state
+        setArchivedContacts(new Set(shapedContacts.filter(c => c.archivedAt).map(c => c.id)));
+        // Hydrate per-tag email roles ({ tagName: { email: role } }) from JSONB
+        {
+          const roles = {};
+          for (const t of tagList) {
+            if (t.email_roles && typeof t.email_roles === 'object' && Object.keys(t.email_roles).length > 0) {
+              roles[t.name] = t.email_roles;
+            }
+          }
+          setTagRoles(roles);
+        }
         // Initialize deletedIds from server state (soft-delete column)
         setDeletedIds(messages.filter(m => m.deleted_at != null).map(m => m.id));
       } catch (e) {
@@ -3779,15 +3798,25 @@ function App({onSignOut}) {
     refreshData();
   }
   function handleEditContact(){setEditingContact(selContact);setShowCompose(false);}
-  function handleSaveContact({name,org,primary,r2mDays,tags,archived}){
+  function handleSaveContact({name,org,primary,r2mDays,tags,archived,isNews,isMuted}){
+    const id = editingContact;
+    // Local-only: name/org/emails/r2mDays/tags persist server-side in Tier 1.9+1.8,
+    // but the contact-card News/Mute/Archive flags persist now via PATCH below.
     setContactList(prev=>prev.map(c=>{
-      if(c.id!==editingContact)return c;
+      if(c.id!==id)return c;
       const emails=[primary,...c.emails.filter(e=>e!==primary)];
-      return{...c,name,org,emails,r2mDays};
+      return{...c,name,org,emails,r2mDays,isNews:!!isNews,isMuted:!!isMuted};
     }));
-    setConTags(prev=>({...prev,[editingContact]:tags}));
-    handleArchiveContact(editingContact, archived);
+    setConTags(prev=>({...prev,[id]:tags}));
+    // Archive has its own Set; keep it in sync with the checkbox before PATCHing.
+    setArchivedContacts(prev=>{const n=new Set(prev);archived?n.add(id):n.delete(id);return n;});
     setEditingContact(null);
+    apiFetch(`/contacts/${id}`, { method:'PATCH', body: JSON.stringify({
+      is_news: !!isNews, is_muted: !!isMuted, archived: !!archived,
+    })}).catch(e => {
+      setActionToast('Contact flags save failed: ' + e.message);
+      refreshData();
+    });
   }
   function handleArchiveContact(id, archive){
     setArchivedContacts(prev=>{const s=new Set(prev);archive?s.add(id):s.delete(id);return s;});
@@ -3801,6 +3830,28 @@ function App({onSignOut}) {
     handleUpdateTagRoles(name,roles);
     handleArchiveTag(name,archived);
     setEditingTag(null);
+    // Persist to backend. Tag must already exist server-side (it does if it
+    // appeared in usedTags — which means at least one message carries it).
+    const tagId = tagIdByName.get(oldTag) || tagIdByName.get(name);
+    if (!tagId) return; // purely-local tag; nothing to persist
+    const body = { email_roles: roles || {}, archived: !!archived };
+    if (name !== oldTag) body.name = name;
+    apiFetch(`/tags/${tagId}`, { method:'PATCH', body: JSON.stringify(body) })
+      .then(() => {
+        // Keep tagIdByName coherent if renamed
+        if (name !== oldTag) {
+          setTagIdByName(map => {
+            const next = new Map(map);
+            next.delete(oldTag);
+            next.set(name, tagId);
+            return next;
+          });
+        }
+      })
+      .catch(e => {
+        setActionToast('Tag save failed: ' + e.message);
+        refreshData();
+      });
   }
   function handleToggleAccount(acc){
     if(acc.startsWith('__exclusive__')){
@@ -3809,27 +3860,31 @@ function App({onSignOut}) {
     }
     setSelAccounts(prev=>prev.includes(acc)?(prev.length>1?prev.filter(a=>a!==acc):prev):[...prev,acc]);
   }
+  // Toggle a contact-level flag (isNews | isMuted | archive). Optimistic flip
+  // then PATCH /contacts/:id — revert + toast on failure.
   function handleToggleContactFlag(id, flag){
-    const contact=contactList.find(c=>c.id===id); if(!contact) return;
-    const emails=contact.emails;
-    if(flag==='archive'){
-      setArchivedContacts(prev=>{const n=new Set(prev);n.has(id)?n.delete(id):n.add(id);return n;});
-      setEmailFlags(prev=>{
-        const allOn=emails.every(e=>prev[id]?.[e]?.archive);
-        const nv=!allOn;
-        const cf={...(prev[id]||{})};
-        emails.forEach(e=>{cf[e]={...(cf[e]||{}),archive:nv};});
-        return{...prev,[id]:cf};
-      });
-    } else {
-      setEmailFlags(prev=>{
-        const allOn=emails.every(e=>prev[id]?.[e]?.[flag]);
-        const nv=!allOn;
-        const cf={...(prev[id]||{})};
-        emails.forEach(e=>{cf[e]={...(cf[e]||{}),[flag]:nv};});
-        return{...prev,[id]:cf};
-      });
+    const contact = contactList.find(c=>c.id===id);
+    if (!contact) return;
+    if (flag === 'archive') {
+      const wasArchived = archivedContacts.has(id);
+      setArchivedContacts(prev=>{const n=new Set(prev);wasArchived?n.delete(id):n.add(id);return n;});
+      apiFetch(`/contacts/${id}`, { method:'PATCH', body: JSON.stringify({ archived: !wasArchived }) })
+        .catch(e => {
+          setArchivedContacts(prev=>{const n=new Set(prev);wasArchived?n.add(id):n.delete(id);return n;});
+          setActionToast('Archive failed: ' + e.message);
+        });
+      return;
     }
+    // flag = 'isNews' | 'isMuted'
+    const wasOn = !!contact[flag];
+    const newVal = !wasOn;
+    setContactList(prev => prev.map(c => c.id===id ? {...c, [flag]: newVal} : c));
+    const bodyKey = flag === 'isNews' ? 'is_news' : 'is_muted';
+    apiFetch(`/contacts/${id}`, { method:'PATCH', body: JSON.stringify({ [bodyKey]: newVal }) })
+      .catch(e => {
+        setContactList(prev => prev.map(c => c.id===id ? {...c, [flag]: wasOn} : c));
+        setActionToast((flag==='isNews'?'News':'Mute') + ' toggle failed: ' + e.message);
+      });
   }
   function handleToggleEmailFlag(id, email, flag){
     if(flag==='archive'){

@@ -16,6 +16,7 @@ export async function registerDataRoutes(app: FastifyInstance) {
       ).order("created_at", { ascending: true }),
       sb.from("contacts").select(
         "id, name, org, color, portrait_url, r2m_days, primary_email, archived_at, " +
+        "is_news, is_muted, " +
         "contact_emails(email, is_news, is_muted)",
       ).order("name", { ascending: true }),
       sb.from("messages").select(
@@ -26,7 +27,7 @@ export async function registerDataRoutes(app: FastifyInstance) {
         "id, mail_account_id, to_emails, cc_emails, bcc_emails, subject, body, " +
         "reply_to_message_id, created_at, modified_at",
       ).order("modified_at", { ascending: false }),
-      sb.from("tags").select("id, name, archived_at, created_at")
+      sb.from("tags").select("id, name, archived_at, created_at, email_roles")
         .order("name", { ascending: true }),
       sb.from("message_tags").select("message_id, tag_id"),
     ]);
