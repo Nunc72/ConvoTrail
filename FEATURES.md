@@ -1,6 +1,6 @@
 # ConvoTrail — feature roadmap
 
-_Last updated: 2026-04-21, v0.0.23_
+_Last updated: 2026-04-21, v0.0.24_
 
 Status legend:
 - ✅ **Done** — works end-to-end, persists where relevant
@@ -25,6 +25,7 @@ this doc covers product.
 - ✅ Send mail (SMTP + best-effort IMAP APPEND to Sent)
 - ✅ Drafts: save / edit / delete (synced across devices), auto-deleted after Send
 - ✅ Mark-read persisted (IMAP \\Seen + DB) via Seen / Snooze buttons
+- ✅ Soft-delete + Recover persisted (deleted_at column; IMAP EXPUNGE deferred to retention cron)
 - ✅ Per-contact memory: remembers last-opened message per contact
 - ✅ Client-side search across loaded messages
 - ✅ Filter tabs (Now/All/In/Out/Draft/Deleted)
@@ -39,8 +40,6 @@ this doc covers product.
 - 🚧 News / Mute flags per email address
 - 🚧 Contact edit (name, org, color, r2m_days)
 - 🚧 Contact archive
-- 🚧 Delete message (soft delete — state only)
-- 🚧 Recover from deleted
 - 🚧 Spam (routes through delete state)
 - 🚧 Compose message (new / reply / reply-all / forward)
 - 🚧 Signatures CRUD + per-account auto-sig
@@ -80,8 +79,8 @@ Turns in-memory actions into durable ones. Highest value for daily usability.
 3. ✅ **1.3 — Mail Send (SMTP + IMAP APPEND to Sent)** — shipped v0.0.18
 4. ✅ **1.4 — Save draft persisted + active-message-per-contact memory** — shipped v0.0.19
 5. ✅ **1.5 — Mark-read persisted** (flags.seen → IMAP \\Seen + DB) — shipped v0.0.21
-6. ⬜ **1.6 — Delete persisted** (soft-delete in DB, IMAP EXPUNGE via retention cron) ← *next*
-7. ⬜ **1.7 — Tags on messages** (CRUD + persist)
+6. ✅ **1.6 — Delete persisted** (soft-delete in DB; IMAP EXPUNGE deferred to Tier 2.5 retention cron) — shipped v0.0.24
+7. ⬜ **1.7 — Tags on messages** (CRUD + persist) ← *next*
 8. ⬜ **1.8 — Tags on contacts** (CRUD + persist)
 9. ⬜ **1.9 — Contact edit (name/org/color/r2m_days)** persist
 10. ⬜ **1.10 — Automatic sync** (poll per 2 min + on window focus)
@@ -97,9 +96,7 @@ Turns in-memory actions into durable ones. Highest value for daily usability.
 
 **1.5 Mark-read** — shipped v0.0.21.
 
-**1.6 Delete** (½ day)
-- Backend: `PATCH /messages/:id/delete` → set `deleted_at = now()` in DB. Schedule IMAP EXPUNGE via cron after 90d.
-- Frontend: move to "Deleted" state, support Recover within window.
+**1.6 Delete** — shipped v0.0.24. Soft-delete only; retention/EXPUNGE moves to Tier 2.5.
 
 **1.7 Tags on messages** (1 day)
 - Backend: `GET /tags`, `POST /tags { name }`, `POST /messages/:id/tags { tag_id }`, `DELETE /messages/:id/tags/:tag_id`.

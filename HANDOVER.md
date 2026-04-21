@@ -1,6 +1,6 @@
 # ConvoTrail — handover
 
-_Last updated: 2026-04-21, v0.0.23_
+_Last updated: 2026-04-21, v0.0.24_
 
 A conversation-centric email client. Mail stays on IMAP (Gmail/iCloud/own);
 ConvoTrail adds grouping per contact, tags, revert-to-me, merge/unmerge,
@@ -128,6 +128,7 @@ auth.users                        (managed by Supabase)
 
 ## Recent history (terse)
 
+- v0.0.24 — soft-delete persisted (PATCH /messages/:id/delete + /recover); bootstrap hydrates deletedIds from deleted_at
 - v0.0.23 — drop auto-mark-read on open (mark-read via Seen/Snooze buttons only, per design)
 - v0.0.22 — fix CORS: allow PATCH/PUT/DELETE methods (fixes mark-read + mail-account edit + draft-save from browser)
 - v0.0.21 — mark-read persisted (PATCH /messages/:id/flags, IMAP \Seen + DB) + auto-mark-read on open

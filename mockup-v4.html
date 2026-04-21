@@ -72,7 +72,7 @@ const { useState, useMemo, useRef, useEffect, useCallback } = React;
 
 // ─── Constants ───────────────────────────────────────────────────────────────
 
-const APP_VERSION = "0.0.23"; // bumped on every deploy — keep in sync with version.json
+const APP_VERSION = "0.0.24"; // bumped on every deploy — keep in sync with version.json
 
 // ─── Backend + Supabase config ───────────────────────────────────────────────
 const SUPABASE_URL = "https://oyrlzqbjcsliesvunbwj.supabase.co";
@@ -3167,6 +3167,8 @@ function App({onSignOut}) {
         setMailAccounts(mail_accounts);
         setContactList(shapedContacts);
         setMessageList([...shapedMessages, ...shapedDrafts]);
+        // Initialize deletedIds from server state (soft-delete column)
+        setDeletedIds(messages.filter(m => m.deleted_at != null).map(m => m.id));
       } catch (e) {
         if (!cancelled) setDataError(e.message);
       } finally {
@@ -3551,6 +3553,23 @@ function App({onSignOut}) {
       refreshData();
     }
   }
+  // Persist a soft-delete / recover. Caller already applied the optimistic
+  // local toggle; we only revert on failure. Spam routes through delete per
+  // the MVP design (no separate "spam" state yet).
+  function persistDelete(id) {
+    return apiFetch(`/messages/${id}/delete`, { method:'PATCH' })
+      .catch(e => {
+        setDeletedIds(prev=>prev.filter(x=>x!==id));
+        setActionToast('Delete failed: ' + e.message);
+      });
+  }
+  function persistRecover(id) {
+    return apiFetch(`/messages/${id}/recover`, { method:'PATCH' })
+      .catch(e => {
+        setDeletedIds(prev=>[...prev,id]);
+        setActionToast('Recover failed: ' + e.message);
+      });
+  }
   function handleDelete(id){
     captureAlert(id);
     const {id:nid,alwaysGo,switchTab}=getDestination(id,'delete');
@@ -3558,9 +3577,11 @@ function App({onSignOut}) {
 
     navigateTo(nid,alwaysGo,'fade-fast');
     setActionToast('Mail was deleted');
+    persistDelete(id);
   }
   function handleRecover(id){
     setDeletedIds(prev=>prev.filter(x=>x!==id));
+    persistRecover(id);
   }
   function handleSpam(id){
     captureAlert(id);
@@ -3569,6 +3590,7 @@ function App({onSignOut}) {
 
     navigateTo(nid,alwaysGo,'fade-fast');
     setActionToast('Mail was reported as spam');
+    persistDelete(id);
   }
   function handleDismissR2m(id){setMessageList(prev=>prev.map(m=>m.id===id?{...m,revert2me:false}:m));}
   function handleR2mSeen(id){

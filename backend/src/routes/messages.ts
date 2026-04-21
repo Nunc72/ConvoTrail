@@ -96,4 +96,36 @@ export async function registerMessagesRoutes(app: FastifyInstance) {
       return { ok: true, flags: newFlags };
     },
   );
+
+  // ─── Soft-delete: set deleted_at = now() ─────────────────────────────────
+  // MVP: DB-only. IMAP is left untouched — the retention cron (Tier 2.5) will
+  // EXPUNGE 90 days after deletion. Users can recover within that window.
+  app.patch<{ Params: { id: string } }>("/messages/:id/delete", auth, async (req, reply) => {
+    const pool = requirePool();
+    const r = await pool.query<{ user_id: string }>(
+      `SELECT user_id FROM messages WHERE id = $1`, [req.params.id],
+    );
+    if (r.rows.length === 0) return reply.notFound();
+    if (r.rows[0].user_id !== req.authUser!.id) return reply.forbidden();
+    await pool.query(
+      `UPDATE messages SET deleted_at = now() WHERE id = $1 AND deleted_at IS NULL`,
+      [req.params.id],
+    );
+    return reply.code(204).send();
+  });
+
+  // ─── Recover from Deleted (clear deleted_at) ─────────────────────────────
+  app.patch<{ Params: { id: string } }>("/messages/:id/recover", auth, async (req, reply) => {
+    const pool = requirePool();
+    const r = await pool.query<{ user_id: string }>(
+      `SELECT user_id FROM messages WHERE id = $1`, [req.params.id],
+    );
+    if (r.rows.length === 0) return reply.notFound();
+    if (r.rows[0].user_id !== req.authUser!.id) return reply.forbidden();
+    await pool.query(
+      `UPDATE messages SET deleted_at = NULL WHERE id = $1`,
+      [req.params.id],
+    );
+    return reply.code(204).send();
+  });
 }
