@@ -1,0 +1,29 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(curl *)",
+      "mcp__Claude_Preview__preview_screenshot",
+      "mcp__Claude_Preview__preview_start",
+      "mcp__Claude_Preview__preview_stop",
+      "mcp__Claude_Preview__preview_resize",
+      "mcp__Claude_Preview__preview_logs",
+      "mcp__Claude_Preview__preview_list",
+      "mcp__Claude_Preview__preview_console_logs",
+      "mcp__Claude_Preview__preview_snapshot",
+      "mcp__Claude_Preview__preview_inspect"
+    ]
+  },
+  "hooks": {
+    "PostToolUse": [
+      {
+        "matcher": "Edit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "FILE=$(jq -r '.tool_input.file_path // \"\"' 2>/dev/null); case \"$FILE\" in *mockup-v2.html) lsof -ti:3456 >/dev/null 2>&1 || (nohup /Users/riktuithof/Documents/Rik/Projecten/Claude_Code/MegaMail/serve.sh >/dev/null 2>&1 &); printf '{\"systemMessage\": \"\\u25B6 http://localhost:3456/mockup-v2.html\"}' ;; esac"
+          }
+        ]
+      }
+    ]
+  }
+}
