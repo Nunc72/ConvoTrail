@@ -72,7 +72,7 @@ const { useState, useMemo, useRef, useEffect, useCallback } = React;
 
 // ─── Constants ───────────────────────────────────────────────────────────────
 
-const APP_VERSION = "0.0.34"; // bumped on every deploy — keep in sync with version.json
+const APP_VERSION = "0.0.35"; // bumped on every deploy — keep in sync with version.json
 
 // ─── Backend + Supabase config ───────────────────────────────────────────────
 const SUPABASE_URL = "https://oyrlzqbjcsliesvunbwj.supabase.co";
@@ -1516,7 +1516,7 @@ function ContactEditForm({contact, contactTags, allKnownTags, isArchived, onSave
   const [name,   setName]   = useState(contact.name);
   const [org,    setOrg]    = useState(contact.org||"");
   const [primary,setPrimary]= useState(contact.emails[0]);
-  const [r2m,    setR2m]    = useState(contact.r2mDays||3);
+  const [r2m,    setR2m]    = useState(contact.r2mDays ?? 3);
   const [tags,   setTags]   = useState([...(contactTags||[])]);
   const [archived, setArchived] = useState(!!isArchived);
   const [isNews,   setIsNews]   = useState(!!contact.isNews);
@@ -3319,7 +3319,7 @@ function App({onSignOut}) {
             avatar: initialsOf(c.name || emails[0] || ''),
             color: c.color || colorFromSeed(c.name || emails[0] || ''),
             portrait: c.portrait_url || null,
-            r2mDays: c.r2m_days || 3,
+            r2mDays: c.r2m_days ?? 3,
             isNews: !!c.is_news,
             isMuted: !!c.is_muted,
             archivedAt: c.archived_at || null,
