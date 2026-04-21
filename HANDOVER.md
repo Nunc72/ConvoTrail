@@ -1,6 +1,6 @@
 # ConvoTrail — handover
 
-_Last updated: 2026-04-21, v0.0.19_
+_Last updated: 2026-04-21, v0.0.20_
 
 A conversation-centric email client. Mail stays on IMAP (Gmail/iCloud/own);
 ConvoTrail adds grouping per contact, tags, revert-to-me, merge/unmerge,
@@ -128,6 +128,7 @@ auth.users                        (managed by Supabase)
 
 ## Recent history (terse)
 
+- v0.0.20 — fix duplicate Sent row: APPEND uses SPECIAL-USE `\Sent` path (same as sync)
 - v0.0.19 — drafts persist (CRUD + /bootstrap) + per-contact active-message memory
 - v0.0.18 — mail send (SMTP via nodemailer + IMAP APPEND to Sent)
 - v0.0.17 — Settings → Mail accounts: master-detail UI + PATCH /mail-accounts/:id

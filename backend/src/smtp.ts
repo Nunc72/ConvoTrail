@@ -94,8 +94,10 @@ export async function sendMail(input: SendInput): Promise<SendResult> {
     return { ok: false, error: `SMTP: ${e instanceof Error ? e.message : String(e)}` };
   }
 
-  // 3. APPEND to Sent (best-effort; message is already delivered)
-  const folder = input.sentFolder || "Sent";
+  // 3. APPEND to Sent (best-effort; message is already delivered).
+  //    Folder path must match what sync.ts uses (SPECIAL-USE \\Sent) so the
+  //    row we insert here dedups against the same row when sync later runs.
+  //    iCloud calls it "Sent Messages"; generic IMAP typically "Sent".
   const client = new ImapFlow({
     host: input.imap.host,
     port: input.imap.port,
@@ -106,6 +108,11 @@ export async function sendMail(input: SendInput): Promise<SendResult> {
   });
   try {
     await client.connect();
+    let folder = input.sentFolder || "";
+    if (!folder) {
+      const list = await client.list();
+      folder = list.find(m => m.specialUse === "\\Sent")?.path || "Sent";
+    }
     const res = await client.append(folder, raw, ["\\Seen"]);
     await client.logout();
     if (res && typeof res.uid === "number" && typeof res.uidValidity !== "undefined") {
