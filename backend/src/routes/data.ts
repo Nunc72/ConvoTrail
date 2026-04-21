@@ -10,8 +10,10 @@ export async function registerDataRoutes(app: FastifyInstance) {
     const limit = Math.min(Number(req.query.limit) || 500, 2000);
     const sb = supabaseWithJwt(req.authJwt!);
     const [accountsRes, contactsRes, messagesRes, draftsRes] = await Promise.all([
-      sb.from("mail_accounts").select("id, email, display_name, provider, last_sync_at")
-        .order("created_at", { ascending: true }),
+      sb.from("mail_accounts").select(
+        "id, email, display_name, provider, last_sync_at, auto_sync, " +
+        "retention_deleted_days, retention_spam_days",
+      ).order("created_at", { ascending: true }),
       sb.from("contacts").select(
         "id, name, org, color, portrait_url, r2m_days, primary_email, archived_at, " +
         "contact_emails(email, is_news, is_muted)",

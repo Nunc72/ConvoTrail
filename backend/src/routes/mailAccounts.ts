@@ -19,6 +19,10 @@ interface AccountInput {
   smtp_port?: number;
   smtp_user?: string;
   smtp_password?: string;
+  // Retention / auto-sync preferences (nullable ints; null = keep forever)
+  retention_deleted_days?: number | null;
+  retention_spam_days?: number | null;
+  auto_sync?: boolean;
 }
 
 export async function registerMailAccountsRoutes(app: FastifyInstance) {
@@ -29,7 +33,11 @@ export async function registerMailAccountsRoutes(app: FastifyInstance) {
     const sb = supabaseWithJwt(req.authJwt!);
     const { data, error } = await sb
       .from("mail_accounts")
-      .select("id, email, provider, display_name, imap_host, imap_port, imap_user, smtp_host, smtp_port, smtp_user, last_sync_at, last_error, created_at")
+      .select(
+        "id, email, provider, display_name, imap_host, imap_port, imap_user, " +
+        "smtp_host, smtp_port, smtp_user, last_sync_at, last_error, created_at, " +
+        "retention_deleted_days, retention_spam_days, auto_sync",
+      )
       .order("created_at", { ascending: true });
     if (error) return reply.internalServerError(error.message);
     return { accounts: data };
@@ -65,13 +73,18 @@ export async function registerMailAccountsRoutes(app: FastifyInstance) {
         `INSERT INTO mail_accounts (
            user_id, email, provider, display_name,
            imap_host, imap_port, imap_user, imap_cred_enc,
-           smtp_host, smtp_port, smtp_user, smtp_cred_enc
-         ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
-         RETURNING id, email, provider, display_name, imap_host, imap_port, imap_user, smtp_host, smtp_port, smtp_user, created_at`,
+           smtp_host, smtp_port, smtp_user, smtp_cred_enc,
+           retention_deleted_days, retention_spam_days, auto_sync
+         ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)
+         RETURNING id, email, provider, display_name, imap_host, imap_port, imap_user,
+                   smtp_host, smtp_port, smtp_user, retention_deleted_days,
+                   retention_spam_days, auto_sync, created_at`,
         [
           req.authUser!.id, b.email, b.provider, b.display_name ?? null,
           b.imap_host ?? null, b.imap_port ?? null, b.imap_user ?? null, imapEnc,
           b.smtp_host ?? null, b.smtp_port ?? null, b.smtp_user ?? null, smtpEnc,
+          b.retention_deleted_days ?? null, b.retention_spam_days ?? null,
+          b.auto_sync ?? false,
         ],
       );
       return { account: r.rows[0] };
@@ -111,6 +124,9 @@ export async function registerMailAccountsRoutes(app: FastifyInstance) {
     if (b.smtp_port     !== undefined) setField("smtp_port",    b.smtp_port || null);
     if (b.smtp_user     !== undefined) setField("smtp_user",    b.smtp_user || null);
     if (b.smtp_password)               setField("smtp_cred_enc", encrypt(b.smtp_password));
+    if (b.retention_deleted_days !== undefined) setField("retention_deleted_days", b.retention_deleted_days);
+    if (b.retention_spam_days    !== undefined) setField("retention_spam_days",    b.retention_spam_days);
+    if (b.auto_sync              !== undefined) setField("auto_sync",              !!b.auto_sync);
 
     if (sets.length === 0) return reply.badRequest("no updatable fields provided");
 

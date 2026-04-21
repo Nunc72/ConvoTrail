@@ -72,7 +72,7 @@ const { useState, useMemo, useRef, useEffect, useCallback } = React;
 
 // ─── Constants ───────────────────────────────────────────────────────────────
 
-const APP_VERSION = "0.0.24"; // bumped on every deploy — keep in sync with version.json
+const APP_VERSION = "0.0.25"; // bumped on every deploy — keep in sync with version.json
 
 // ─── Backend + Supabase config ───────────────────────────────────────────────
 const SUPABASE_URL = "https://oyrlzqbjcsliesvunbwj.supabase.co";
@@ -526,6 +526,9 @@ function SettingsModal({onClose, initialTab='profile', signatures, setSignatures
       smtp_port: acc.smtp_port || 587,
       smtp_user: acc.smtp_user || '',
       smtp_password: '',
+      retention_deleted_days: acc.retention_deleted_days ?? null,
+      retention_spam_days:    acc.retention_spam_days    ?? null,
+      auto_sync:              !!acc.auto_sync,
     });
     setMacSelectedId(acc.id);
     setMacFormErr(''); setMacFormInfo(''); setMacSyncResult(null);
@@ -559,6 +562,9 @@ function SettingsModal({onClose, initialTab='profile', signatures, setSignatures
           display_name: macForm.display_name,
           imap_host: macForm.imap_host, imap_port: macForm.imap_port, imap_user: macForm.imap_user,
           smtp_host: macForm.smtp_host, smtp_port: macForm.smtp_port, smtp_user: macForm.smtp_user,
+          retention_deleted_days: macForm.retention_deleted_days,
+          retention_spam_days:    macForm.retention_spam_days,
+          auto_sync:              !!macForm.auto_sync,
         };
         if (macForm.imap_password) body.imap_password = macForm.imap_password;
         if (macForm.smtp_password) body.smtp_password = macForm.smtp_password;
@@ -713,6 +719,39 @@ function SettingsModal({onClose, initialTab='profile', signatures, setSignatures
           </div>
         </div>
 
+        {!isNew && (
+          <>
+            <div className="text-xs font-semibold text-gray-500 uppercase tracking-wider pb-1 border-b border-gray-100 pt-2">Mailbox maintenance</div>
+            <div className="grid grid-cols-2 gap-3">
+              <div className="col-span-2">
+                <div className="text-xs text-gray-400 mb-1">Permanently erase deleted messages</div>
+                <select
+                  value={macForm.retention_deleted_days ?? ''}
+                  onChange={e=>macSetField('retention_deleted_days', e.target.value === '' ? null : Number(e.target.value))}
+                  className={macInputCls + " bg-white text-gray-700"}>
+                  {RETENTION_OPTIONS.map(o => <option key={String(o.value)} value={o.value ?? ''}>{o.label}</option>)}
+                </select>
+              </div>
+              <div className="col-span-2">
+                <div className="text-xs text-gray-400 mb-1">Permanently erase spam messages</div>
+                <select
+                  value={macForm.retention_spam_days ?? ''}
+                  onChange={e=>macSetField('retention_spam_days', e.target.value === '' ? null : Number(e.target.value))}
+                  className={macInputCls + " bg-white text-gray-700"}>
+                  {RETENTION_OPTIONS.map(o => <option key={String(o.value)} value={o.value ?? ''}>{o.label}</option>)}
+                </select>
+              </div>
+              <label className="col-span-2 flex items-center gap-2 cursor-pointer pt-1">
+                <input type="checkbox" checked={!!macForm.auto_sync}
+                  onChange={e=>macSetField('auto_sync', e.target.checked)}
+                  className="accent-indigo-600"/>
+                <span className="text-sm text-gray-700">Check this account automatically</span>
+                <span className="text-xs text-gray-400">(off = sync only when you click Sync)</span>
+              </label>
+            </div>
+          </>
+        )}
+
         {macFormErr && <div className="px-3 py-2 rounded bg-red-50 text-red-600 text-xs">{macFormErr}</div>}
         {macFormInfo && <div className="px-3 py-2 rounded bg-green-50 text-green-700 text-xs">{macFormInfo}</div>}
         {macSyncResult && macSyncResult.ok && (
@@ -724,33 +763,33 @@ function SettingsModal({onClose, initialTab='profile', signatures, setSignatures
         )}
         {macSyncResult && !macSyncResult.ok && <div className="px-3 py-2 rounded bg-red-50 text-red-600 text-xs">Sync failed: {macSyncResult.error}</div>}
 
-        <div className="flex flex-wrap items-center gap-2 pt-2">
+        <div className="flex items-center gap-2 pt-2">
           <button onClick={macSave} disabled={macBusy!==null || (isNew && !macFormInfo)}
             title={isNew && !macFormInfo ? 'Test the connection first' : ''}
-            className="px-4 py-1.5 text-xs rounded-lg bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 text-white font-medium">
+            className="px-3 py-1.5 text-xs rounded-lg bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 text-white font-medium">
             {macBusy==='save' ? 'Saving…' : 'Save'}
           </button>
           <button onClick={macTest} disabled={macBusy!==null}
-            className="px-4 py-1.5 text-xs rounded-lg bg-gray-100 hover:bg-gray-200 disabled:opacity-50 text-gray-600 font-medium">
-            {macBusy==='test' ? 'Testing…' : 'Test connection'}
+            className="px-3 py-1.5 text-xs rounded-lg bg-gray-100 hover:bg-gray-200 disabled:opacity-50 text-gray-600 font-medium">
+            {macBusy==='test' ? 'Testing…' : 'Test'}
           </button>
           {!isNew && (
             <button onClick={macSync} disabled={macBusy!==null}
-              className="px-4 py-1.5 text-xs rounded-lg bg-gray-100 hover:bg-gray-200 disabled:opacity-50 text-gray-600 font-medium">
-              {macBusy==='sync' ? 'Syncing…' : 'Sync now'}
+              className="px-3 py-1.5 text-xs rounded-lg bg-gray-100 hover:bg-gray-200 disabled:opacity-50 text-gray-600 font-medium">
+              {macBusy==='sync' ? 'Syncing…' : 'Sync'}
             </button>
           )}
           <div className="flex-1"/>
           {isNew && (
             <button onClick={()=>{setMacSelectedId(null); if(isMobile) setMobileSetCol(1);}}
               disabled={macBusy!==null}
-              className="px-4 py-1.5 text-xs rounded-lg bg-gray-100 hover:bg-gray-200 disabled:opacity-50 text-gray-600 font-medium">
+              className="px-3 py-1.5 text-xs rounded-lg bg-gray-100 hover:bg-gray-200 disabled:opacity-50 text-gray-600 font-medium">
               Cancel
             </button>
           )}
           {!isNew && (
             <button onClick={macDelete} disabled={macBusy!==null}
-              className="px-4 py-1.5 text-xs rounded-lg bg-red-50 hover:bg-red-100 disabled:opacity-50 text-red-500 font-medium">
+              className="px-3 py-1.5 text-xs rounded-lg bg-red-50 hover:bg-red-100 disabled:opacity-50 text-red-500 font-medium">
               {macBusy==='delete' ? 'Deleting…' : 'Delete'}
             </button>
           )}
@@ -3034,7 +3073,17 @@ const BLANK_MAC_FORM = {
   provider: 'generic', email: '', display_name: '',
   imap_host: '', imap_port: 993, imap_user: '', imap_password: '',
   smtp_host: '', smtp_port: 587, smtp_user: '', smtp_password: '',
+  retention_deleted_days: null, retention_spam_days: null, auto_sync: false,
 };
+const RETENTION_OPTIONS = [
+  { value: null,  label: 'Never (keep on server)' },
+  { value: 7,    label: 'After 7 days' },
+  { value: 14,   label: 'After 14 days' },
+  { value: 30,   label: 'After 1 month' },
+  { value: 90,   label: 'After 3 months' },
+  { value: 180,  label: 'After 6 months' },
+  { value: 365,  label: 'After 1 year' },
+];
 
 function App({onSignOut}) {
   // Mobile
