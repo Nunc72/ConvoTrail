@@ -72,7 +72,7 @@ const { useState, useMemo, useRef, useEffect, useCallback } = React;
 
 // ─── Constants ───────────────────────────────────────────────────────────────
 
-const APP_VERSION = "0.0.32"; // bumped on every deploy — keep in sync with version.json
+const APP_VERSION = "0.0.33"; // bumped on every deploy — keep in sync with version.json
 
 // ─── Backend + Supabase config ───────────────────────────────────────────────
 const SUPABASE_URL = "https://oyrlzqbjcsliesvunbwj.supabase.co";
@@ -3897,10 +3897,13 @@ function App({onSignOut}) {
     setEditingContact(null);
     // Persist everything that has a server column. primary_email only fires if
     // it actually changed — the backend revalidates against contact_emails.
+    const r2mNum = Number(r2mDays);
     const body = {
       name,
       org: org || null,
-      r2m_days: Number(r2mDays) || 3,
+      // 0 is a valid value (instant r2m); the old `|| 3` fallback silently
+      // replaced it. Only fall back when we can't parse a finite number.
+      r2m_days: Number.isFinite(r2mNum) ? r2mNum : 3,
       is_news: !!isNews,
       is_muted: !!isMuted,
       archived: !!archived,
