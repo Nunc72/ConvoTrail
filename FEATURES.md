@@ -1,6 +1,6 @@
 # ConvoTrail — feature roadmap
 
-_Last updated: 2026-04-21, v0.0.20_
+_Last updated: 2026-04-21, v0.0.21_
 
 Status legend:
 - ✅ **Done** — works end-to-end, persists where relevant
@@ -24,13 +24,13 @@ this doc covers product.
 - ✅ Contact merge / unmerge (persisted)
 - ✅ Send mail (SMTP + best-effort IMAP APPEND to Sent)
 - ✅ Drafts: save / edit / delete (synced across devices), auto-deleted after Send
+- ✅ Mark-read persisted (IMAP \\Seen + DB) + auto-mark-read on open
 - ✅ Per-contact memory: remembers last-opened message per contact
 - ✅ Client-side search across loaded messages
 - ✅ Filter tabs (Now/All/In/Out/Draft/Deleted)
 - ✅ Version banner + click-to-check-for-update
 
 **UI works but mutations don't persist** (lost on refresh)
-- 🚧 Mark as read / unread
 - 🚧 Revert-to-me dismiss / snooze / seen
 - 🚧 Tags on messages (add/remove)
 - 🚧 Tags on contacts (add/remove)
@@ -79,8 +79,8 @@ Turns in-memory actions into durable ones. Highest value for daily usability.
 2. ✅ **1.2 — Contact merge + unmerge persisted** — shipped v0.0.14–0.0.15
 3. ✅ **1.3 — Mail Send (SMTP + IMAP APPEND to Sent)** — shipped v0.0.18
 4. ✅ **1.4 — Save draft persisted + active-message-per-contact memory** — shipped v0.0.19
-5. ⬜ **1.5 — Mark-read persisted** (flags.seen → IMAP \\Seen + DB) ← *next*
-6. ⬜ **1.6 — Delete persisted** (soft-delete in DB, IMAP EXPUNGE via retention cron)
+5. ✅ **1.5 — Mark-read persisted** (flags.seen → IMAP \\Seen + DB) — shipped v0.0.21
+6. ⬜ **1.6 — Delete persisted** (soft-delete in DB, IMAP EXPUNGE via retention cron) ← *next*
 7. ⬜ **1.7 — Tags on messages** (CRUD + persist)
 8. ⬜ **1.8 — Tags on contacts** (CRUD + persist)
 9. ⬜ **1.9 — Contact edit (name/org/color/r2m_days)** persist
@@ -95,10 +95,7 @@ Turns in-memory actions into durable ones. Highest value for daily usability.
 
 **1.4 Drafts + per-contact memory** — shipped v0.0.19.
 
-**1.5 Mark-read** (½ day)
-- Backend: `PATCH /messages/:id/flags { seen: true }` → update DB + IMAP `\Seen`.
-- Frontend: optimistic update, revert on error.
-- Auto-mark-read on open (configurable later).
+**1.5 Mark-read** — shipped v0.0.21.
 
 **1.6 Delete** (½ day)
 - Backend: `PATCH /messages/:id/delete` → set `deleted_at = now()` in DB. Schedule IMAP EXPUNGE via cron after 90d.

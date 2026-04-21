@@ -72,7 +72,7 @@ const { useState, useMemo, useRef, useEffect, useCallback } = React;
 
 // ─── Constants ───────────────────────────────────────────────────────────────
 
-const APP_VERSION = "0.0.20"; // bumped on every deploy — keep in sync with version.json
+const APP_VERSION = "0.0.21"; // bumped on every deploy — keep in sync with version.json
 
 // ─── Backend + Supabase config ───────────────────────────────────────────────
 const SUPABASE_URL = "https://oyrlzqbjcsliesvunbwj.supabase.co";
@@ -3590,6 +3590,26 @@ function App({onSignOut}) {
     navigateTo(nid,alwaysGo, forceFade ? 'fade-fast' : (nid ? 'slide' : 'none'));
     setActionToast(`Mail was snoozed for ${days} days`);
   }
+  // Persist a seen=true flag to backend (IMAP \Seen + DB). Optimistic flip is
+  // already applied by the caller; we only need to revert on failure.
+  function persistSeen(id) {
+    return apiFetch(`/messages/${id}/flags`, { method:'PATCH', body: JSON.stringify({ seen: true }) })
+      .catch(e => {
+        setMessageList(prev=>prev.map(m=>m.id===id?{...m,read:false}:m));
+        setActionToast('Mark read failed: ' + e.message);
+      });
+  }
+  // Auto-mark-read when the user opens an unread incoming message. Fires only
+  // for messages that actually need the flag flipped; skips drafts & deleted.
+  useEffect(() => {
+    if (selMsg == null) return;
+    const m = messageList.find(x => x.id === selMsg);
+    if (!m || m.read || m.draft || m.dir !== 'in' || deletedIds.includes(m.id)) return;
+    setMessageList(prev => prev.map(x => x.id === selMsg ? {...x, read: true} : x));
+    persistSeen(selMsg);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selMsg]);
+
   function handleMarkRead(id){
     captureAlert(id);
     const {id:nid,alwaysGo,switchTab,forceFade}=getDestination(id,'seen');
@@ -3597,6 +3617,7 @@ function App({onSignOut}) {
 
     navigateTo(nid,alwaysGo, forceFade ? 'fade-fast' : (nid ? 'slide' : 'none'));
     setActionToast('Mail has been seen');
+    persistSeen(id);
   }
   function handleSnoozeMsg(id){
     captureAlert(id);
@@ -3608,6 +3629,7 @@ function App({onSignOut}) {
 
     navigateTo(nid,alwaysGo, forceFade ? 'fade-fast' : (nid ? 'slide' : 'none'));
     setActionToast(`Mail was snoozed for ${days} days`);
+    persistSeen(id);
   }
   function handleReply(msg){setReplyTo(msg);setComposeContact(null);setComposeDraft(null);setShowCompose(true);setMergeContact(null);if(isMobile)setMobileCol(2);}
   function handleNewMsg(contact=null){setReplyTo(null);setComposeContact(contact);setComposeDraft(null);setShowCompose(true);setMergeContact(null);setTagComposeInit(null);if(isMobile)setMobileCol(2);}

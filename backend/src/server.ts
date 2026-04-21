@@ -7,6 +7,7 @@ import { registerMailAccountsRoutes } from "./routes/mailAccounts.js";
 import { registerDataRoutes } from "./routes/data.js";
 import { registerContactsRoutes } from "./routes/contacts.js";
 import { registerDraftsRoutes } from "./routes/drafts.js";
+import { registerMessagesRoutes } from "./routes/messages.js";
 
 const app = Fastify({
   logger: {
@@ -35,6 +36,7 @@ await registerMailAccountsRoutes(app);
 await registerDataRoutes(app);
 await registerContactsRoutes(app);
 await registerDraftsRoutes(app);
+await registerMessagesRoutes(app);
 
 try {
   await app.listen({ port: config.port, host: config.host });

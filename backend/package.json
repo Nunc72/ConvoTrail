@@ -1,6 +1,6 @@
 {
   "name": "convotrail-backend",
-  "version": "0.0.20",
+  "version": "0.0.21",
   "private": true,
   "description": "ConvoTrail backend — IMAP/SMTP proxy, sync, API",
   "type": "module",
