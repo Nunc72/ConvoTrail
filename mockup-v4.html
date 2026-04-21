@@ -72,7 +72,7 @@ const { useState, useMemo, useRef, useEffect, useCallback } = React;
 
 // ─── Constants ───────────────────────────────────────────────────────────────
 
-const APP_VERSION = "0.0.35"; // bumped on every deploy — keep in sync with version.json
+const APP_VERSION = "0.0.36"; // bumped on every deploy — keep in sync with version.json
 
 // ─── Backend + Supabase config ───────────────────────────────────────────────
 const SUPABASE_URL = "https://oyrlzqbjcsliesvunbwj.supabase.co";
@@ -1457,22 +1457,11 @@ function ComposePane({replyTo, replyKind='reply', toContact, draft, initTo:initT
           </div>
         </div>
       )}
-      {/* Tags row — no "Tags:" label on mobile, same as IN/OUT mails */}
+      {/* Tags row — label-less on both layouts, matching IN / OUT mails */}
       <div className="px-4 py-2 border-t border-gray-100 flex-shrink-0">
-        {isMobile?(
-          <TagPicker current={msgTags} suggestions={allKnownTags}
-            onAdd={t=>setMsgTags(prev=>[...prev.filter(x=>x!==t),t])}
-            onRemove={t=>setMsgTags(prev=>prev.filter(x=>x!==t))}/>
-        ):(
-          <div className="flex items-center gap-2">
-            <span className="text-xs text-gray-400 w-10 flex-shrink-0">Tags:</span>
-            <div className="flex-1 min-w-0">
-              <TagPicker current={msgTags} suggestions={allKnownTags}
-                onAdd={t=>setMsgTags(prev=>[...prev.filter(x=>x!==t),t])}
-                onRemove={t=>setMsgTags(prev=>prev.filter(x=>x!==t))}/>
-            </div>
-          </div>
-        )}
+        <TagPicker current={msgTags} suggestions={allKnownTags}
+          onAdd={t=>setMsgTags(prev=>[...prev.filter(x=>x!==t),t])}
+          onRemove={t=>setMsgTags(prev=>prev.filter(x=>x!==t))}/>
       </div>
       </div>{/* end bounce wrapper */}
       </div>{/* end scroll/contents wrapper */}
