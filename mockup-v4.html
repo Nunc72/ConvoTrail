@@ -72,7 +72,7 @@ const { useState, useMemo, useRef, useEffect, useCallback } = React;
 
 // ─── Constants ───────────────────────────────────────────────────────────────
 
-const APP_VERSION = "0.0.33"; // bumped on every deploy — keep in sync with version.json
+const APP_VERSION = "0.0.34"; // bumped on every deploy — keep in sync with version.json
 
 // ─── Backend + Supabase config ───────────────────────────────────────────────
 const SUPABASE_URL = "https://oyrlzqbjcsliesvunbwj.supabase.co";
@@ -1166,11 +1166,43 @@ function SettingsModal({onClose, initialTab='profile', signatures, setSignatures
 
 const SIG_SEP = '\n\n';
 
-function ComposePane({replyTo, toContact, draft, initTo:initToOverride="", initCC="", initBCC="", initTag=null, initMsgTags=[], allKnownTags=[], selAccounts=[], signatures=[], accountSigs={}, onSend, onSaveDraft, onDeleteDraft, onClose, mobileBack, mobileBackLabel}) {
+function ComposePane({replyTo, replyKind='reply', toContact, draft, initTo:initToOverride="", initCC="", initBCC="", initTag=null, initMsgTags=[], allKnownTags=[], selAccounts=[], myEmails=[], signatures=[], accountSigs={}, onSend, onSaveDraft, onDeleteDraft, onClose, mobileBack, mobileBackLabel}) {
   const isMobile = typeof window !== 'undefined' && window.innerWidth < 768;
-  const initTo = draft?.to ?? (replyTo ? (replyTo.dir==="out"?replyTo.to:replyTo.from) : (initToOverride||toContact?.emails[0]||""));
-  const initSubj = draft?.subject ?? (replyTo ? "Re: "+replyTo.subject : "");
-  const initBody = draft?.body ?? (replyTo ? "\n\n"+quoteHeader(replyTo) : "");
+  const isReply     = !!replyTo && replyKind !== 'forward';
+  const isReplyAll  = !!replyTo && replyKind === 'reply-all';
+  const isForward   = !!replyTo && replyKind === 'forward';
+
+  // To: forward starts empty; reply / reply-all target the original sender
+  // (for incoming) or the original recipient (for outgoing).
+  const primaryReplyTarget = replyTo
+    ? (replyTo.dir === "out" ? replyTo.to : replyTo.from)
+    : "";
+  const initTo = draft?.to ?? (
+    isForward ? "" :
+    replyTo ? primaryReplyTarget :
+    (initToOverride || toContact?.emails[0] || "")
+  );
+
+  // CC: reply-all fills every other addressee minus our own accounts and the
+  // primary reply target, so we don't CC ourselves or duplicate the "To".
+  const myEmailSet = new Set((myEmails || selAccounts || []).map(e => (e||'').toLowerCase()));
+  const computedReplyAllCC = (isReplyAll && replyTo)
+    ? [...new Set([
+        ...(replyTo.toList || []),
+        ...(replyTo.ccList || []),
+      ])].filter(e =>
+        e && e.toLowerCase() !== (primaryReplyTarget || '').toLowerCase()
+        && !myEmailSet.has(e.toLowerCase())
+      ).join(', ')
+    : "";
+  const initCCResolved = draft?.cc ?? (computedReplyAllCC || initCC);
+
+  const initSubj = draft?.subject ?? (
+    isForward ? "Fwd: " + (replyTo?.subject || '') :
+    replyTo ? "Re: " + (replyTo.subject || '') :
+    ""
+  );
+  const initBody = draft?.body ?? (replyTo ? "\n\n" + quoteHeader(replyTo) : "");
 
   // Compute initial auto-signature (only for new messages, not replies/drafts)
   const initFromAcct = selAccounts[0] || '';
@@ -1181,14 +1213,14 @@ function ComposePane({replyTo, toContact, draft, initTo:initToOverride="", initC
 
   const [to,setTo]=useState(initTo);
   const [from,setFrom]=useState(initFromAcct);
-  const [cc,setCc]=useState(initCC);
+  const [cc,setCc]=useState(initCCResolved);
   const [bcc,setBcc]=useState(initBCC);
   const [subj,setSubj]=useState(initSubj);
   const [body,setBody]=useState(initBodyWithSig);
   const [activeSigId,setActiveSigId]=useState(initAutoSig?.id||null);
   const [r2mDays,setR2mDays]=useState(toContact?.r2mDays??3);
   const [r2mHover,setR2mHover]=useState(false);
-  const [showCC,setShowCC]=useState(!!initCC);
+  const [showCC,setShowCC]=useState(!!initCCResolved);
   const [showBCC,setShowBCC]=useState(!!initBCC);
   const [msgTags,setMsgTags]=useState(initTag?[...new Set([...initMsgTags,initTag])]:initMsgTags);
   const [showDrop,    setShowDrop]    = useState(false);
@@ -1279,7 +1311,11 @@ function ComposePane({replyTo, toContact, draft, initTo:initToOverride="", initC
   },[showFromDrop]);
 
   const hasMulti = toContact && toContact.emails.length>1 && !replyTo && !draft;
-  const title = draft?"Edit draft":replyTo?"Reply":"New message";
+  const title = draft ? "Edit draft"
+    : isForward ? "Forward"
+    : isReplyAll ? "Reply all"
+    : replyTo ? "Reply"
+    : "New message";
 
   return (
     <div className="flex flex-col h-full bg-white">
@@ -1600,7 +1636,7 @@ function fibSnoozeDays(count) {
   return b;
 }
 
-function MessageDetail({message,contact,isDeleted,msgTags,allTags,onReply,onDelete,onRecover,onDismissR2m,onR2mSeen,onR2mSnooze,onMarkRead,onSnooze,onSpam,snoozeCount=0,onAddTag,onRemoveTag,selAccounts=[],fadeOut=false,fadeOutFast=false,slideIn=false,slideOut=false,fadingAlert=null,onHeaderHeight,mobileBack,mobileBackLabel}) {
+function MessageDetail({message,contact,isDeleted,msgTags,allTags,onReply,onReplyAll,onForward,onDelete,onRecover,onDismissR2m,onR2mSeen,onR2mSnooze,onMarkRead,onSnooze,onSpam,snoozeCount=0,onAddTag,onRemoveTag,selAccounts=[],fadeOut=false,fadeOutFast=false,slideIn=false,slideOut=false,fadingAlert=null,onHeaderHeight,mobileBack,mobileBackLabel}) {
   const isMobile = typeof window !== 'undefined' && window.innerWidth < 768;
   const headerRef = useRef(null);
   const [headerH, setHeaderH] = useState(0);
@@ -1756,10 +1792,10 @@ function MessageDetail({message,contact,isDeleted,msgTags,allTags,onReply,onDele
         <button onClick={onReply} className="px-3 py-1.5 text-xs rounded bg-indigo-600 text-white hover:bg-indigo-700 font-medium flex items-center gap-1.5" title="Reply">
           <ReplyIcon size={mob?16:13}/>{!mob&&<span>Reply</span>}
         </button>
-        <button className="px-3 py-1.5 text-xs rounded bg-gray-100 hover:bg-gray-200 text-gray-700 flex items-center gap-1.5" title="Reply all">
+        <button onClick={onReplyAll} className="px-3 py-1.5 text-xs rounded bg-gray-100 hover:bg-gray-200 text-gray-700 flex items-center gap-1.5" title="Reply all">
           <ReplyAllIcon size={mob?16:13}/>{!mob&&<span>Reply all</span>}
         </button>
-        <button className="px-3 py-1.5 text-xs rounded bg-gray-100 hover:bg-gray-200 text-gray-700 flex items-center gap-1.5" title="Forward">
+        <button onClick={onForward} className="px-3 py-1.5 text-xs rounded bg-gray-100 hover:bg-gray-200 text-gray-700 flex items-center gap-1.5" title="Forward">
           <ForwardIcon size={mob?16:13}/>{!mob&&<span>Forward</span>}
         </button>
         <div className="flex-1"/>
@@ -3189,6 +3225,11 @@ function App({onSignOut}) {
               portrait: null,
             };
           }
+          // Recipient breakdown: the to_emails JSONB carries {email, role} for
+          // each addressee. Reply-all needs both lists independently.
+          const allRecipients = Array.isArray(m.to_emails) ? m.to_emails : [];
+          const toList = allRecipients.filter(e => (e.role || 'to') === 'to').map(e => e.email).filter(Boolean);
+          const ccList = allRecipients.filter(e => e.role === 'cc').map(e => e.email).filter(Boolean);
           return {
             id: m.id,
             accountId: m.mail_account_id,
@@ -3197,7 +3238,9 @@ function App({onSignOut}) {
             dir: m.direction,
             subject: m.subject || '(no subject)',
             from: m.from_email || '',
-            to: m.to_emails?.[0]?.email || '',
+            to: toList[0] || allRecipients[0]?.email || '',
+            toList,
+            ccList,
             date: m.date,
             read: !!m.flags?.seen,
             revert2me: r2mActive,
@@ -3457,6 +3500,7 @@ function App({onSignOut}) {
   // Compose
   const [showCompose,  setShowCompose]  = useState(false);
   const [replyTo,      setReplyTo]      = useState(null);
+  const [replyKind,    setReplyKind]    = useState(null); // null | 'reply' | 'reply-all' | 'forward'
   const [composeContact,setComposeContact]=useState(null);
   const [composeDraft, setComposeDraft] = useState(null);
   // Per-contact memory: which message was last open in that contact's thread
@@ -3668,7 +3712,7 @@ function App({onSignOut}) {
   function handleSelectContact(id,e){
     if(e?.shiftKey&&selContact!==null&&selContact!==id){setMergeContact(id);setShowCompose(false);setSelMsg(null);return;}
     setSelContact(id);setMergeContact(null);setSelTag(null);
-    setShowCompose(false);setReplyTo(null);setComposeContact(null);setComposeDraft(null);setEditingContact(null);
+    setShowCompose(false);setReplyTo(null);setReplyKind(null);setComposeContact(null);setComposeDraft(null);setEditingContact(null);
     setSearchQuery('');setSearchScope('all');
     if(isMobile) { setMobileCol(1); setSelMsg(null); return; }
     // 1. If we remember a previously-opened message for this contact, prefer that
@@ -3692,7 +3736,7 @@ function App({onSignOut}) {
     if(next) { setSelContact(null);setMergeContact(null);setSelMsg(null);setShowCompose(false);setEditingContact(null);setSearchQuery('');setSearchScope('all'); }
   }
   function handleSelectMsg(id){
-    setSelMsg(id);setShowCompose(false);setReplyTo(null);setComposeContact(null);setComposeDraft(null);
+    setSelMsg(id);setShowCompose(false);setReplyTo(null);setReplyKind(null);setComposeContact(null);setComposeDraft(null);
     if(isMobile) setMobileCol(2);
   }
   async function handleMerge(keep,discard,emails){
@@ -3817,12 +3861,14 @@ function App({onSignOut}) {
     setActionToast(`Mail was snoozed for ${days} days`);
     persistSeen(id);
   }
-  function handleReply(msg){setReplyTo(msg);setComposeContact(null);setComposeDraft(null);setShowCompose(true);setMergeContact(null);if(isMobile)setMobileCol(2);}
-  function handleNewMsg(contact=null){setReplyTo(null);setComposeContact(contact);setComposeDraft(null);setShowCompose(true);setMergeContact(null);setTagComposeInit(null);if(isMobile)setMobileCol(2);}
-  function handleSelectDraft(msg){setComposeDraft(msg);setReplyTo(null);setComposeContact(null);setShowCompose(true);setMergeContact(null);setSelMsg(null);if(isMobile)setMobileCol(2);}
+  function handleReply(msg){setReplyTo(msg);setReplyKind('reply');setComposeContact(null);setComposeDraft(null);setShowCompose(true);setMergeContact(null);if(isMobile)setMobileCol(2);}
+  function handleReplyAll(msg){setReplyTo(msg);setReplyKind('reply-all');setComposeContact(null);setComposeDraft(null);setShowCompose(true);setMergeContact(null);if(isMobile)setMobileCol(2);}
+  function handleForward(msg){setReplyTo(msg);setReplyKind('forward');setComposeContact(null);setComposeDraft(null);setShowCompose(true);setMergeContact(null);if(isMobile)setMobileCol(2);}
+  function handleNewMsg(contact=null){setReplyTo(null);setReplyKind(null);setComposeContact(contact);setComposeDraft(null);setShowCompose(true);setMergeContact(null);setTagComposeInit(null);if(isMobile)setMobileCol(2);}
+  function handleSelectDraft(msg){setComposeDraft(msg);setReplyTo(null);setReplyKind(null);setComposeContact(null);setShowCompose(true);setMergeContact(null);setSelMsg(null);if(isMobile)setMobileCol(2);}
   function handleCloseCompose(){
     const origin = composeOrigin;
-    setShowCompose(false);setReplyTo(null);setComposeContact(null);setComposeDraft(null);setTagComposeInit(null);
+    setShowCompose(false);setReplyTo(null);setReplyKind(null);setComposeContact(null);setComposeDraft(null);setTagComposeInit(null);
     setComposeOrigin(null);
     if(isMobile){
       // Route back based on where compose was opened from
@@ -4070,7 +4116,7 @@ function App({onSignOut}) {
     const ccAddr=Object.entries(roles).filter(([,r])=>r==="CC").map(([e])=>e).join(", ");
     const bccAddr=Object.entries(roles).filter(([,r])=>r==="BCC").map(([e])=>e).join(", ");
     setTagComposeInit({to:toAddr,cc:ccAddr,bcc:bccAddr,tag:selTag});
-    setReplyTo(null);setComposeContact(null);setComposeDraft(null);setShowCompose(true);
+    setReplyTo(null);setReplyKind(null);setComposeContact(null);setComposeDraft(null);setShowCompose(true);
     if(isMobile) setMobileCol(2);
   }
 
@@ -4176,7 +4222,7 @@ function App({onSignOut}) {
         /* Mobile topbar: logo | search (center) | compose + user */
         <div className="flex items-center bg-white border-b border-gray-200 h-12 px-3 flex-shrink-0 gap-2">
           {/* Left: logo */}
-          <button onClick={()=>{setSelContact(null);setMergeContact(null);setSelMsg(null);setSelTag(null);setShowCompose(false);setReplyTo(null);setComposeContact(null);setComposeDraft(null);setEditingContact(null);setMobileCol(0);}}
+          <button onClick={()=>{setSelContact(null);setMergeContact(null);setSelMsg(null);setSelTag(null);setShowCompose(false);setReplyTo(null);setReplyKind(null);setComposeContact(null);setComposeDraft(null);setEditingContact(null);setMobileCol(0);}}
             className="font-bold text-indigo-600 text-base tracking-tight flex-shrink-0">
             ConvoMail
           </button>
@@ -4243,7 +4289,7 @@ function App({onSignOut}) {
         <div className="flex items-stretch bg-white border-b border-gray-200 h-12 flex-shrink-0">
           {/* Col-1 zone: logo */}
           <div style={{width:colWidths[0]+"%",minWidth:"10%",flexShrink:0}} className="flex items-center px-4">
-            <button onClick={()=>{setSelContact(null);setMergeContact(null);setSelMsg(null);setSelTag(null);setShowCompose(false);setReplyTo(null);setComposeContact(null);setComposeDraft(null);setEditingContact(null);}}
+            <button onClick={()=>{setSelContact(null);setMergeContact(null);setSelMsg(null);setSelTag(null);setShowCompose(false);setReplyTo(null);setReplyKind(null);setComposeContact(null);setComposeDraft(null);setEditingContact(null);}}
               className="font-bold text-indigo-600 text-lg tracking-tight hover:text-indigo-800 transition-colors">
               ConvoMail
             </button>
@@ -4373,7 +4419,8 @@ function App({onSignOut}) {
               <div style={{height:'100%', overflow:'hidden', position:'relative'}}>
                 {showCompose?(
                   <ComposePane key={`${replyTo?.id??"x"}-${composeContact?.id??"x"}-${composeDraft?.id??"x"}-${tagComposeInit?.to??"x"}`}
-                    replyTo={replyTo} toContact={composeContact} draft={composeDraft}
+                    replyTo={replyTo} replyKind={replyKind} toContact={composeContact} draft={composeDraft}
+                    myEmails={mailAccounts.map(a=>(a.email||'').toLowerCase())}
                     initTo={tagComposeInit?.to??""} initCC={tagComposeInit?.cc??""} initBCC={tagComposeInit?.bcc??""} initTag={tagComposeInit?.tag??null}
                     initMsgTags={composeDraft?msgTags[composeDraft.id]||[]:replyTo?msgTags[replyTo.id]||[]:[]}
                     allKnownTags={allKnownTags} selAccounts={selAccounts}
@@ -4393,7 +4440,8 @@ function App({onSignOut}) {
                     isDeleted={selMsg!==null&&deletedIds.includes(selMsg)}
                     msgTags={msgTags[selMsg]||[]} allTags={allKnownTags}
                     selAccounts={selAccounts}
-                    onReply={()=>handleReply(selectedMsg)} onDelete={()=>handleDelete(selMsg)} onRecover={()=>handleRecover(selMsg)}
+                    onReply={()=>handleReply(selectedMsg)} onReplyAll={()=>handleReplyAll(selectedMsg)} onForward={()=>handleForward(selectedMsg)}
+                    onDelete={()=>handleDelete(selMsg)} onRecover={()=>handleRecover(selMsg)}
                     onDismissR2m={handleDismissR2m} onR2mSeen={handleR2mSeen} onR2mSnooze={handleR2mSnooze}
                     onMarkRead={handleMarkRead} onSnooze={handleSnoozeMsg} onSpam={handleSpam}
                     snoozeCount={msgSnoozeCounts[selMsg]||0}
@@ -4435,7 +4483,8 @@ function App({onSignOut}) {
             <div style={{width:colWidths[2]+"%",minWidth:"10%",overflow:"hidden"}} className="relative">
               {showCompose?(
                 <ComposePane key={`${replyTo?.id??"x"}-${composeContact?.id??"x"}-${composeDraft?.id??"x"}-${tagComposeInit?.to??"x"}`}
-                  replyTo={replyTo} toContact={composeContact} draft={composeDraft}
+                  replyTo={replyTo} replyKind={replyKind} toContact={composeContact} draft={composeDraft}
+                  myEmails={mailAccounts.map(a=>(a.email||'').toLowerCase())}
                   initTo={tagComposeInit?.to??""} initCC={tagComposeInit?.cc??""} initBCC={tagComposeInit?.bcc??""} initTag={tagComposeInit?.tag??null}
                   initMsgTags={composeDraft?msgTags[composeDraft.id]||[]:replyTo?msgTags[replyTo.id]||[]:[]}
                   allKnownTags={allKnownTags}
@@ -4448,7 +4497,8 @@ function App({onSignOut}) {
                   isDeleted={selMsg!==null&&deletedIds.includes(selMsg)}
                   msgTags={msgTags[selMsg]||[]} allTags={allKnownTags}
                   selAccounts={selAccounts}
-                  onReply={()=>handleReply(selectedMsg)} onDelete={()=>handleDelete(selMsg)} onRecover={()=>handleRecover(selMsg)}
+                  onReply={()=>handleReply(selectedMsg)} onReplyAll={()=>handleReplyAll(selectedMsg)} onForward={()=>handleForward(selectedMsg)}
+                  onDelete={()=>handleDelete(selMsg)} onRecover={()=>handleRecover(selMsg)}
                   onDismissR2m={handleDismissR2m} onR2mSeen={handleR2mSeen} onR2mSnooze={handleR2mSnooze}
                   onMarkRead={handleMarkRead} onSnooze={handleSnoozeMsg} onSpam={handleSpam}
                   snoozeCount={msgSnoozeCounts[selMsg]||0}

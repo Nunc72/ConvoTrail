@@ -1,6 +1,6 @@
 # ConvoTrail — feature roadmap
 
-_Last updated: 2026-04-21, v0.0.33_
+_Last updated: 2026-04-21, v0.0.34_
 
 Status legend:
 - ✅ **Done** — works end-to-end, persists where relevant
@@ -31,6 +31,7 @@ this doc covers product.
 - ✅ Tag email-roles persisted (tags.email_roles JSONB — role per address in tag edit form)
 - ✅ Contact edit persisted: name / org / r2m_days / primary_email (color picker pending UI)
 - ✅ Revert2Me: second Send button in compose arms r2m on dispatch; dismiss/seen/snooze persisted in r2m_state; 0-day timer = instant; auto-suppressed once a reply in the same RFC thread arrives
+- ✅ Compose: new / reply / reply-all / forward (reply-all auto-fills CC from original to/cc minus own addresses)
 - ✅ Per-contact memory: remembers last-opened message per contact
 - ✅ Client-side search across loaded messages
 - ✅ Filter tabs (Now/All/In/Out/Draft/Deleted)
@@ -40,7 +41,7 @@ this doc covers product.
 - 🚧 Tag rename / archive
 - 🚧 Contact archive
 - 🚧 Spam (routes through delete state)
-- 🚧 Compose message (new / reply / reply-all / forward)
+- 🚧 Compose message (attachments upload still mock)
 - 🚧 Signatures CRUD + per-account auto-sig
 
 **Not implemented at all**

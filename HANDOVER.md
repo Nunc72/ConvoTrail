@@ -1,6 +1,6 @@
 # ConvoTrail — handover
 
-_Last updated: 2026-04-21, v0.0.33_
+_Last updated: 2026-04-21, v0.0.34_
 
 A conversation-centric email client. Mail stays on IMAP (Gmail/iCloud/own);
 ConvoTrail adds grouping per contact, tags, revert-to-me, merge/unmerge,
@@ -128,6 +128,7 @@ auth.users                        (managed by Supabase)
 
 ## Recent history (terse)
 
+- v0.0.34 — Reply all + Forward buttons wired (new handleReplyAll / handleForward + replyKind state); ComposePane CC auto-filled for reply-all
 - v0.0.33 — fix: Contact edit r2m_days=0 was silently replaced with 3 (`|| 3` treats 0 as falsy)
 - v0.0.32 — Outgoing sender uses mail-account display_name (avatars, thread lists, quote headers); "(no body text)" placeholder; involvedEmails uses real mailAccounts
 - v0.0.31 — Revert2me is a second Send button (not a toggle); r2m auto-suppressed when a reply exists in the same RFC thread
