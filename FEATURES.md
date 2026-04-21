@@ -1,6 +1,6 @@
 # ConvoTrail — feature roadmap
 
-_Last updated: 2026-04-21, v0.0.39_
+_Last updated: 2026-04-21, v0.0.40_
 
 Status legend:
 - ✅ **Done** — works end-to-end, persists where relevant
@@ -37,6 +37,7 @@ this doc covers product.
 - ✅ Auto-sync: per-account toggle (Settings → Mail accounts → Check automatically); client-side poll every 2 min + on window focus
 - ✅ Onboarding nudge: first bootstrap with 0 accounts opens Settings → Mail accounts
 - ✅ HTML message rendering: sandboxed iframe with auto-height, allow-popups; falls back to plain text
+- ✅ Token-based invite onboarding: admin creates invite (CLI prints link), tester clicks → register + IMAP in one flow → progress bar → signed in
 - ✅ Per-contact memory: remembers last-opened message per contact
 - ✅ Client-side search across loaded messages
 - ✅ Filter tabs (Now/All/In/Out/Draft/Deleted)

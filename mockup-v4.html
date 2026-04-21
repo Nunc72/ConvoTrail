@@ -72,7 +72,7 @@ const { useState, useMemo, useRef, useEffect, useCallback } = React;
 
 // ─── Constants ───────────────────────────────────────────────────────────────
 
-const APP_VERSION = "0.0.39"; // bumped on every deploy — keep in sync with version.json
+const APP_VERSION = "0.0.40"; // bumped on every deploy — keep in sync with version.json
 
 // ─── Backend + Supabase config ───────────────────────────────────────────────
 const SUPABASE_URL = "https://oyrlzqbjcsliesvunbwj.supabase.co";
@@ -2862,8 +2862,33 @@ function LoginScreen() {
     imapHost:'', imapPort:993, imapSsl:true, smtpHost:'', smtpPort:465, smtpSsl:true,
     user:'', pass:'', auth:'Password', eraseDeleted:'never', eraseSpam:'never'
   });
+  const [inviteToken, setInviteToken]         = useState(null);   // base64url token from ?invite=
+  const [newMailAccountId, setNewMailAccountId] = useState(null); // set after register-imap save
 
   const [busy, setBusy] = useState(false);
+
+  // ── Invite link support ──
+  // If the URL carries `?invite=TOKEN`, look it up and pre-fill the register
+  // form with the bound email. Only then is the register flow reachable —
+  // without a valid token the UI shows "invite-only" on submit.
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const t = params.get('invite');
+    if (!t) return;
+    (async () => {
+      try {
+        const r = await apiFetch(`/invites/${encodeURIComponent(t)}`);
+        if (r?.ok) {
+          setInviteToken(t);
+          setRegEmail(r.email || '');
+          setMode('register');
+          setErr('');
+        }
+      } catch (e) {
+        setErr('This invite link is invalid, expired, or already used.');
+      }
+    })();
+  }, []);
   async function handleLogin(e) {
     e.preventDefault();
     if(!email||!pass){setErr('Fill in email and password.');return;}
@@ -2895,7 +2920,61 @@ function LoginScreen() {
   }
   function handleRegisterSubmit(e) {
     e.preventDefault();
-    setErr('Registration is invite-only. Ask the admin for an invite link.');
+    if (!inviteToken) {
+      setErr('Registration is invite-only. Ask the admin for an invite link.');
+      return;
+    }
+    if (!regPass || regPass.length < 8) { setErr('Choose a password of 8 characters or more.'); return; }
+    setErr('');
+    // Seed IMAP username with the email — most providers use the full address.
+    setRegImap(p => ({ ...p, user: regEmail }));
+    setMode('register-imap');
+  }
+  // Final step of the invite-driven onboarding: accept the invite with the
+  // IMAP details so the backend creates the Supabase user + mail_account in
+  // one transaction. Afterwards we show the progress bar, then sign in —
+  // sign-in must happen LAST because onAuthStateChange would otherwise swap
+  // Root to the App and unmount this screen mid-flow.
+  async function handleFinishImap() {
+    if (!inviteToken) { setErr('Invite link required.'); return; }
+    if (!regImap.imapHost || !regImap.user) { setErr('Fill in at least the IMAP hostname and username.'); return; }
+    if (!regImap.pass) { setErr('Password is required.'); return; }
+    setErr(''); setBusy(true);
+    try {
+      await apiFetch(`/invites/${encodeURIComponent(inviteToken)}/accept`, {
+        method: 'POST',
+        body: JSON.stringify({
+          password: regPass,
+          display_name: regDisplayName || undefined,
+          imap: {
+            host: regImap.imapHost,
+            port: Number(regImap.imapPort) || 993,
+            user: regImap.user,
+            password: regImap.pass,
+            smtp_host: regImap.smtpHost || regImap.imapHost.replace(/^imap\./i, 'smtp.'),
+            smtp_port: Number(regImap.smtpPort) || 465,
+          },
+        }),
+      });
+      setMode('creating');
+    } catch (e) {
+      setErr(e?.message || 'Could not finish setup. Check IMAP hostname / credentials.');
+    }
+    setBusy(false);
+  }
+  // Called when the CreatingAccountBar animation completes. Signs the new
+  // user in — onAuthStateChange then fires and Root swaps to the app.
+  async function finishOnboarding() {
+    try {
+      const { error } = await sb.auth.signInWithPassword({ email: regEmail, password: regPass });
+      if (error) {
+        setErr(`Account ready, but sign-in failed: ${error.message}. Try signing in again.`);
+        setMode('login');
+      }
+    } catch (e) {
+      setErr(e?.message || 'Sign-in failed');
+      setMode('login');
+    }
   }
 
   const cardCls = "bg-white rounded-2xl shadow-xl px-6 py-8 sm:px-10 sm:py-10 w-full max-w-sm";
@@ -3053,24 +3132,29 @@ function LoginScreen() {
         <div className={cardCls}>
           <button onClick={()=>{setMode('login');setErr('');}} className="text-xs text-gray-400 hover:text-gray-600 mb-5 flex items-center gap-1">← Back to sign in</button>
           <h1 className="text-xl font-bold text-gray-900 mb-1">Create account</h1>
-          <p className="text-sm text-gray-400 mb-6">Set up your ConvoMail profile.</p>
+          <p className="text-sm text-gray-400 mb-6">
+            {inviteToken ? 'Welcome! Pick a password to finish setting up your account.' : 'Set up your ConvoMail profile.'}
+          </p>
           {err&&<div className="mb-4 px-3 py-2 rounded-lg bg-red-50 text-red-600 text-xs">{err}</div>}
           <form onSubmit={handleRegisterSubmit} className="space-y-4">
             <div>
-              <label className="text-xs text-gray-500 font-medium block mb-1">Username / email</label>
-              <input autoFocus type="text" value={regEmail} onChange={e=>{setRegEmail(e.target.value);setErr('');}}
-                placeholder="you@example.com" className={inputCls}/>
+              <label className="text-xs text-gray-500 font-medium block mb-1">Email</label>
+              <input type="email" value={regEmail}
+                onChange={inviteToken ? undefined : e=>{setRegEmail(e.target.value);setErr('');}}
+                readOnly={!!inviteToken}
+                placeholder="you@example.com"
+                className={inputCls + (inviteToken ? ' bg-gray-50 text-gray-500' : '')}/>
             </div>
             <div>
               <label className="text-xs text-gray-500 font-medium block mb-1">Display name</label>
-              <input type="text" value={regDisplayName} onChange={e=>setRegDisplayName(e.target.value)}
+              <input autoFocus={!!inviteToken} type="text" value={regDisplayName} onChange={e=>setRegDisplayName(e.target.value)}
                 placeholder="Your full name" className={inputCls}/>
             </div>
             <div>
               <label className="text-xs text-gray-500 font-medium block mb-1">Password</label>
               <div className="relative">
                 <input type={showRegPass?"text":"password"} value={regPass} onChange={e=>{setRegPass(e.target.value);setErr('');}}
-                  placeholder="••••••••"
+                  placeholder="At least 8 characters"
                   className="w-full border border-gray-200 rounded-xl px-4 py-2.5 pr-16 text-sm outline-none focus:border-indigo-400 focus:ring-2 focus:ring-indigo-100 transition"/>
                 <button type="button" onClick={()=>setShowRegPass(v=>!v)}
                   className="absolute right-3 top-1/2 -translate-y-1/2 text-xs text-gray-400 hover:text-gray-600">
@@ -3078,34 +3162,22 @@ function LoginScreen() {
                 </button>
               </div>
             </div>
-            <div>
-              <label className="text-xs text-gray-500 font-medium block mb-1">Recovery mobile number</label>
-              <div className="relative">
-                <input type={showRegMobile?"text":"password"} value={regMobile} onChange={e=>setRegMobile(e.target.value)}
-                  placeholder="••••••••••"
-                  className="w-full border border-gray-200 rounded-xl px-4 py-2.5 pr-16 text-sm outline-none focus:border-indigo-400 focus:ring-2 focus:ring-indigo-100 transition"/>
-                <button type="button" onClick={()=>setShowRegMobile(v=>!v)}
-                  className="absolute right-3 top-1/2 -translate-y-1/2 text-xs text-gray-400 hover:text-gray-600">
-                  {showRegMobile?'Hide':'Show'}
-                </button>
+            {!inviteToken && (<>
+              <div>
+                <label className="text-xs text-gray-500 font-medium block mb-1">Recovery mobile number</label>
+                <input type="text" value={regMobile} onChange={e=>setRegMobile(e.target.value)}
+                  className="w-full border border-gray-200 rounded-xl px-4 py-2.5 text-sm outline-none focus:border-indigo-400 focus:ring-2 focus:ring-indigo-100 transition"/>
               </div>
-            </div>
-            <div>
-              <label className="text-xs text-gray-500 font-medium block mb-1">Recovery email address</label>
-              <div className="relative">
-                <input type={showRegRecovEmail?"text":"password"} value={regRecovEmail} onChange={e=>setRegRecovEmail(e.target.value)}
-                  placeholder="••••••••••"
-                  className="w-full border border-gray-200 rounded-xl px-4 py-2.5 pr-16 text-sm outline-none focus:border-indigo-400 focus:ring-2 focus:ring-indigo-100 transition"/>
-                <button type="button" onClick={()=>setShowRegRecovEmail(v=>!v)}
-                  className="absolute right-3 top-1/2 -translate-y-1/2 text-xs text-gray-400 hover:text-gray-600">
-                  {showRegRecovEmail?'Hide':'Show'}
-                </button>
+              <div>
+                <label className="text-xs text-gray-500 font-medium block mb-1">Recovery email address</label>
+                <input type="email" value={regRecovEmail} onChange={e=>setRegRecovEmail(e.target.value)}
+                  className="w-full border border-gray-200 rounded-xl px-4 py-2.5 text-sm outline-none focus:border-indigo-400 focus:ring-2 focus:ring-indigo-100 transition"/>
+                <p className="text-xs text-gray-400 mt-1.5">Used for account recovery only. Must be outside of ConvoMail.</p>
               </div>
-              <p className="text-xs text-gray-400 mt-1.5">Used for account recovery only. Must be outside of ConvoMail.</p>
-            </div>
-            <button type="submit"
-              className="w-full py-2.5 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white text-sm font-semibold transition">
-              Continue →
+            </>)}
+            <button type="submit" disabled={busy}
+              className="w-full py-2.5 rounded-xl bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 text-white text-sm font-semibold transition">
+              {busy ? 'Please wait…' : 'Continue →'}
             </button>
           </form>
         </div>
@@ -3160,12 +3232,9 @@ function LoginScreen() {
                 </label>
               </div>
             </div>
-            <button onClick={()=>{
-              if(!regImap.imapHost||!regImap.user){setErr('Fill in at least the IMAP hostname and username.');return;}
-              setErr(''); setMode('creating');
-            }}
-              className="w-full py-2.5 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white text-sm font-semibold transition mt-2">
-              Finish setup &amp; sign in
+            <button onClick={handleFinishImap} disabled={busy}
+              className="w-full py-2.5 rounded-xl bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 text-white text-sm font-semibold transition mt-2">
+              {busy ? 'Saving…' : 'Finish setup & sign in'}
             </button>
           </div>
         </div>
@@ -3178,7 +3247,7 @@ function LoginScreen() {
             <div className="w-14 h-14 rounded-full bg-indigo-100 flex items-center justify-center text-2xl mx-auto mb-5">⚙️</div>
             <h1 className="text-xl font-bold text-gray-900 mb-2">Creating your account</h1>
             <p className="text-sm text-gray-400 mb-8">Please wait while we set everything up…</p>
-            <CreatingAccountBar onComplete={onLogin}/>
+            <CreatingAccountBar onComplete={finishOnboarding}/>
             <p className="text-xs text-gray-400 mt-4">This may take a few seconds</p>
           </div>
         </div>
