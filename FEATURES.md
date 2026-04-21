@@ -1,6 +1,6 @@
 # ConvoTrail — feature roadmap
 
-_Last updated: 2026-04-21, v0.0.37_
+_Last updated: 2026-04-21, v0.0.38_
 
 Status legend:
 - ✅ **Done** — works end-to-end, persists where relevant
@@ -33,6 +33,9 @@ this doc covers product.
 - ✅ Revert2Me: second Send button in compose arms r2m on dispatch; dismiss/seen/snooze persisted in r2m_state; 0-day timer = instant; auto-suppressed once a reply in the same RFC thread arrives
 - ✅ Compose: new / reply / reply-all / forward (reply-all auto-fills CC from original to/cc minus own addresses)
 - ✅ Signatures: CRUD (Settings → Signatures); per-account linkage; auto-insert fires in compose (onBlur saves title/body; link + auto toggle PATCH the sig)
+- ✅ Get-mail button syncs all configured accounts on demand
+- ✅ Auto-sync: per-account toggle (Settings → Mail accounts → Check automatically); client-side poll every 2 min + on window focus
+- ✅ Onboarding nudge: first bootstrap with 0 accounts opens Settings → Mail accounts
 - ✅ Per-contact memory: remembers last-opened message per contact
 - ✅ Client-side search across loaded messages
 - ✅ Filter tabs (Now/All/In/Out/Draft/Deleted)
@@ -47,7 +50,6 @@ this doc covers product.
 **Not implemented at all**
 - ⬜ Attachment view / download
 - ⬜ Attachment upload in compose
-- ⬜ Automatic / scheduled sync (only manual)
 - ⬜ IMAP IDLE real-time push
 - ⬜ Multi-folder support beyond INBOX + Sent
 - ⬜ Gmail OAuth
@@ -83,8 +85,8 @@ Turns in-memory actions into durable ones. Highest value for daily usability.
 7. ✅ **1.7 — Tags on messages** (CRUD + persist) — shipped v0.0.26
 8. 🔒 **1.8 — Tags on contacts** — **dropped** (Rik doesn't want it). `contact_tags` schema stays for later.
 9. ✅ **1.9 — Contact edit (name/org/r2m_days/primary_email)** persist — shipped v0.0.29 (color UI punted — no picker in edit form)
-10. ⬜ **1.10 — Automatic sync** (poll per 2 min + on window focus)
-11. ⬜ **1.11 — Onboarding nudge**: after login with zero accounts, open Add-account flow
+10. ✅ **1.10 — Automatic sync** (poll per 2 min + on window focus, gated on per-account auto_sync) — shipped v0.0.38 (Get-mail button in topbar also wired)
+11. ✅ **1.11 — Onboarding nudge** — shipped v0.0.38
 
 **User-picked order for remaining work** (2026-04-21): 1.9 → Tier 2.6 r2m state → reply-all/forward → Tier 2.7 signatures.
 
@@ -106,13 +108,9 @@ Turns in-memory actions into durable ones. Highest value for daily usability.
 
 **1.9 Contact edit** — shipped v0.0.29. Color picker still absent in UI; backend accepts a `color` patch when we add one.
 
-**1.10 Automatic sync** (½ day)
-- Frontend: `setInterval(sync, 2 * 60_000)` + `window.addEventListener('focus', sync)`.
-- Careful: debounce, skip if a sync is in flight.
-- Later: backend-side cron for users who don't have the tab open.
+**1.10 Automatic sync** — shipped v0.0.38. Poll every 2 min + on focus; only fires for accounts with `auto_sync=true`. Get-mail button syncs everything on demand. Backend-side cron for offline users is a later item.
 
-**1.11 Onboarding nudge** (¼ day)
-- If `mailAccounts.length === 0` after bootstrap, auto-open MailAccountsModal with form expanded.
+**1.11 Onboarding nudge** — shipped v0.0.38. First bootstrap with zero accounts auto-opens Settings → Mail accounts.
 
 **Total Tier 1 remaining**: ~4–5 days active work (1.2 done).
 

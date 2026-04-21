@@ -72,7 +72,7 @@ const { useState, useMemo, useRef, useEffect, useCallback } = React;
 
 // ─── Constants ───────────────────────────────────────────────────────────────
 
-const APP_VERSION = "0.0.37"; // bumped on every deploy — keep in sync with version.json
+const APP_VERSION = "0.0.38"; // bumped on every deploy — keep in sync with version.json
 
 // ─── Backend + Supabase config ───────────────────────────────────────────────
 const SUPABASE_URL = "https://oyrlzqbjcsliesvunbwj.supabase.co";
@@ -3914,6 +3914,64 @@ function App({onSignOut}) {
   function handleReplyAll(msg){setReplyTo(msg);setReplyKind('reply-all');setComposeContact(null);setComposeDraft(null);setShowCompose(true);setMergeContact(null);if(isMobile)setMobileCol(2);}
   function handleForward(msg){setReplyTo(msg);setReplyKind('forward');setComposeContact(null);setComposeDraft(null);setShowCompose(true);setMergeContact(null);if(isMobile)setMobileCol(2);}
   function handleNewMsg(contact=null){setReplyTo(null);setReplyKind(null);setComposeContact(contact);setComposeDraft(null);setShowCompose(true);setMergeContact(null);setTagComposeInit(null);if(isMobile)setMobileCol(2);}
+
+  // ── Account sync plumbing ────────────────────────────────────────────────
+  // syncingRef dedups concurrent sync attempts per account id (used by both
+  // the Get-mail button and the 2-minute auto-sync loop). syncingIds mirrors
+  // it into React state so the UI can show a spinner on the button.
+  const syncingRef = useRef(new Set());
+  const [syncingIds, setSyncingIds] = useState(()=>new Set());
+  async function handleSyncAccount(accountId) {
+    if (syncingRef.current.has(accountId)) return null;
+    syncingRef.current.add(accountId);
+    setSyncingIds(new Set(syncingRef.current));
+    try {
+      return await apiFetch(`/mail-accounts/${accountId}/sync`, { method: 'POST' });
+    } catch (e) {
+      return { ok: false, error: e.message };
+    } finally {
+      syncingRef.current.delete(accountId);
+      setSyncingIds(new Set(syncingRef.current));
+    }
+  }
+  async function handleGetMail() {
+    if (mailAccounts.length === 0) return;
+    const results = await Promise.all(mailAccounts.map(a => handleSyncAccount(a.id)));
+    const fired = results.filter(r => r !== null);
+    if (fired.length === 0) return; // already in flight
+    const errors = fired.filter(r => r && !r.ok);
+    setActionToast(errors.length > 0
+      ? `Sync had errors: ${errors.map(e=>e.error).slice(0,2).join('; ')}`
+      : 'Mail synced');
+    refreshData();
+  }
+  async function handleAutoSync() {
+    const autos = mailAccounts.filter(a => a.auto_sync);
+    if (autos.length === 0) return;
+    const results = await Promise.all(autos.map(a => handleSyncAccount(a.id)));
+    if (results.some(r => r !== null)) refreshData();
+  }
+  // Poll every 2 minutes + on window focus; only accounts with auto_sync=true
+  // actually fire. Stops when all accounts have auto_sync off.
+  useEffect(() => {
+    if (mailAccounts.length === 0) return;
+    if (!mailAccounts.some(a => a.auto_sync)) return;
+    const tick = () => { handleAutoSync(); };
+    const interval = setInterval(tick, 120_000);
+    window.addEventListener('focus', tick);
+    return () => { clearInterval(interval); window.removeEventListener('focus', tick); };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [mailAccounts]);
+
+  // ── Onboarding nudge: after the very first bootstrap completes, if the
+  // user has no mail accounts yet, auto-open Settings → Mail accounts so
+  // they land on the add-form instead of an empty inbox.
+  const didOnboardRef = useRef(false);
+  useEffect(() => {
+    if (dataLoading || didOnboardRef.current) return;
+    didOnboardRef.current = true;
+    if (mailAccounts.length === 0) setSettingsTab('accounts');
+  }, [dataLoading, mailAccounts]);
   function handleSelectDraft(msg){setComposeDraft(msg);setReplyTo(null);setReplyKind(null);setComposeContact(null);setShowCompose(true);setMergeContact(null);setSelMsg(null);if(isMobile)setMobileCol(2);}
   function handleCloseCompose(){
     const origin = composeOrigin;
@@ -4373,7 +4431,11 @@ function App({onSignOut}) {
               className="flex items-center gap-1.5 px-3 py-1.5 text-xs rounded bg-indigo-600 hover:bg-indigo-700 text-white font-medium">
               <PlusIcon size={12}/><span>New message</span>
             </button>
-            <button className="px-3 py-1.5 text-xs rounded bg-gray-100 hover:bg-gray-200 text-gray-600 font-medium">↻ Get mail</button>
+            <button onClick={handleGetMail} disabled={mailAccounts.length===0 || syncingIds.size>0}
+              title={mailAccounts.length===0 ? 'Add a mail account first' : 'Sync all accounts now'}
+              className="px-3 py-1.5 text-xs rounded bg-gray-100 hover:bg-gray-200 disabled:opacity-50 text-gray-600 font-medium">
+              {syncingIds.size>0 ? '↻ Syncing…' : '↻ Get mail'}
+            </button>
             <div className="relative" ref={userMenuRef}>
               <button onClick={()=>setShowUserMenu(v=>!v)}
                 className="w-8 h-8 flex items-center justify-center rounded-full hover:bg-gray-100 text-gray-400 hover:text-gray-600 transition-colors">
