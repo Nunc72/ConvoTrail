@@ -19,6 +19,9 @@ await app.register(sensible);
 await app.register(cors, {
   origin: config.corsOrigin === "*" ? true : config.corsOrigin.split(","),
   credentials: true,
+  // @fastify/cors defaults to GET,HEAD,POST — we also need PATCH/DELETE for
+  // our CRUD endpoints (mail-accounts, drafts, messages/:id/flags).
+  methods: ["GET", "HEAD", "POST", "PATCH", "PUT", "DELETE", "OPTIONS"],
 });
 
 app.get("/health", async () => ({
