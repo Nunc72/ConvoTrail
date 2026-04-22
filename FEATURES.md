@@ -1,6 +1,6 @@
 # ConvoTrail — feature roadmap
 
-_Last updated: 2026-04-22, v0.0.41_
+_Last updated: 2026-04-22, v0.0.42_
 
 Status legend:
 - ✅ **Done** — works end-to-end, persists where relevant
@@ -51,6 +51,7 @@ this doc covers product.
 
 **Not implemented at all**
 - ✅ Attachment view / download (incoming; on-demand IMAP fetch)
+- ✅ Attachment preview modal (images, PDFs, text, video, audio) + image thumbnail tiles
 - ✅ Inline cid: images resolved to data URIs in HTML rendering
 - ⬜ Attachment upload in compose
 - ⬜ IMAP IDLE real-time push

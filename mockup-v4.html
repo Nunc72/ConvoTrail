@@ -72,7 +72,7 @@ const { useState, useMemo, useRef, useEffect, useCallback } = React;
 
 // ─── Constants ───────────────────────────────────────────────────────────────
 
-const APP_VERSION = "0.0.41"; // bumped on every deploy — keep in sync with version.json
+const APP_VERSION = "0.0.42"; // bumped on every deploy — keep in sync with version.json
 
 // ─── Backend + Supabase config ───────────────────────────────────────────────
 const SUPABASE_URL = "https://oyrlzqbjcsliesvunbwj.supabase.co";
@@ -1661,6 +1661,153 @@ function MsgLabel({dir,isDraft,isDeleted}) {
 
 // ─── Message Detail ───────────────────────────────────────────────────────────
 
+// ─── Attachment preview helpers ───────────────────────────────────────────
+// Route a MIME content-type to a preview kind. Unknown/office formats fall
+// back to "other" which just shows a Download button.
+function attachmentKind(ct) {
+  const s = (ct || '').toLowerCase();
+  if (s.startsWith('image/')) return 'image';
+  if (s === 'application/pdf') return 'pdf';
+  if (s.startsWith('text/') || s === 'application/json' || s === 'application/xml' || s === 'application/x-yaml') return 'text';
+  if (s.startsWith('video/')) return 'video';
+  if (s.startsWith('audio/')) return 'audio';
+  return 'other';
+}
+
+// Fetch an attachment as a blob via apiFetch's auth plumbing. The message
+// download path uses the same URL so the server only sees it as one call.
+async function fetchAttachmentBlob(messageId, index) {
+  const { data: { session } } = await sb.auth.getSession();
+  const res = await fetch(`${BACKEND_URL}/messages/${messageId}/attachments/${index}`, {
+    headers: session?.access_token ? { Authorization: `Bearer ${session.access_token}` } : {},
+  });
+  if (!res.ok) throw new Error(`${res.status} ${res.statusText}`);
+  return res.blob();
+}
+
+// Image thumbnail tile: fetches its own blob lazily + revokes on unmount.
+// Clicking opens the full preview modal (via the onClick prop).
+function AttachmentThumb({messageId, att, onClick}) {
+  const [blobUrl, setBlobUrl] = useState(null);
+  const [err, setErr] = useState(false);
+  useEffect(() => {
+    let cancelled = false; let createdUrl = null;
+    (async () => {
+      try {
+        const blob = await fetchAttachmentBlob(messageId, att.index);
+        createdUrl = URL.createObjectURL(blob);
+        if (!cancelled) setBlobUrl(createdUrl);
+      } catch { if (!cancelled) setErr(true); }
+    })();
+    return () => { cancelled = true; if (createdUrl) URL.revokeObjectURL(createdUrl); };
+  }, [messageId, att.index]);
+  return (
+    <button onClick={onClick} title={att.filename}
+      className="w-28 h-28 rounded-lg border border-gray-200 bg-gray-50 overflow-hidden hover:border-indigo-300 hover:shadow-sm transition-all flex items-center justify-center flex-shrink-0">
+      {err ? <span className="text-xs text-gray-400 px-2 text-center">Can't load</span>
+       : blobUrl ? <img src={blobUrl} alt={att.filename} className="w-full h-full object-cover" loading="lazy"/>
+       : <span className="text-xs text-gray-400">…</span>}
+    </button>
+  );
+}
+
+// Full-screen preview modal. Handles image / pdf / text / video / audio.
+// Keyboard: Esc closes, ← / → step through the (non-inline) attachment list.
+function AttachmentPreviewModal({messageId, attachment, attachments, onClose, onPrev, onNext, onDownload}) {
+  const [blobUrl, setBlobUrl] = useState(null);
+  const [text, setText] = useState(null);
+  const [err, setErr] = useState('');
+  const [loading, setLoading] = useState(false);
+  const kind = attachment ? attachmentKind(attachment.contentType) : null;
+
+  useEffect(() => {
+    if (!attachment || !messageId) return;
+    let cancelled = false; let createdUrl = null;
+    setLoading(true); setErr(''); setBlobUrl(null); setText(null);
+    (async () => {
+      try {
+        if (kind === 'text') {
+          const { data: { session } } = await sb.auth.getSession();
+          const res = await fetch(`${BACKEND_URL}/messages/${messageId}/attachments/${attachment.index}`, {
+            headers: session?.access_token ? { Authorization: `Bearer ${session.access_token}` } : {},
+          });
+          if (!res.ok) throw new Error(`${res.status} ${res.statusText}`);
+          const t = await res.text();
+          if (!cancelled) setText(t);
+        } else if (kind !== 'other') {
+          const blob = await fetchAttachmentBlob(messageId, attachment.index);
+          createdUrl = URL.createObjectURL(blob);
+          if (!cancelled) setBlobUrl(createdUrl);
+        }
+      } catch (e) {
+        if (!cancelled) setErr(e?.message || 'Failed to load');
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
+    })();
+    return () => { cancelled = true; if (createdUrl) URL.revokeObjectURL(createdUrl); };
+  }, [messageId, attachment?.index]);
+
+  useEffect(() => {
+    function onKey(e) {
+      if (e.key === 'Escape') onClose?.();
+      else if (e.key === 'ArrowLeft')  onPrev?.();
+      else if (e.key === 'ArrowRight') onNext?.();
+    }
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [onClose, onPrev, onNext]);
+
+  if (!attachment) return null;
+  const count = attachments?.length || 0;
+  const idx = count ? attachments.findIndex(a => a.index === attachment.index) + 1 : 1;
+  return (
+    <div className="fixed inset-0 z-50 bg-black/85 flex flex-col" onClick={onClose}>
+      <div className="flex items-center gap-3 px-4 py-3 border-b border-white/10 text-white" onClick={e=>e.stopPropagation()}>
+        <span className="truncate flex-1 text-sm" title={attachment.filename}>{attachment.filename}</span>
+        <span className="text-xs text-white/60 flex-shrink-0">{Math.round((attachment.size||0)/1024)} KB</span>
+        <button onClick={onDownload} className="px-3 py-1 text-xs rounded bg-white/10 hover:bg-white/20 flex-shrink-0">Download</button>
+        <button onClick={onClose} title="Close (Esc)" className="w-8 h-8 rounded hover:bg-white/10 text-white text-2xl leading-none flex items-center justify-center flex-shrink-0">×</button>
+      </div>
+      <div className="flex-1 min-h-0 flex items-center justify-center p-4 overflow-hidden" onClick={e=>e.stopPropagation()}>
+        {loading && <div className="text-white/60 text-sm">Loading preview…</div>}
+        {!loading && err && <div className="text-red-300 text-sm">Preview failed: {err}</div>}
+        {!loading && !err && kind === 'image' && blobUrl && (
+          <img src={blobUrl} alt={attachment.filename} className="max-w-full max-h-full object-contain"/>
+        )}
+        {!loading && !err && kind === 'pdf' && blobUrl && (
+          <iframe src={blobUrl} title={attachment.filename} className="w-full h-full border-0 bg-white rounded"/>
+        )}
+        {!loading && !err && kind === 'text' && text != null && (
+          <pre className="w-full h-full max-w-4xl bg-white text-gray-800 p-4 overflow-auto text-xs font-mono whitespace-pre-wrap rounded">{text}</pre>
+        )}
+        {!loading && !err && kind === 'video' && blobUrl && (
+          <video src={blobUrl} controls className="max-w-full max-h-full"/>
+        )}
+        {!loading && !err && kind === 'audio' && blobUrl && (
+          <div className="w-full max-w-xl p-6 bg-white/10 rounded text-white">
+            <div className="text-sm mb-3 text-center">{attachment.filename}</div>
+            <audio src={blobUrl} controls className="w-full"/>
+          </div>
+        )}
+        {!loading && !err && kind === 'other' && (
+          <div className="text-white/80 text-sm text-center">
+            <p className="mb-3">No preview available for this file type.</p>
+            <button onClick={onDownload} className="px-4 py-2 rounded bg-indigo-600 hover:bg-indigo-700 text-white text-sm">Download {attachment.filename}</button>
+          </div>
+        )}
+      </div>
+      {count > 1 && (
+        <div className="px-4 py-2 border-t border-white/10 flex items-center justify-center gap-4 text-xs text-white/50">
+          <button onClick={onPrev} disabled={!onPrev} className="disabled:opacity-30">← prev</button>
+          <span>{idx} of {count}</span>
+          <button onClick={onNext} disabled={!onNext} className="disabled:opacity-30">next →</button>
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ─── HTML message body (sandboxed iframe) ─────────────────────────────────
 // HTML emails are rendered in a sandboxed iframe so any scripts / event
 // handlers / form submissions in the source can't touch our app. We keep
@@ -1723,8 +1870,9 @@ function MessageDetail({message,contact,isDeleted,msgTags,allTags,onReply,onRepl
   const [enriched, setEnriched] = useState(null); // null | {html, text, attachments[]}
   const [enrichedLoading, setEnrichedLoading] = useState(false);
   const [enrichedErr, setEnrichedErr] = useState('');
+  const [previewIdx, setPreviewIdx] = useState(null); // position in non-inline attachments list
   useEffect(()=>{
-    setEnriched(null); setEnrichedErr('');
+    setEnriched(null); setEnrichedErr(''); setPreviewIdx(null);
     if (!message || message.draft) return;
     const needs = message.hasAttachments || (typeof message.bodyHtml === 'string' && /cid:/i.test(message.bodyHtml));
     if (!needs) return;
@@ -1901,28 +2049,57 @@ function MessageDetail({message,contact,isDeleted,msgTags,allTags,onReply,onRepl
         {(() => {
           const atts = (enriched?.attachments || []).filter(a => !a.isInline);
           if (atts.length === 0) return null;
+          const images = atts.filter(a => attachmentKind(a.contentType) === 'image');
           return (
             <div className="mt-4 pt-3 border-t border-gray-100">
               <div className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-2">
                 {atts.length} attachment{atts.length===1?'':'s'}
               </div>
+              {images.length > 0 && (
+                <div className="flex flex-wrap gap-2 mb-3">
+                  {images.map(a => (
+                    <AttachmentThumb key={a.index} messageId={message.id} att={a}
+                      onClick={()=>setPreviewIdx(atts.findIndex(x=>x.index===a.index))}/>
+                  ))}
+                </div>
+              )}
               <div className="flex flex-wrap gap-2">
-                {atts.map(a => (
-                  <button key={a.index} onClick={()=>downloadAttachment(a)}
-                    title={`${a.filename} · ${Math.round((a.size||0)/1024)} KB`}
-                    className="flex items-center gap-1.5 px-2.5 py-1.5 text-xs rounded-lg border border-gray-200 hover:border-indigo-300 hover:bg-indigo-50 text-gray-700 transition-colors max-w-xs">
-                    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="flex-shrink-0 text-gray-400">
-                      <path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"/>
-                    </svg>
-                    <span className="truncate">{a.filename}</span>
-                    <span className="text-gray-400 flex-shrink-0">· {Math.round((a.size||0)/1024)} KB</span>
-                  </button>
-                ))}
+                {atts.map(a => {
+                  const kind = attachmentKind(a.contentType);
+                  const canPreview = kind !== 'other';
+                  return (
+                    <button key={a.index}
+                      onClick={()=> canPreview ? setPreviewIdx(atts.findIndex(x=>x.index===a.index)) : downloadAttachment(a)}
+                      title={`${a.filename} · ${Math.round((a.size||0)/1024)} KB${canPreview?' (click to preview)':''}`}
+                      className="flex items-center gap-1.5 px-2.5 py-1.5 text-xs rounded-lg border border-gray-200 hover:border-indigo-300 hover:bg-indigo-50 text-gray-700 transition-colors max-w-xs">
+                      <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="flex-shrink-0 text-gray-400">
+                        <path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"/>
+                      </svg>
+                      <span className="truncate">{a.filename}</span>
+                      <span className="text-gray-400 flex-shrink-0">· {Math.round((a.size||0)/1024)} KB</span>
+                    </button>
+                  );
+                })}
               </div>
             </div>
           );
         })()}
       </div>
+      {(() => {
+        const atts = (enriched?.attachments || []).filter(a => !a.isInline);
+        if (previewIdx == null || previewIdx < 0 || previewIdx >= atts.length) return null;
+        const active = atts[previewIdx];
+        const hasPrev = previewIdx > 0;
+        const hasNext = previewIdx < atts.length - 1;
+        return <AttachmentPreviewModal
+          messageId={message.id}
+          attachment={active}
+          attachments={atts}
+          onClose={()=>setPreviewIdx(null)}
+          onPrev={hasPrev ? ()=>setPreviewIdx(i=>i-1) : null}
+          onNext={hasNext ? ()=>setPreviewIdx(i=>i+1) : null}
+          onDownload={()=>downloadAttachment(active)}/>;
+      })()}
       </div>{/* end mobile bounce wrapper */}
       </div>{/* end scrollable middle */}
 
