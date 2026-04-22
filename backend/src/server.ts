@@ -1,6 +1,7 @@
 import Fastify from "fastify";
 import cors from "@fastify/cors";
 import sensible from "@fastify/sensible";
+import multipart from "@fastify/multipart";
 import { config } from "./config.js";
 import { authPreHandler } from "./auth.js";
 import { registerMailAccountsRoutes } from "./routes/mailAccounts.js";
@@ -20,6 +21,9 @@ const app = Fastify({
 });
 
 await app.register(sensible);
+await app.register(multipart, {
+  limits: { fileSize: 25 * 1024 * 1024, files: 20 },
+});
 await app.register(cors, {
   origin: config.corsOrigin === "*" ? true : config.corsOrigin.split(","),
   credentials: true,

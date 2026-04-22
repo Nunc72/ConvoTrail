@@ -7,6 +7,7 @@ import { syncAccount } from "../sync.js";
 import { requirePool } from "../db.js";
 import { sendMail, splitAddresses } from "../smtp.js";
 import { armR2m } from "../r2m.js";
+import { downloadAttachmentBytes, deleteAttachments } from "../storage.js";
 
 interface AccountInput {
   email: string;
@@ -185,6 +186,10 @@ export async function registerMailAccountsRoutes(app: FastifyInstance) {
       // active immediately (useful for testing); higher values delay until
       // that many days after send.
       revert2me_days?: number;
+      // When set, the draft's attachments are pulled from storage, added to
+      // the outgoing MIME, and — on successful delivery — the draft row +
+      // storage blobs are removed (CASCADE handles draft_attachments rows).
+      draft_id?: string;
     };
   }>("/mail-accounts/:id/send", auth, async (req, reply) => {
     const { id } = req.params;
@@ -219,6 +224,32 @@ export async function registerMailAccountsRoutes(app: FastifyInstance) {
       if (rr.rows[0]?.message_id) inReplyTo = rr.rows[0].message_id;
     }
 
+    // Pull draft attachments (if any) from storage before we send.
+    let draftAttachments: { filename: string; content: Buffer; contentType?: string }[] = [];
+    let draftStorageKeys: string[] = [];
+    if (b.draft_id) {
+      const r2 = await pool.query<{ storage_key: string; filename: string; content_type: string | null }>(
+        `SELECT da.storage_key, da.filename, da.content_type
+           FROM draft_attachments da
+           JOIN drafts d ON d.id = da.draft_id
+          WHERE d.id = $1 AND d.user_id = $2`,
+        [b.draft_id, req.authUser!.id],
+      );
+      draftStorageKeys = r2.rows.map(x => x.storage_key);
+      for (const row of r2.rows) {
+        try {
+          const bytes = await downloadAttachmentBytes(row.storage_key);
+          draftAttachments.push({
+            filename: row.filename,
+            content: bytes,
+            contentType: row.content_type || undefined,
+          });
+        } catch (e) {
+          req.log.warn({ err: e, key: row.storage_key }, "send: attachment fetch failed");
+        }
+      }
+    }
+
     const result = await sendMail({
       smtp: { host: acc.smtp_host, port: acc.smtp_port, user: acc.smtp_user || acc.email, pass: decrypt(acc.smtp_cred_enc) },
       imap: { host: acc.imap_host, port: acc.imap_port, user: acc.imap_user || acc.email, pass: decrypt(acc.imap_cred_enc) },
@@ -231,6 +262,7 @@ export async function registerMailAccountsRoutes(app: FastifyInstance) {
       text: b.body || "",
       inReplyTo,
       references: inReplyTo,
+      attachments: draftAttachments,
     });
 
     if (!result.ok) return reply.code(400).send(result);
@@ -271,6 +303,20 @@ export async function registerMailAccountsRoutes(app: FastifyInstance) {
       } catch (e) {
         // Non-fatal — the mail is delivered and sits in the server's Sent folder.
         req.log.warn({ err: e }, "send: insert into messages failed");
+      }
+    }
+
+    // Clean up the draft (row CASCADE removes draft_attachments; we still
+    // have to sweep the storage objects ourselves).
+    if (b.draft_id) {
+      try {
+        await pool.query(`DELETE FROM drafts WHERE id = $1 AND user_id = $2`, [b.draft_id, req.authUser!.id]);
+      } catch (e) {
+        req.log.warn({ err: e }, "send: draft delete failed");
+      }
+      if (draftStorageKeys.length > 0) {
+        try { await deleteAttachments(draftStorageKeys); }
+        catch (e) { req.log.warn({ err: e }, "send: storage cleanup failed"); }
       }
     }
 

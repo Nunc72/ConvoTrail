@@ -1,6 +1,6 @@
 {
   "name": "convotrail-backend",
-  "version": "0.0.41",
+  "version": "0.0.44",
   "private": true,
   "description": "ConvoTrail backend — IMAP/SMTP proxy, sync, API",
   "type": "module",
@@ -16,6 +16,7 @@
   },
   "dependencies": {
     "@fastify/cors": "^11.0.0",
+    "@fastify/multipart": "^10.0.0",
     "@fastify/sensible": "^6.0.1",
     "@supabase/supabase-js": "^2.45.4",
     "@types/mailparser": "^3.4.6",

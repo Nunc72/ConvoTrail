@@ -19,6 +19,7 @@ export interface SendInput {
   inReplyTo?: string | null;   // RFC822 Message-ID of original, e.g. "<abc@example.com>"
   references?: string | null;
   sentFolder?: string;
+  attachments?: Array<{ filename: string; content: Buffer; contentType?: string }>;
 }
 
 export interface SendResult {
@@ -64,6 +65,13 @@ export async function sendMail(input: SendInput): Promise<SendResult> {
   if (input.inReplyTo) {
     mailOpts.inReplyTo = input.inReplyTo;
     mailOpts.references = input.references || input.inReplyTo;
+  }
+  if (input.attachments && input.attachments.length > 0) {
+    mailOpts.attachments = input.attachments.map(a => ({
+      filename: a.filename,
+      content: a.content,
+      contentType: a.contentType || "application/octet-stream",
+    }));
   }
 
   let raw: Buffer, messageId: string;

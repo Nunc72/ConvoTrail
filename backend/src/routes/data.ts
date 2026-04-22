@@ -9,7 +9,7 @@ export async function registerDataRoutes(app: FastifyInstance) {
   app.get<{ Querystring: { limit?: string } }>("/bootstrap", auth, async (req, reply) => {
     const limit = Math.min(Number(req.query.limit) || 500, 2000);
     const sb = supabaseWithJwt(req.authJwt!);
-    const [accountsRes, contactsRes, messagesRes, draftsRes, tagsRes, msgTagsRes, r2mRes, sigsRes, accSigsRes] = await Promise.all([
+    const [accountsRes, contactsRes, messagesRes, draftsRes, tagsRes, msgTagsRes, r2mRes, sigsRes, accSigsRes, draftAttsRes] = await Promise.all([
       sb.from("mail_accounts").select(
         "id, email, display_name, provider, last_sync_at, auto_sync, " +
         "retention_deleted_days, retention_spam_days",
@@ -34,6 +34,8 @@ export async function registerDataRoutes(app: FastifyInstance) {
       sb.from("signatures").select("id, title, body, created_at")
         .order("created_at", { ascending: true }),
       sb.from("account_signatures").select("mail_account_id, signature_id, is_auto"),
+      sb.from("draft_attachments").select("id, draft_id, filename, content_type, size, created_at")
+        .order("created_at", { ascending: true }),
     ]);
     if (accountsRes.error) return reply.internalServerError(accountsRes.error.message);
     if (contactsRes.error) return reply.internalServerError(contactsRes.error.message);
@@ -44,6 +46,7 @@ export async function registerDataRoutes(app: FastifyInstance) {
     if (r2mRes.error)      return reply.internalServerError(r2mRes.error.message);
     if (sigsRes.error)     return reply.internalServerError(sigsRes.error.message);
     if (accSigsRes.error)  return reply.internalServerError(accSigsRes.error.message);
+    if (draftAttsRes.error) return reply.internalServerError(draftAttsRes.error.message);
     return {
       mail_accounts: accountsRes.data,
       contacts: contactsRes.data,
@@ -54,6 +57,7 @@ export async function registerDataRoutes(app: FastifyInstance) {
       r2m_state: r2mRes.data,
       signatures: sigsRes.data,
       account_signatures: accSigsRes.data,
+      draft_attachments: draftAttsRes.data,
     };
   });
 
