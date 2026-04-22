@@ -72,7 +72,7 @@ const { useState, useMemo, useRef, useEffect, useCallback } = React;
 
 // ─── Constants ───────────────────────────────────────────────────────────────
 
-const APP_VERSION = "0.0.40"; // bumped on every deploy — keep in sync with version.json
+const APP_VERSION = "0.0.41"; // bumped on every deploy — keep in sync with version.json
 
 // ─── Backend + Supabase config ───────────────────────────────────────────────
 const SUPABASE_URL = "https://oyrlzqbjcsliesvunbwj.supabase.co";
@@ -1718,6 +1718,41 @@ function MessageDetail({message,contact,isDeleted,msgTags,allTags,onReply,onRepl
   const alertSentinelRef = useRef(null);
   const scrollRootRef = useRef(null);
   const [alertOutOfView, setAlertOutOfView] = useState(false);
+  // Lazily-loaded full body + attachments (IMAP round-trip, so only when we
+  // actually need them: message has attachments or HTML contains cid: refs).
+  const [enriched, setEnriched] = useState(null); // null | {html, text, attachments[]}
+  const [enrichedLoading, setEnrichedLoading] = useState(false);
+  const [enrichedErr, setEnrichedErr] = useState('');
+  useEffect(()=>{
+    setEnriched(null); setEnrichedErr('');
+    if (!message || message.draft) return;
+    const needs = message.hasAttachments || (typeof message.bodyHtml === 'string' && /cid:/i.test(message.bodyHtml));
+    if (!needs) return;
+    let cancelled = false;
+    setEnrichedLoading(true);
+    apiFetch(`/messages/${message.id}/body`)
+      .then(r => { if (!cancelled) setEnriched(r || null); })
+      .catch(e => { if (!cancelled) setEnrichedErr(e?.message || 'Failed to load full message'); })
+      .finally(() => { if (!cancelled) setEnrichedLoading(false); });
+    return () => { cancelled = true; };
+  },[message?.id]);
+  async function downloadAttachment(att) {
+    try {
+      const { data: { session } } = await sb.auth.getSession();
+      const res = await fetch(`${BACKEND_URL}/messages/${message.id}/attachments/${att.index}`, {
+        headers: session?.access_token ? { Authorization: `Bearer ${session.access_token}` } : {},
+      });
+      if (!res.ok) throw new Error(`${res.status} ${res.statusText}`);
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url; a.download = att.filename; a.rel = 'noopener';
+      document.body.appendChild(a); a.click(); document.body.removeChild(a);
+      setTimeout(()=>URL.revokeObjectURL(url), 500);
+    } catch (e) {
+      alert('Download failed: ' + (e?.message || 'unknown error'));
+    }
+  }
   useEffect(()=>{
     if(headerRef.current){
       const h=headerRef.current.offsetHeight;
@@ -1853,13 +1888,40 @@ function MessageDetail({message,contact,isDeleted,msgTags,allTags,onReply,onRepl
       </div>
 
       <div className={`${isMobile?'':'flex-1 overflow-y-auto scroll'} px-5 py-4 text-sm text-gray-700 leading-relaxed`}>
-        {message.bodyHtml
-          ? <HtmlMessageBody html={message.bodyHtml}/>
-          : message.body?.trim()
-            ? message.body.split("\n").map((line,i)=>(
-                <p key={i} className={line.startsWith("—")||line.startsWith("——")?"text-gray-300 mt-3":"min-h-[1em]"}>{line}</p>
-              ))
-            : <p className="italic text-gray-300">(no body text)</p>}
+        {(() => {
+          const htmlToRender = enriched?.html || message.bodyHtml;
+          if (htmlToRender) return <HtmlMessageBody html={htmlToRender}/>;
+          if (enrichedLoading) return <p className="italic text-gray-300">Loading full message…</p>;
+          if (message.body?.trim()) return message.body.split("\n").map((line,i)=>(
+            <p key={i} className={line.startsWith("—")||line.startsWith("——")?"text-gray-300 mt-3":"min-h-[1em]"}>{line}</p>
+          ));
+          return <p className="italic text-gray-300">(no body text)</p>;
+        })()}
+        {enrichedErr && <p className="mt-3 text-xs text-red-500">Attachments load failed: {enrichedErr}</p>}
+        {(() => {
+          const atts = (enriched?.attachments || []).filter(a => !a.isInline);
+          if (atts.length === 0) return null;
+          return (
+            <div className="mt-4 pt-3 border-t border-gray-100">
+              <div className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-2">
+                {atts.length} attachment{atts.length===1?'':'s'}
+              </div>
+              <div className="flex flex-wrap gap-2">
+                {atts.map(a => (
+                  <button key={a.index} onClick={()=>downloadAttachment(a)}
+                    title={`${a.filename} · ${Math.round((a.size||0)/1024)} KB`}
+                    className="flex items-center gap-1.5 px-2.5 py-1.5 text-xs rounded-lg border border-gray-200 hover:border-indigo-300 hover:bg-indigo-50 text-gray-700 transition-colors max-w-xs">
+                    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="flex-shrink-0 text-gray-400">
+                      <path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"/>
+                    </svg>
+                    <span className="truncate">{a.filename}</span>
+                    <span className="text-gray-400 flex-shrink-0">· {Math.round((a.size||0)/1024)} KB</span>
+                  </button>
+                ))}
+              </div>
+            </div>
+          );
+        })()}
       </div>
       </div>{/* end mobile bounce wrapper */}
       </div>{/* end scrollable middle */}
@@ -2041,6 +2103,7 @@ function ThreadColumn({contact,allMsgs,deletedIds,selectedMsgId,msgTags,onSelect
                     {!msg.read&&!isDel&&!isDraft&&msg.dir==="in"&&<span className="w-1.5 h-1.5 rounded-full bg-indigo-500 flex-shrink-0"/>}
                     {msg.revert2me&&msg.dir==="out"&&!isDel&&!isDraft&&<span className="w-1.5 h-1.5 rounded-full bg-amber-400 flex-shrink-0"/>}
                     <span className={`text-xs truncate ${(!msg.read&&!isDel&&!isDraft)?"font-semibold text-gray-900":"text-gray-600"}`}>{msg.subject}</span>
+                    {msg.hasAttachments&&<svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="text-gray-400 flex-shrink-0" aria-label="has attachment"><path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"/></svg>}
                   </div>
                   <span className="text-xs text-gray-400 flex-shrink-0">{dt}</span>
                 </div>
@@ -2134,6 +2197,7 @@ function ThreadColumn({contact,allMsgs,deletedIds,selectedMsgId,msgTags,onSelect
                   {!msg.read&&!isDel&&!isDraft&&msg.dir==="in"&&<span className="w-1.5 h-1.5 rounded-full bg-indigo-500 flex-shrink-0"/>}
                   {msg.revert2me&&msg.dir==="out"&&!isDel&&!isDraft&&<span className="w-1.5 h-1.5 rounded-full bg-amber-400 flex-shrink-0"/>}
                   <span className={`text-xs truncate ${(!msg.read&&!isDel&&!isDraft)?"font-semibold text-gray-900":"text-gray-600"}`}>{msg.subject}</span>
+                  {msg.hasAttachments&&<svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="text-gray-400 flex-shrink-0" aria-label="has attachment"><path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"/></svg>}
                 </div>
                 <span className="text-xs text-gray-400 flex-shrink-0">{dt}</span>
               </div>

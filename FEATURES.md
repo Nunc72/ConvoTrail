@@ -1,6 +1,6 @@
 # ConvoTrail — feature roadmap
 
-_Last updated: 2026-04-21, v0.0.40_
+_Last updated: 2026-04-22, v0.0.41_
 
 Status legend:
 - ✅ **Done** — works end-to-end, persists where relevant
@@ -50,7 +50,8 @@ this doc covers product.
 - 🚧 Compose message (attachments upload still mock)
 
 **Not implemented at all**
-- ⬜ Attachment view / download
+- ✅ Attachment view / download (incoming; on-demand IMAP fetch)
+- ✅ Inline cid: images resolved to data URIs in HTML rendering
 - ⬜ Attachment upload in compose
 - ⬜ IMAP IDLE real-time push
 - ⬜ Multi-folder support beyond INBOX + Sent
@@ -122,7 +123,7 @@ Turns in-memory actions into durable ones. Highest value for daily usability.
 
 Makes the app feel polished and complete enough for friendly testers.
 
-- ⬜ **2.1 Attachments** (2 days) — download inline + list; compose upload + chip UI (already in mockup, needs backend: `/messages/:id/attachments/:idx` to stream, `/drafts/:id/attachments` to POST).
+- 🚧 **2.1 Attachments** — half shipped v0.0.41: incoming side done (GET /messages/:id/body with inline cid → data URIs; GET /messages/:id/attachments/:idx streams). Compose upload + storage bucket still ⬜.
 - ⬜ **2.2 Conversation threading** (1 day) — group by `thread_id` (from In-Reply-To/References).
 - ⬜ **2.3 Gmail OAuth** (1 day) — Google Cloud project + OAuth consent screen + backend OAuth flow + refresh-token handling.
 - ⬜ **2.4 Progressive search** (2 days) — Postgres FTS for synced range, IMAP SEARCH for older archive, stream results via SSE, spinner + "all done" signal.
