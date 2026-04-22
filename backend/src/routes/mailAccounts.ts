@@ -279,8 +279,8 @@ export async function registerMailAccountsRoutes(app: FastifyInstance) {
           `INSERT INTO messages (
              user_id, mail_account_id, folder, uid, uidvalidity, message_id,
              from_email, from_name, to_emails, subject, body_text, snippet,
-             date, flags, direction
-           ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9::jsonb,$10,$11,$12, now(), $13::jsonb, 'out')
+             date, flags, direction, has_attachments
+           ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9::jsonb,$10,$11,$12, now(), $13::jsonb, 'out', $14)
            ON CONFLICT DO NOTHING
            RETURNING id`,
           [
@@ -289,6 +289,7 @@ export async function registerMailAccountsRoutes(app: FastifyInstance) {
             acc.email, acc.display_name,
             JSON.stringify(toList), b.subject || "", b.body || "", snippet,
             JSON.stringify({ seen: true }),
+            draftAttachments.length > 0,
           ],
         );
         const newMessageId = ins.rows[0]?.id;

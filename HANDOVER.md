@@ -1,6 +1,6 @@
 # ConvoTrail — handover
 
-_Last updated: 2026-04-22, v0.0.44_
+_Last updated: 2026-04-22, v0.0.45_
 
 A conversation-centric email client. Mail stays on IMAP (Gmail/iCloud/own);
 ConvoTrail adds grouping per contact, tags, revert-to-me, merge/unmerge,
@@ -128,6 +128,7 @@ auth.users                        (managed by Supabase)
 
 ## Recent history (terse)
 
+- v0.0.45 — fix: outgoing messages table row now records has_attachments (was false → frontend skipped the /body fetch → no chips on Sent view)
 - v0.0.44 — Compose attachments: migration 0004 (draft_attachments), Supabase Storage bucket, POST/DELETE/GET /drafts/:id/attachments, send pulls attachments into MIME + cleans up storage; ComposePane 📎 button + drag-drop, 25 MB/draft cap
 - v0.0.43 — Attachment preview modal: big side-arrow overlays + capture-phase keyboard handler so ←/→ work even when a PDF iframe has focus
 - v0.0.42 — Attachment preview modal (image / pdf / text / video / audio) + image thumbnail tiles; chip click previews first, explicit download button in modal
