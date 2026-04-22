@@ -1,6 +1,6 @@
 # ConvoTrail — handover
 
-_Last updated: 2026-04-22, v0.0.42_
+_Last updated: 2026-04-22, v0.0.43_
 
 A conversation-centric email client. Mail stays on IMAP (Gmail/iCloud/own);
 ConvoTrail adds grouping per contact, tags, revert-to-me, merge/unmerge,
@@ -128,6 +128,7 @@ auth.users                        (managed by Supabase)
 
 ## Recent history (terse)
 
+- v0.0.43 — Attachment preview modal: big side-arrow overlays + capture-phase keyboard handler so ←/→ work even when a PDF iframe has focus
 - v0.0.42 — Attachment preview modal (image / pdf / text / video / audio) + image thumbnail tiles; chip click previews first, explicit download button in modal
 - v0.0.41 — Inline cid: images + attachment download on incoming messages (on-demand IMAP fetch); paperclip icon in thread rows
 - v0.0.40 — Token-based invite flow: GET/POST /invites/:token, accept bundles user + first mail account; LoginScreen reads ?invite=... and walks register → register-imap → progress bar → sign-in. invite.ts CLI prints a ready-to-send link.

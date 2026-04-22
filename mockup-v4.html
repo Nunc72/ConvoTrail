@@ -72,7 +72,7 @@ const { useState, useMemo, useRef, useEffect, useCallback } = React;
 
 // ─── Constants ───────────────────────────────────────────────────────────────
 
-const APP_VERSION = "0.0.42"; // bumped on every deploy — keep in sync with version.json
+const APP_VERSION = "0.0.43"; // bumped on every deploy — keep in sync with version.json
 
 // ─── Backend + Supabase config ───────────────────────────────────────────────
 const SUPABASE_URL = "https://oyrlzqbjcsliesvunbwj.supabase.co";
@@ -1748,14 +1748,16 @@ function AttachmentPreviewModal({messageId, attachment, attachments, onClose, on
     return () => { cancelled = true; if (createdUrl) URL.revokeObjectURL(createdUrl); };
   }, [messageId, attachment?.index]);
 
+  // Capture arrow keys at the document level (capture phase) so a focused
+  // PDF iframe / <video> can't swallow them before we see them.
   useEffect(() => {
     function onKey(e) {
-      if (e.key === 'Escape') onClose?.();
-      else if (e.key === 'ArrowLeft')  onPrev?.();
-      else if (e.key === 'ArrowRight') onNext?.();
+      if (e.key === 'Escape')          { onClose?.(); }
+      else if (e.key === 'ArrowLeft')  { if (onPrev) { e.preventDefault(); onPrev(); } }
+      else if (e.key === 'ArrowRight') { if (onNext) { e.preventDefault(); onNext(); } }
     }
-    window.addEventListener('keydown', onKey);
-    return () => window.removeEventListener('keydown', onKey);
+    document.addEventListener('keydown', onKey, true);
+    return () => document.removeEventListener('keydown', onKey, true);
   }, [onClose, onPrev, onNext]);
 
   if (!attachment) return null;
@@ -1769,7 +1771,7 @@ function AttachmentPreviewModal({messageId, attachment, attachments, onClose, on
         <button onClick={onDownload} className="px-3 py-1 text-xs rounded bg-white/10 hover:bg-white/20 flex-shrink-0">Download</button>
         <button onClick={onClose} title="Close (Esc)" className="w-8 h-8 rounded hover:bg-white/10 text-white text-2xl leading-none flex items-center justify-center flex-shrink-0">×</button>
       </div>
-      <div className="flex-1 min-h-0 flex items-center justify-center p-4 overflow-hidden" onClick={e=>e.stopPropagation()}>
+      <div className="flex-1 min-h-0 relative flex items-center justify-center p-4 overflow-hidden" onClick={e=>e.stopPropagation()}>
         {loading && <div className="text-white/60 text-sm">Loading preview…</div>}
         {!loading && err && <div className="text-red-300 text-sm">Preview failed: {err}</div>}
         {!loading && !err && kind === 'image' && blobUrl && (
@@ -1796,12 +1798,27 @@ function AttachmentPreviewModal({messageId, attachment, attachments, onClose, on
             <button onClick={onDownload} className="px-4 py-2 rounded bg-indigo-600 hover:bg-indigo-700 text-white text-sm">Download {attachment.filename}</button>
           </div>
         )}
+        {/* Big side-arrows — overlay on top so they work even when a PDF
+            iframe or <video> has keyboard focus. Rendered only when there's
+            somewhere to go in that direction. */}
+        {onPrev && (
+          <button onClick={(e)=>{e.stopPropagation(); onPrev();}} aria-label="Previous (←)"
+            className="absolute left-4 top-1/2 -translate-y-1/2 w-12 h-12 rounded-full bg-white/10 hover:bg-white/25 text-white text-2xl leading-none flex items-center justify-center transition-colors">
+            ‹
+          </button>
+        )}
+        {onNext && (
+          <button onClick={(e)=>{e.stopPropagation(); onNext();}} aria-label="Next (→)"
+            className="absolute right-4 top-1/2 -translate-y-1/2 w-12 h-12 rounded-full bg-white/10 hover:bg-white/25 text-white text-2xl leading-none flex items-center justify-center transition-colors">
+            ›
+          </button>
+        )}
       </div>
       {count > 1 && (
         <div className="px-4 py-2 border-t border-white/10 flex items-center justify-center gap-4 text-xs text-white/50">
-          <button onClick={onPrev} disabled={!onPrev} className="disabled:opacity-30">← prev</button>
           <span>{idx} of {count}</span>
-          <button onClick={onNext} disabled={!onNext} className="disabled:opacity-30">next →</button>
+          <span className="text-white/30">·</span>
+          <span>← / → to navigate · Esc to close</span>
         </div>
       )}
     </div>
