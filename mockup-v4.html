@@ -34,6 +34,11 @@
       overflow: hidden;
       height: 100%;
       -webkit-overflow-scrolling: auto;
+      /* Keep iOS status bar visible when installed as a PWA: the app content
+         starts BELOW the safe-area, instead of rendering under the clock/
+         battery icons. */
+      padding-top: env(safe-area-inset-top, 0);
+      padding-bottom: env(safe-area-inset-bottom, 0);
     }
     /* Scrollable areas: allow native bounce but contain it (don't propagate to outer frame) */
     .scroll {
@@ -72,7 +77,7 @@ const { useState, useMemo, useRef, useEffect, useCallback } = React;
 
 // ─── Constants ───────────────────────────────────────────────────────────────
 
-const APP_VERSION = "0.0.45"; // bumped on every deploy — keep in sync with version.json
+const APP_VERSION = "0.0.46"; // bumped on every deploy — keep in sync with version.json
 
 // ─── Backend + Supabase config ───────────────────────────────────────────────
 const SUPABASE_URL = "https://oyrlzqbjcsliesvunbwj.supabase.co";
@@ -1655,13 +1660,14 @@ function ComposePane({replyTo, replyKind='reply', toContact, draft, initTo:initT
         </button>
         <div className="flex-1"/>
         {sendErr && <span className="text-xs text-red-600 truncate flex-shrink min-w-0" title={sendErr}>{sendErr}</span>}
-        {draftId
-          ? <button onClick={handleDeleteDraftClick} disabled={savingDraft||sending}
-              className="px-3 py-1.5 text-xs rounded bg-red-50 hover:bg-red-100 disabled:opacity-50 text-red-600 font-medium">Delete</button>
-          : <button onClick={handleSaveDraftClick} disabled={savingDraft||sending||(!to.trim()&&!subj.trim()&&!body.trim())}
-              className="px-3 py-1.5 text-xs rounded bg-gray-100 hover:bg-gray-200 disabled:opacity-50 text-gray-600">
-              {savingDraft?'Saving…':'Save draft'}
-            </button>}
+        {draftId && (
+          <button onClick={handleDeleteDraftClick} disabled={savingDraft||sending}
+            className="px-3 py-1.5 text-xs rounded bg-red-50 hover:bg-red-100 disabled:opacity-50 text-red-600 font-medium">Delete</button>
+        )}
+        <button onClick={handleSaveDraftClick} disabled={savingDraft||sending||(!to.trim()&&!subj.trim()&&!body.trim())}
+          className="px-3 py-1.5 text-xs rounded bg-gray-100 hover:bg-gray-200 disabled:opacity-50 text-gray-600">
+          {savingDraft?'Saving…':(draftId?'Save':'Save draft')}
+        </button>
         <button onClick={()=>handleSendClick(true)} disabled={sending || !to.trim()}
           title={`Send and arm Revert2Me — if no reply within ${r2mDays} day${r2mDays==1?'':'s'}, this mail resurfaces. 0 = instant.`}
           className="px-3 py-1.5 text-xs rounded bg-amber-400 hover:bg-amber-500 disabled:opacity-50 text-white font-medium">
@@ -1750,20 +1756,12 @@ function ContactEditForm({contact, contactTags, allKnownTags, isArchived, onSave
           <div className="text-xs text-gray-400 mb-1">Tags <span className="text-gray-300">(internal, not sent)</span></div>
           <TagPicker current={tags} suggestions={allKnownTags} onAdd={addTag} onRemove={removeTag}/>
         </div>
-        <div className="space-y-2">
-          <label className="flex items-center gap-2 cursor-pointer">
-            <input type="checkbox" checked={isNews} onChange={e=>setIsNews(e.target.checked)} className="accent-indigo-600"/>
-            <span className="text-sm text-gray-700">News (newsletters — moves to News tab)</span>
-          </label>
-          <label className="flex items-center gap-2 cursor-pointer">
-            <input type="checkbox" checked={isMuted} onChange={e=>setIsMuted(e.target.checked)} className="accent-indigo-600"/>
-            <span className="text-sm text-gray-700">Mute (hide from Now / notifications)</span>
-          </label>
-          <label className="flex items-center gap-2 cursor-pointer">
-            <input type="checkbox" checked={archived} onChange={e=>setArchived(e.target.checked)} className="accent-indigo-600"/>
-            <span className="text-sm text-gray-700">Archive this contact</span>
-          </label>
-        </div>
+        {/* News + Mute already have toggles on the contact card header; keep
+            only Archive here to avoid a second source of truth. */}
+        <label className="flex items-center gap-2 cursor-pointer">
+          <input type="checkbox" checked={archived} onChange={e=>setArchived(e.target.checked)} className="accent-indigo-600"/>
+          <span className="text-sm text-gray-700">Archive this contact</span>
+        </label>
       </div>
       <div className="px-4 py-3 border-t border-gray-200 flex items-center gap-2 flex-shrink-0">
         <button onClick={onDelete} className="px-3 py-1.5 text-xs rounded bg-gray-100 hover:bg-red-100 text-red-500">Delete</button>
@@ -1792,6 +1790,20 @@ function MsgLabel({dir,isDraft,isDeleted}) {
 }
 
 // ─── Message Detail ───────────────────────────────────────────────────────────
+
+// ─── Spinner ──────────────────────────────────────────────────────────────
+// Tiny indigo spinner for inline loading states (attachment fetches,
+// bootstrap kick-off, long-running network calls). Keeps the UI feeling
+// alive instead of silently hung.
+function Spinner({size=16, className=""}) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none"
+      className={"animate-spin text-indigo-500 " + className} aria-label="loading">
+      <circle cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="3" strokeOpacity="0.2"/>
+      <path d="M22 12a10 10 0 0 1-10 10" stroke="currentColor" strokeWidth="3" strokeLinecap="round"/>
+    </svg>
+  );
+}
 
 // ─── Attachment preview helpers ───────────────────────────────────────────
 // Route a MIME content-type to a preview kind. Unknown/office formats fall
@@ -1895,16 +1907,27 @@ function AttachmentPreviewModal({messageId, attachment, attachments, onClose, on
   if (!attachment) return null;
   const count = attachments?.length || 0;
   const idx = count ? attachments.findIndex(a => a.index === attachment.index) + 1 : 1;
-  return (
-    <div className="fixed inset-0 z-50 bg-black/85 flex flex-col" onClick={onClose}>
-      <div className="flex items-center gap-3 px-4 py-3 border-b border-white/10 text-white" onClick={e=>e.stopPropagation()}>
+  // Render through a portal so the fixed overlay lives on document.body,
+  // immune to any transforms / slide animations on the mobile column layout.
+  // Click on the backdrop (or the toolbar / footer bar background) closes;
+  // only the explicit content + action buttons stopPropagation.
+  const modal = (
+    <div className="fixed inset-0 z-[60] bg-black/85 flex flex-col" onClick={onClose}>
+      <div className="flex items-center gap-3 px-4 py-3 border-b border-white/10 text-white">
         <span className="truncate flex-1 text-sm" title={attachment.filename}>{attachment.filename}</span>
         <span className="text-xs text-white/60 flex-shrink-0">{Math.round((attachment.size||0)/1024)} KB</span>
-        <button onClick={onDownload} className="px-3 py-1 text-xs rounded bg-white/10 hover:bg-white/20 flex-shrink-0">Download</button>
-        <button onClick={onClose} title="Close (Esc)" className="w-8 h-8 rounded hover:bg-white/10 text-white text-2xl leading-none flex items-center justify-center flex-shrink-0">×</button>
+        <button onClick={(e)=>{e.stopPropagation(); onDownload?.();}} className="px-3 py-2 text-xs rounded bg-white/10 hover:bg-white/20 flex-shrink-0">Download</button>
+        <button onClick={(e)=>{e.stopPropagation(); onClose();}} title="Close"
+          aria-label="Close"
+          className="min-w-[44px] min-h-[44px] rounded hover:bg-white/10 text-white text-3xl leading-none flex items-center justify-center flex-shrink-0">×</button>
       </div>
-      <div className="flex-1 min-h-0 relative flex items-center justify-center p-4 overflow-hidden" onClick={e=>e.stopPropagation()}>
-        {loading && <div className="text-white/60 text-sm">Loading preview…</div>}
+      <div className="flex-1 min-h-0 relative flex items-center justify-center p-4 overflow-hidden">
+        {loading && (
+          <div className="flex items-center gap-2 text-white/70 text-sm">
+            <Spinner size={18} className="!text-white/80"/>
+            <span>Loading preview…</span>
+          </div>
+        )}
         {!loading && err && <div className="text-red-300 text-sm">Preview failed: {err}</div>}
         {!loading && !err && kind === 'image' && blobUrl && (
           <img src={blobUrl} alt={attachment.filename} className="max-w-full max-h-full object-contain"/>
@@ -1950,11 +1973,14 @@ function AttachmentPreviewModal({messageId, attachment, attachments, onClose, on
         <div className="px-4 py-2 border-t border-white/10 flex items-center justify-center gap-4 text-xs text-white/50">
           <span>{idx} of {count}</span>
           <span className="text-white/30">·</span>
-          <span>← / → to navigate · Esc to close</span>
+          <span className="hidden sm:inline">← / → to navigate · Esc to close</span>
+          <span className="sm:hidden">Tap anywhere to close</span>
         </div>
       )}
     </div>
   );
+  // Mount to document.body so the modal survives mobile column-slide transforms.
+  return ReactDOM.createPortal(modal, document.body);
 }
 
 // ─── HTML message body (sandboxed iframe) ─────────────────────────────────
@@ -1965,21 +1991,47 @@ function AttachmentPreviewModal({messageId, attachment, attachments, onClose, on
 // can open in a new tab without being trapped in the sandbox.
 function HtmlMessageBody({html}) {
   const ref = useRef(null);
-  function onLoad(e) {
-    try {
-      const doc = e.target.contentDocument;
-      if (doc && doc.body) {
-        e.target.style.height = (doc.body.scrollHeight + 24) + 'px';
-      }
-    } catch { /* ignore cross-origin issues */ }
+  // After load: measure content width. If wider than the iframe viewport
+  // (classic 600px-table newsletter on a 375px phone), scale the body down
+  // uniformly so the user can read without a horizontal-scroll tax.
+  function fit() {
+    const iframe = ref.current;
+    if (!iframe) return;
+    const doc = iframe.contentDocument;
+    if (!doc || !doc.body) return;
+    const body = doc.body;
+    body.style.transformOrigin = 'top left';
+    body.style.transform = '';        // reset for accurate measurement
+    body.style.width = '';
+    const contentWidth = Math.max(body.scrollWidth, doc.documentElement.scrollWidth);
+    const iframeWidth  = iframe.clientWidth || iframe.offsetWidth;
+    if (iframeWidth > 0 && contentWidth > iframeWidth + 2) {
+      const scale = iframeWidth / contentWidth;
+      body.style.width = contentWidth + 'px';
+      body.style.transform = `scale(${scale})`;
+      iframe.style.height = (body.scrollHeight * scale + 24) + 'px';
+    } else {
+      iframe.style.height = (body.scrollHeight + 24) + 'px';
+    }
   }
+  function onLoad() { try { fit(); } catch { /* ignore cross-origin */ } }
+  // Re-fit when the parent changes size (phone rotation, desktop column drag).
+  useEffect(() => {
+    const iframe = ref.current;
+    if (!iframe) return;
+    const obs = new ResizeObserver(() => { try { fit(); } catch { /* ignore */ } });
+    obs.observe(iframe);
+    return () => obs.disconnect();
+  }, []);
   // <base target="_blank"> makes every link open in a new tab instead of
   // hijacking the iframe. A tiny default stylesheet keeps things readable
   // when the source has no CSS of its own.
   const srcDoc = `<!doctype html>
 <html><head><base target="_blank"><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
 <style>
-  body { margin:0; padding:0; font: 14px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; color:#374151; word-wrap: break-word; overflow-wrap: break-word; }
+  html, body { margin:0; padding:0; }
+  body { font: 14px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; color:#374151; word-wrap: break-word; overflow-wrap: break-word; }
   img, video, iframe { max-width: 100%; height: auto; }
   table { max-width: 100%; }
   a { color: #4f46e5; }
@@ -2188,7 +2240,12 @@ function MessageDetail({message,contact,isDeleted,msgTags,allTags,onReply,onRepl
         {(() => {
           const htmlToRender = enriched?.html || message.bodyHtml;
           if (htmlToRender) return <HtmlMessageBody html={htmlToRender}/>;
-          if (enrichedLoading) return <p className="italic text-gray-300">Loading full message…</p>;
+          if (enrichedLoading) return (
+            <div className="flex items-center gap-2 text-sm text-gray-400 italic">
+              <Spinner size={14}/>
+              <span>Loading full message…</span>
+            </div>
+          );
           if (message.body?.trim()) return message.body.split("\n").map((line,i)=>(
             <p key={i} className={line.startsWith("—")||line.startsWith("——")?"text-gray-300 mt-3":"min-h-[1em]"}>{line}</p>
           ));
@@ -4376,7 +4433,7 @@ function App({onSignOut}) {
     setMessageList(prev=>prev.map(m=>m.id===id?{...m,revert2me:false,r2mArmed:false}:m));
 
     navigateTo(nid,alwaysGo, forceFade ? 'fade-fast' : (nid ? 'slide' : 'none'));
-    setActionToast('Mail has been seen');
+    // No toast — the banner disappearing is feedback enough.
     persistR2m(id, { dismiss: true });
   }
   function handleR2mSnooze(id){
@@ -4409,7 +4466,7 @@ function App({onSignOut}) {
     setMessageList(prev=>prev.map(m=>m.id===id?{...m,read:true}:m));
 
     navigateTo(nid,alwaysGo, forceFade ? 'fade-fast' : (nid ? 'slide' : 'none'));
-    setActionToast('Mail has been seen');
+    // No toast — the banner disappearing is feedback enough.
     persistSeen(id);
   }
   function handleSnoozeMsg(id){
@@ -4998,7 +5055,12 @@ function App({onSignOut}) {
       {/* Data-loading / empty-state banner */}
       {(dataLoading || dataError || (!dataLoading && contactList.length===0)) && (
         <div className={`flex items-center gap-3 px-4 py-2 text-xs flex-shrink-0 border-b ${dataError?'bg-red-50 border-red-200 text-red-700':'bg-indigo-50 border-indigo-100 text-indigo-700'}`}>
-          {dataLoading && <span>Loading your mail…</span>}
+          {dataLoading && (
+            <>
+              <Spinner size={12}/>
+              <span>Loading contacts and mail…</span>
+            </>
+          )}
           {dataError && <span>Couldn't load data: {dataError}</span>}
           {!dataLoading && !dataError && contactList.length===0 && (
             <>
