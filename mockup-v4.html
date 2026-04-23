@@ -28,17 +28,27 @@
     html, body {
       margin: 0;
       font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
-      background: #f0f0f0;
+      /* Body bg shows through the safe-area strips behind the iOS status bar
+         and home indicator. White keeps the default (black-text) status bar
+         readable when the topbar isn't yet painted. */
+      background: #ffffff;
       /* Lock outer frame — no bounce on the app itself */
       overscroll-behavior: none;
       overflow: hidden;
       height: 100%;
       -webkit-overflow-scrolling: auto;
-      /* Keep iOS status bar visible when installed as a PWA: the app content
-         starts BELOW the safe-area, instead of rendering under the clock/
-         battery icons. */
+    }
+    /* iOS PWA (installed/standalone) status-bar handling. We apply the safe-
+       area padding here instead of on html/body so that the app container's
+       `height:100%` fills exactly the visible viewport minus the insets —
+       this prevents the app content from sliding under the status bar or
+       the home-indicator area. */
+    #root {
+      height: 100%;
       padding-top: env(safe-area-inset-top, 0);
       padding-bottom: env(safe-area-inset-bottom, 0);
+      box-sizing: border-box;
+      background: #ffffff;
     }
     /* Scrollable areas: allow native bounce but contain it (don't propagate to outer frame) */
     .scroll {
@@ -77,7 +87,7 @@ const { useState, useMemo, useRef, useEffect, useCallback } = React;
 
 // ─── Constants ───────────────────────────────────────────────────────────────
 
-const APP_VERSION = "0.0.50"; // bumped on every deploy — keep in sync with version.json
+const APP_VERSION = "0.0.51"; // bumped on every deploy — keep in sync with version.json
 
 // ─── Backend + Supabase config ───────────────────────────────────────────────
 const SUPABASE_URL = "https://oyrlzqbjcsliesvunbwj.supabase.co";
@@ -1704,9 +1714,11 @@ function ComposePane({replyTo, replyKind='reply', toContact, draft, initTo:initT
       </div>
       </div>{/* end bounce wrapper */}
       </div>{/* end scroll/contents wrapper */}
-      {/* Footer */}
-      <div className="px-4 py-3 border-t border-gray-200 flex items-center gap-2 flex-shrink-0 bg-white">
-        {!(typeof window!=='undefined'&&window.innerWidth<768)&&<div className="flex items-center gap-1.5 cursor-default select-none"
+      {/* Footer — tighter horizontal padding + gap on mobile so iPhone SE
+          (375px wide) fits Paperclip · [Delete] · Save · Revert2me · Send
+          without clipping. */}
+      <div className={`${isMobile?'px-2 gap-1':'px-4 gap-2'} py-3 border-t border-gray-200 flex items-center flex-shrink-0 bg-white`}>
+        {!isMobile&&<div className="flex items-center gap-1.5 cursor-default select-none"
           onMouseEnter={()=>setR2mHover(true)} onMouseLeave={()=>setR2mHover(false)}>
           <span className="text-xs text-gray-400">R2M:</span>
           {r2mHover
@@ -1718,8 +1730,8 @@ function ComposePane({replyTo, replyKind='reply', toContact, draft, initTo:initT
         <button onClick={()=>fileInputRef.current?.click()}
           disabled={sending}
           title="Attach files (or drag & drop)"
-          className="p-1.5 rounded hover:bg-gray-100 text-gray-500 disabled:opacity-50">
-          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+          className={`${isMobile?'p-1':'p-1.5'} rounded hover:bg-gray-100 text-gray-500 disabled:opacity-50`}>
+          <svg width={isMobile?14:16} height={isMobile?14:16} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
             <path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"/>
           </svg>
         </button>
@@ -1731,21 +1743,21 @@ function ComposePane({replyTo, replyKind='reply', toContact, draft, initTo:initT
         {draftId && (
           <button onClick={handleDeleteDraftClick} disabled={savingDraft||sending}
             title="Delete draft"
-            className="px-3 py-1.5 text-xs rounded bg-gray-100 hover:bg-red-100 text-red-500 flex items-center gap-1.5 disabled:opacity-50">
+            className={`${isMobile?'px-2 py-1.5':'px-3 py-1.5'} text-xs rounded bg-gray-100 hover:bg-red-100 text-red-500 flex items-center gap-1.5 disabled:opacity-50`}>
             <DeleteIcon size={isMobile?16:13}/>{!isMobile&&<span>Delete</span>}
           </button>
         )}
         <button onClick={handleSaveDraftClick} disabled={savingDraft||sending||(!to.trim()&&!subj.trim()&&!body.trim())}
-          className="px-3 py-1.5 text-xs rounded bg-gray-100 hover:bg-gray-200 disabled:opacity-50 text-gray-600">
+          className={`${isMobile?'px-2 py-1.5':'px-3 py-1.5'} text-xs rounded bg-gray-100 hover:bg-gray-200 disabled:opacity-50 text-gray-600`}>
           {savingDraft?'Saving…':(draftId?'Save':'Save draft')}
         </button>
         <button onClick={()=>handleSendClick(true)} disabled={sending || !to.trim()}
           title={`Send and arm Revert2Me — if no reply within ${r2mDays} day${r2mDays==1?'':'s'}, this mail resurfaces. 0 = instant.`}
-          className="px-3 py-1.5 text-xs rounded bg-amber-400 hover:bg-amber-500 disabled:opacity-50 text-white font-medium">
+          className={`${isMobile?'px-2 py-1.5':'px-3 py-1.5'} text-xs rounded bg-amber-400 hover:bg-amber-500 disabled:opacity-50 text-white font-medium`}>
           {sending ? 'Sending…' : `Revert2me${Number(r2mDays)===0?' · 0d':''}`}
         </button>
         <button onClick={()=>handleSendClick(false)} disabled={sending || !to.trim()}
-          className="px-4 py-1.5 text-xs rounded bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 text-white font-medium">
+          className={`${isMobile?'px-3 py-1.5':'px-4 py-1.5'} text-xs rounded bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 text-white font-medium`}>
           {sending ? 'Sending…' : 'Send'}
         </button>
       </div>
@@ -2102,12 +2114,15 @@ function HtmlMessageBody({html}) {
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <style>
   html, body { margin:0; padding:0; overflow: hidden; }
-  body { font: 14px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; color:#374151; word-wrap: break-word; overflow-wrap: break-word; }
+  /* overflow-wrap:anywhere beats break-word for purely unbroken runs like
+     signature divider lines (———————…) or long URLs — break-word only breaks
+     at a last-resort point and can still overflow in some engines. */
+  body { font: 14px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; color:#374151; word-break: break-word; overflow-wrap: anywhere; }
   img, video, iframe { max-width: 100%; height: auto; }
   table { max-width: 100%; }
-  a { color: #4f46e5; }
+  a { color: #4f46e5; overflow-wrap: anywhere; }
   blockquote { margin: 0.5em 0; padding-left: 0.75em; border-left: 3px solid #e5e7eb; color: #6b7280; }
-  pre, code { white-space: pre-wrap; word-break: break-word; }
+  pre, code { white-space: pre-wrap; word-break: break-all; overflow-wrap: anywhere; }
 </style>
 </head><body>${html}</body></html>`;
   return (
@@ -2308,7 +2323,7 @@ function MessageDetail({message,contact,isDeleted,msgTags,allTags,onReply,onRepl
         {isMobile&&(showAmberBanner||showBlueBanner)&&<div ref={alertSentinelRef} style={{height:1}}/>}
       </div>
 
-      <div className="px-5 py-4 text-sm text-gray-700 leading-relaxed">
+      <div className="px-5 py-4 text-sm text-gray-700 leading-relaxed" style={{wordBreak:'break-word', overflowWrap:'anywhere'}}>
         {(() => {
           const htmlToRender = enriched?.html || message.bodyHtml;
           if (htmlToRender) return <HtmlMessageBody html={htmlToRender}/>;
@@ -2318,6 +2333,10 @@ function MessageDetail({message,contact,isDeleted,msgTags,allTags,onReply,onRepl
               <span>Loading full message…</span>
             </div>
           );
+          // Plain-text body: each newline becomes its own <p>.
+          // `overflow-wrap: anywhere` on the parent wraps long unbroken runs
+          // like signature dividers (————————…) and URL-ish tokens so the
+          // column never has to scroll horizontally on narrow screens.
           if (message.body?.trim()) return message.body.split("\n").map((line,i)=>(
             <p key={i} className={line.startsWith("—")||line.startsWith("——")?"text-gray-300 mt-3":"min-h-[1em]"}>{line}</p>
           ));
@@ -3114,21 +3133,87 @@ function LeftColumn({contactMeta, archivedContacts, selectedId, mergeId, onSelec
   const isMobile = typeof window !== 'undefined' && window.innerWidth < 768;
 
   if (isMobile) {
-    // Tags bottom sheet:
-    //  - closed (40px): just header stuck to bottom
-    //  - open & contacts open: 33% bottom
-    //  - open & contacts collapsed: leaves just account selector + contacts header visible (~76px)
-    const tagsSheetHeight = collapsed.tags
-      ? 36
-      : (collapsed.contacts ? 'calc(100% - 60px)' : '40%');
-    return (
-      <div className="relative h-full bg-gray-50 overflow-hidden flex flex-col">
-        {/* Pull-to-refresh indicator — absolutely positioned so it never
-            pushes content; fades/lifts based on pullDist or syncing state. */}
+    // Clean mobile layout — four flex rows, no absolute positioning:
+    //   1. Account selector    (fixed, ~30px)
+    //   2. Contacts header     (fixed: label + tabs, ~50px when contacts open)
+    //   3. Contacts list       (flex-1 min-h-0 — scrolls, bounces, pull-to-sync)
+    //   4. Tags section        (fixed-height flex row — header always visible,
+    //                          list fills remainder when tags expanded).
+    // Tags is a real flex sibling so it can never disappear behind the
+    // contacts list or be clipped by a stacking context created on the
+    // contacts scroller.
+    const accountHeader = (
+      <div className="border-b border-gray-100 bg-white relative flex-shrink-0" ref={accDropRef}>
+        <button onClick={()=>setAccDropOpen(o=>!o)}
+          className="w-full px-3 pt-2 pb-1 text-xs font-semibold text-gray-400 uppercase tracking-wider flex items-center justify-between hover:text-gray-600 transition-colors">
+          <span className="truncate flex-1 text-left">{accountLabel}</span>
+          <svg width="10" height="10" viewBox="0 0 10 10" fill="none" className="flex-shrink-0 mr-1">
+            <path d="M2 3.5L5 6.5L8 3.5" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
+          </svg>
+        </button>
+        {accDropOpen&&(
+          <div className="absolute left-0 right-0 top-full z-50 bg-white border border-gray-200 rounded-b-lg shadow-lg overflow-hidden">
+            {mailAccounts.length===0 && <div className="px-3 py-2 text-xs text-gray-400">No mail accounts connected.</div>}
+            {mailAccounts.map(a=>{
+              const email=(a.email||'').toLowerCase();
+              const checked=selAccounts.includes(email);
+              return (
+                <div key={a.id} className="flex items-center gap-2 px-3 py-2 hover:bg-gray-50">
+                  <input type="checkbox" checked={checked}
+                    onChange={e=>{e.stopPropagation();onToggleAccount(email);}}
+                    className="accent-indigo-600 flex-shrink-0 cursor-pointer"/>
+                  <span className="text-xs text-gray-700 truncate flex-1 cursor-pointer"
+                    onClick={()=>{onToggleAccount('__exclusive__'+email);setAccDropOpen(false);}}>
+                    {a.display_name ? <><span>{a.display_name}</span> <span className="text-gray-400">· {a.email}</span></> : a.email}
+                  </span>
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </div>
+    );
+
+    const contactsHeader = (
+      <div className="border-b border-gray-100 bg-white flex-shrink-0">
+        <div onClick={()=>onToggleCollapse('contacts')}
+          className="px-3 pt-2 pb-1 text-xs font-semibold text-gray-400 uppercase tracking-wider flex items-center justify-between cursor-pointer select-none hover:bg-gray-50 transition-colors"
+          style={{height:30}}>
+          <span>Contacts
+            {mergeId!==null&&<span className="ml-2 text-indigo-500 normal-case font-normal">· Shift+click</span>}
+          </span>
+          <CollapseIcon open={!collapsed.contacts}/>
+        </div>
+        {!collapsed.contacts&&(
+          <div className="flex px-2 pt-[3px] pb-1.5 gap-0.5">
+            {['Convo','News','Muted','Archive'].map(tab=>{
+              const active=contactTab===tab;
+              const badge=(!active&&(tab==='Convo'||tab==='News'))?tabBadge(tab):0;
+              return <button key={tab} onClick={()=>setContactTab(tab)}
+                className={`flex-1 text-xs py-1 rounded transition-colors ${active?'bg-indigo-50 text-indigo-700 font-semibold':'text-gray-400 hover:text-gray-600'}`}>
+                {tab}{badge>0&&<span className="ml-0.5 opacity-70">({badge})</span>}
+              </button>;
+            })}
+          </div>
+        )}
+      </div>
+    );
+
+    // Scrollable contacts list. Pull-to-refresh handlers live here; the
+    // list itself bounces (even when short) via `minHeight: calc(100% + 1px)`
+    // on the inner wrapper + native iOS momentum scrolling. Only shown when
+    // contacts section is not collapsed.
+    const contactsList = !collapsed.contacts && (
+      <div ref={scrollRef}
+        onTouchStart={handlePullTouchStart} onTouchMove={handlePullTouchMove} onTouchEnd={handlePullTouchEnd} onTouchCancel={handlePullTouchEnd}
+        className="flex-1 min-h-0 overflow-y-auto scroll bg-gray-50 relative"
+        style={{WebkitOverflowScrolling:'touch', overscrollBehaviorY:'contain', transform: pullDist>0 ? `translateY(${pullDist*0.5}px)` : undefined, transition: pullDist===0 ? 'transform 0.2s ease' : undefined}}>
+        {/* Pull indicator lives inside the list (pins to the top while pulling
+            and during sync). Sits above the list content visually. */}
         {(pullDist>0 || syncing) && (
-          <div className="absolute left-0 right-0 top-0 z-30 flex items-center justify-center pointer-events-none"
-            style={{height: 40, transform: `translateY(${syncing ? 0 : Math.max(0, pullDist-28)}px)`, opacity: syncing ? 1 : Math.min(1, pullDist/PULL_THRESHOLD)}}>
-            <div className="flex items-center gap-2 px-3 py-1.5 bg-white/90 backdrop-blur rounded-full shadow-sm border border-gray-100">
+          <div className="sticky top-0 z-20 flex items-center justify-center pointer-events-none"
+            style={{height: syncing ? 32 : 0, marginBottom: syncing ? -32 : 0, opacity: syncing ? 1 : Math.min(1, pullDist/PULL_THRESHOLD)}}>
+            <div className="flex items-center gap-2 px-3 py-1.5 bg-white/90 backdrop-blur rounded-full shadow-sm border border-gray-100 mt-1">
               <Spinner size={12} className={syncing || pullDist>=PULL_THRESHOLD ? '' : '!animate-none'}/>
               <span className="text-xs text-gray-500">
                 {syncing ? 'Syncing…' : (pullDist>=PULL_THRESHOLD ? 'Release to sync' : 'Pull to sync')}
@@ -3136,103 +3221,63 @@ function LeftColumn({contactMeta, archivedContacts, selectedId, mergeId, onSelec
             </div>
           </div>
         )}
-        {/* Full scrollable area — accounts + CONTACTS label scroll away, only tabs stay sticky.
-            minHeight wrapper + -webkit-overflow-scrolling ensures iOS bounces even on
-            short contact lists. Touch handlers at the outer div implement pull-to-sync. */}
-        <div ref={scrollRef}
-          onTouchStart={handlePullTouchStart} onTouchMove={handlePullTouchMove} onTouchEnd={handlePullTouchEnd} onTouchCancel={handlePullTouchEnd}
-          className="flex-1 overflow-y-auto scroll"
-          style={{paddingBottom: 40, WebkitOverflowScrolling:'touch', overscrollBehaviorY:'contain', transform: pullDist>0 ? `translateY(${pullDist*0.5}px)` : undefined, transition: pullDist===0 ? 'transform 0.2s ease' : undefined}}>
         <div style={{minHeight:'calc(100% + 1px)'}}>
-          {/* Initial-load spinner — shown inside the contacts panel as long
-              as bootstrap is still running and we don't have a list yet. */}
-          {dataLoading && contactMeta.length===0 && (
+          {dataLoading && contactMeta.length===0 ? (
             <div className="flex flex-col items-center justify-center gap-2 py-16 text-gray-400">
               <Spinner size={24}/>
               <span className="text-xs">Loading contacts…</span>
             </div>
-          )}
-          {/* Account selector — scrolls with content */}
-          <div className="border-b border-gray-100 bg-white relative" ref={accDropRef}>
-            <button onClick={()=>setAccDropOpen(o=>!o)}
-              className="w-full px-3 pt-2 pb-1 text-xs font-semibold text-gray-400 uppercase tracking-wider flex items-center justify-between hover:text-gray-600 transition-colors">
-              <span className="truncate flex-1 text-left">{accountLabel}</span>
-              <svg width="10" height="10" viewBox="0 0 10 10" fill="none" className="flex-shrink-0 mr-1">
-                <path d="M2 3.5L5 6.5L8 3.5" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
-              </svg>
-            </button>
-            {accDropOpen&&(
-              <div className="absolute left-0 right-0 top-full z-50 bg-white border border-gray-200 rounded-b-lg shadow-lg overflow-hidden">
-                {mailAccounts.length===0 && <div className="px-3 py-2 text-xs text-gray-400">No mail accounts connected.</div>}
-                {mailAccounts.map(a=>{
-                  const email=(a.email||'').toLowerCase();
-                  const checked=selAccounts.includes(email);
-                  return (
-                    <div key={a.id} className="flex items-center gap-2 px-3 py-2 hover:bg-gray-50">
-                      <input type="checkbox" checked={checked}
-                        onChange={e=>{e.stopPropagation();onToggleAccount(email);}}
-                        className="accent-indigo-600 flex-shrink-0 cursor-pointer"/>
-                      <span className="text-xs text-gray-700 truncate flex-1 cursor-pointer"
-                        onClick={()=>{onToggleAccount('__exclusive__'+email);setAccDropOpen(false);}}>
-                        {a.display_name ? <><span>{a.display_name}</span> <span className="text-gray-400">· {a.email}</span></> : a.email}
-                      </span>
-                    </div>
-                  );
-                })}
+          ) : (<>
+            {activeContacts.length===0 && (
+              <div className="px-3 py-3 text-xs text-gray-300 italic">
+                {contactTab==='News'?'No newsletter contacts':contactTab==='Muted'?'No muted contacts':contactTab==='Archive'?'No archived contacts':'No contacts'}
               </div>
             )}
-          </div>
-          {/* CONTACTS label — scrolls away; click to collapse */}
-          <div onClick={()=>onToggleCollapse('contacts')}
-            className="border-b border-gray-100 bg-white cursor-pointer select-none hover:bg-gray-50 transition-colors">
-            <div className="px-3 pt-2 pb-1 text-xs font-semibold text-gray-400 uppercase tracking-wider flex items-center justify-between" style={{height:30}}>
-              <span>Contacts
-                {mergeId!==null&&<span className="ml-2 text-indigo-500 normal-case font-normal">· Shift+click</span>}
-              </span>
-            </div>
-          </div>
-          {/* Sticky Tabs — only when contacts open */}
-          {!collapsed.contacts&&<div className="bg-white border-b border-gray-100" style={{position:'sticky',top:0,zIndex:10}}>
-            <div className="flex px-2 pt-[3px] pb-1.5 gap-0.5">
-              {['Convo','News','Muted','Archive'].map(tab=>{
-                const active=contactTab===tab;
-                const badge=(!active&&(tab==='Convo'||tab==='News'))?tabBadge(tab):0;
-                return <button key={tab} onClick={()=>setContactTab(tab)}
-                  className={`flex-1 text-xs py-1 rounded transition-colors ${active?'bg-indigo-50 text-indigo-700 font-semibold':'text-gray-400 hover:text-gray-600'}`}>
-                  {tab}{badge>0&&<span className="ml-0.5 opacity-70">({badge})</span>}
-                </button>;
-              })}
-            </div>
-          </div>}
-          {/* Contacts list */}
-          {!collapsed.contacts&&<div className="bg-gray-50">
-            {activeContacts.length===0&&!dataLoading&&<div className="px-3 py-3 text-xs text-gray-300 italic">
-              {contactTab==='News'?'No newsletter contacts':contactTab==='Muted'?'No muted contacts':contactTab==='Archive'?'No archived contacts':'No contacts'}
-            </div>}
             {activeContacts.map(({contact,unread,hasR2m,r2mCount})=><ContactRow key={contact.id} contact={contact} unread={unread} hasR2m={hasR2m} r2mCount={r2mCount}/>)}
-          </div>}
-        </div>{/* end minHeight wrapper */}
+          </>)}
         </div>
+      </div>
+    );
 
-        {/* Tags bottom sheet — sticky at bottom */}
-        <div className="absolute left-0 right-0 bottom-0 bg-white border-t border-gray-200 flex flex-col"
-          style={{height: tagsSheetHeight, transition: 'height 0.25s ease', boxShadow: collapsed.tags ? 'none' : '0 -4px 12px rgba(0,0,0,0.06)'}}>
-          {/* Header — fully clickable */}
-          <div className="flex items-center justify-between cursor-pointer select-none flex-shrink-0 hover:bg-gray-50 transition-colors px-3"
-            onClick={()=>onToggleCollapse('tags')} style={{height:36}}>
-            <span className="text-xs font-semibold text-gray-400 uppercase tracking-wider">Tags</span>
-            {!collapsed.tags&&<button onClick={e=>{e.stopPropagation();setArchiveTagsVisible(v=>!v);}}
+    // Tags section: header is always visible, list fills remaining space
+    // when expanded. When contacts is collapsed, tags takes all the middle
+    // space (flex-1) so users still see their tags.
+    const tagsExpanded = !collapsed.tags;
+    const tagsFillsSpace = tagsExpanded && collapsed.contacts;
+    const tagsHeightStyle = tagsExpanded
+      ? (tagsFillsSpace ? undefined : { height: '40vh' })
+      : undefined;
+    const tagsSection = (
+      <div className={`bg-white border-t border-gray-200 flex flex-col flex-shrink-0 ${tagsFillsSpace ? 'flex-1 min-h-0' : ''}`}
+        style={{...(tagsHeightStyle||{}), boxShadow: tagsExpanded ? '0 -4px 12px rgba(0,0,0,0.06)' : 'none', transition: 'height 0.2s ease'}}>
+        <div className="flex items-center justify-between cursor-pointer select-none flex-shrink-0 hover:bg-gray-50 transition-colors px-3"
+          onClick={()=>onToggleCollapse('tags')} style={{height:36}}>
+          <span className="text-xs font-semibold text-gray-400 uppercase tracking-wider">Tags</span>
+          <div className="flex items-center gap-2">
+            {tagsExpanded&&<button onClick={e=>{e.stopPropagation();setArchiveTagsVisible(v=>!v);}}
               className={`text-xs py-0.5 px-2 rounded transition-colors ${archiveTagsVisible?'bg-indigo-50 text-indigo-700 font-semibold':'text-gray-400 hover:text-gray-600'}`}>
               Archive
             </button>}
+            <CollapseIcon open={tagsExpanded}/>
           </div>
-          {!collapsed.tags&&<div className="flex-1 overflow-y-auto scroll bg-gray-50">
+        </div>
+        {tagsExpanded&&(
+          <div className="flex-1 min-h-0 overflow-y-auto scroll bg-gray-50" style={{WebkitOverflowScrolling:'touch'}}>
             {!archiveTagsVisible&&activeTags.length===0&&<div className="px-3 py-3 text-xs text-gray-300 italic">No tags yet</div>}
             {!archiveTagsVisible&&activeTags.map(tag=><TagRow key={tag} tag={tag}/>)}
             {archiveTagsVisible&&archiveTags.length===0&&<div className="px-3 py-3 text-xs text-gray-300 italic">No archived tags</div>}
             {archiveTagsVisible&&archiveTags.map(tag=><TagRow key={tag} tag={tag}/>)}
-          </div>}
-        </div>
+          </div>
+        )}
+      </div>
+    );
+
+    return (
+      <div className="h-full bg-gray-50 overflow-hidden flex flex-col">
+        {accountHeader}
+        {contactsHeader}
+        {contactsList}
+        {tagsSection}
       </div>
     );
   }
@@ -4908,6 +4953,13 @@ function App({onSignOut}) {
         const tagsOpen = !prev.tags;
         setArchiveHeight(tagsOpen ? Math.round(colH/6) : Math.round(colH/4));
       }
+      // When the user collapses the contacts section and tags is currently
+      // collapsed too, auto-open tags so column 1 never becomes an empty
+      // panel. Matches the design intent: one of {contacts,tags} is always
+      // showing its list.
+      if (!opening && key==='contacts' && prev.tags) {
+        next.tags = false;
+      }
       return next;
     });
   }
@@ -5074,7 +5126,7 @@ function App({onSignOut}) {
   }
 
   return (
-    <div className={`flex flex-col bg-gray-100 ${activeColDiv!==null||activeRowDiv?"no-select":""}`} style={{height:'100dvh'}}>
+    <div className={`flex flex-col bg-gray-100 ${activeColDiv!==null||activeRowDiv?"no-select":""}`} style={{height:'100%'}}>
       {/* Topbar */}
       {isMobile ? (
         /* Mobile topbar: logo | search (center) | user + compose (+ rightmost) */
