@@ -1,6 +1,6 @@
 # ConvoTrail — handover
 
-_Last updated: 2026-04-23, v0.0.55_
+_Last updated: 2026-04-23, v0.0.56_
 
 A conversation-centric email client. Mail stays on IMAP (Gmail/iCloud/own);
 ConvoTrail adds grouping per contact, tags, revert-to-me, merge/unmerge,
@@ -128,6 +128,7 @@ auth.users                        (managed by Supabase)
 
 ## Recent history (terse)
 
+- v0.0.56 — Pull-to-sync on long lists (Convo tab) finally works. Root cause was that the touch listeners were attached to the scrollable inner element, which on scrollable content iOS grants to its own native overscroll handling, silently suppressing the React/DOM touchmove updates after a few frames. Fix: moved the handlers to the outer non-scrolling wrapper (which has overflow:hidden) via React props — events bubble up from the inner div and we always see them. Widened the "near top" fuzz to 10 px and simplified the abort to: only reset pullDist when dy ≤ 0, only fully abort when scrollTop > 20. Also dropped the success "Mail synced" toast (the "Syncing…" indicator + fresh mail are self-evident) — only errors still toast. Image preview: mobile no longer cycles zoom on tap — only pinch adjusts. Desktop still cycles on click / trackpad tap as before.
 - v0.0.55 — Image preview pinch-to-zoom on mobile: two-finger gesture tracked via onTouchStart/Move/End on the image container; new zoom is derived from the ratio of current finger distance to the initial, clamped to [1, 5], snapping back to fit-to-screen when released near 1×. Works alongside the existing tap-to-cycle shortcut (fit → 2× → 3× → fit). No changes needed to the viewport meta — page-level pinch stays disabled (prevents unwanted zoom on form inputs / the rest of the UI), only this element opts in via its own touch handlers.
 - v0.0.54 — Pull-to-sync fired on empty lists (Muted) but not on long lists (Convo). Root cause: iOS rubber-band briefly reported scrollTop = 1–2 on scrollable content, and the padding-top layout change during pull confused iOS further — both tripped the mid-gesture "user transitioned to scroll" abort. Fix: removed the padding-top (indicator is now a pure overlay at the top of the list), widened the scrollTop abort-fuzz to 2px, and only abort if both scrollTop>2 AND the user's finger is moving UP. Image preview modal gained tap-to-zoom: cycles fit→2×→3×→fit via CSS `zoom` (which affects layout, so the wrapper correctly pans the enlarged image via native overflow scroll). Tags section removed from the contact edit form — tags live on messages/contacts via the thread chips and left-column Tags bar, not here; existing tag associations pass through Save unchanged.
 - v0.0.53 — Signatures tab: auto-selects the first signature once the list loads (previous behavior left the editor blank if bootstrap finished after the modal mounted), and both mobile + desktop show a friendly empty-state hint when the user has no signatures yet. Profile gains a new Username field persisted to user_metadata.username (lowercased, leading @ stripped); the top-right user-menu pulldown now shows @username as a third line under the display name, on both mobile and desktop.
