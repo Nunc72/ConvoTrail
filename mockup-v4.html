@@ -87,7 +87,7 @@ const { useState, useMemo, useRef, useEffect, useCallback } = React;
 
 // ─── Constants ───────────────────────────────────────────────────────────────
 
-const APP_VERSION = "0.0.53"; // bumped on every deploy — keep in sync with version.json
+const APP_VERSION = "0.0.54"; // bumped on every deploy — keep in sync with version.json
 
 // ─── Backend + Supabase config ───────────────────────────────────────────────
 const SUPABASE_URL = "https://oyrlzqbjcsliesvunbwj.supabase.co";
@@ -1868,11 +1868,10 @@ function ContactEditForm({contact, contactTags, allKnownTags, isArchived, onSave
             <span className="text-sm text-gray-500">days <span className="text-gray-400">(0 = instant · global default: 3)</span></span>
           </div>
         </div>
-        {/* Tags */}
-        <div>
-          <div className="text-xs text-gray-400 mb-1">Tags <span className="text-gray-300">(internal, not sent)</span></div>
-          <TagPicker current={tags} suggestions={allKnownTags} onAdd={addTag} onRemove={removeTag}/>
-        </div>
+        {/* Tags are managed per-message (via tag chips in the thread and the
+            left-column Tags bar), not on the contact card — so they are no
+            longer exposed in this edit form. `tags` state is still passed
+            through unchanged on Save so existing associations are preserved. */}
         {/* News + Mute already have toggles on the contact card header; keep
             only Archive here to avoid a second source of truth. */}
         <label className="flex items-center gap-2 cursor-pointer">
@@ -1979,6 +1978,11 @@ function AttachmentPreviewModal({messageId, attachment, attachments, onClose, on
   const [text, setText] = useState(null);
   const [err, setErr] = useState('');
   const [loading, setLoading] = useState(false);
+  // Zoom state for images only. null = fit-to-screen (default), number = CSS
+  // scale factor. Tap toggles between fit and 2x. We reset to null whenever
+  // we switch to a different attachment.
+  const [imgZoom, setImgZoom] = useState(null);
+  useEffect(() => { setImgZoom(null); }, [attachment?.index]);
   const kind = attachment ? attachmentKind(attachment.contentType) : null;
 
   useEffect(() => {
@@ -2047,7 +2051,26 @@ function AttachmentPreviewModal({messageId, attachment, attachments, onClose, on
         )}
         {!loading && err && <div className="text-red-300 text-sm">Preview failed: {err}</div>}
         {!loading && !err && kind === 'image' && blobUrl && (
-          <img src={blobUrl} alt={attachment.filename} className="max-w-full max-h-full object-contain"/>
+          // Zoom UX: tap image cycles fit → 2x → 3x → fit. When zoomed, the
+          // wrapper becomes a pan-scroll surface so the user can drag
+          // around the oversized image. We use CSS `zoom` (vs `transform:
+          // scale`) because `zoom` actually affects layout, so the wrapper
+          // correctly scrolls the enlarged content.
+          // stopPropagation keeps taps on the image from bubbling to the
+          // backdrop (which would close the modal).
+          <div className={imgZoom ? "w-full h-full overflow-auto scroll flex items-start justify-start" : "w-full h-full flex items-center justify-center"}
+            onClick={e=>{ e.stopPropagation(); setImgZoom(z => z === null ? 2 : z === 2 ? 3 : null); }}
+            style={{cursor: imgZoom ? 'zoom-in' : 'zoom-in', WebkitOverflowScrolling:'touch', touchAction:'pan-x pan-y'}}
+            title={imgZoom ? `Tap to ${imgZoom===2?'zoom further':'reset zoom'}` : 'Tap to zoom'}>
+            <img src={blobUrl} alt={attachment.filename} draggable={false}
+              className={imgZoom ? "select-none block" : "max-w-full max-h-full object-contain select-none"}
+              style={imgZoom ? {zoom: imgZoom} : {}}/>
+          </div>
+        )}
+        {!loading && !err && kind === 'image' && blobUrl && imgZoom && (
+          <div className="absolute bottom-3 left-1/2 -translate-x-1/2 z-10 px-2.5 py-1 rounded-full bg-white/90 text-gray-700 text-xs shadow pointer-events-none">
+            {imgZoom}× · tap image to {imgZoom===3?'reset':'zoom more'}
+          </div>
         )}
         {!loading && !err && kind === 'pdf' && blobUrl && (
           <iframe src={blobUrl} title={attachment.filename} className="w-full h-full border-0 bg-white rounded"/>
@@ -3067,16 +3090,18 @@ function LeftColumn({contactMeta, archivedContacts, selectedId, mergeId, onSelec
       setPullDist(v);
     }
     function onTouchStart(e) {
-      if (el.scrollTop > 0 || syncingRef.current) { pullActive.current = false; return; }
+      // Allow a small fuzz (iOS rubber-band occasionally reports scrollTop = 1
+      // or 2 even when visually at the top, especially on scrollable lists).
+      if (el.scrollTop > 2 || syncingRef.current) { pullActive.current = false; return; }
       pullStartY.current = e.touches[0]?.clientY ?? null;
       pullActive.current = true;
     }
     function onTouchMove(e) {
       if (!pullActive.current || pullStartY.current == null) return;
-      // If scrollTop has moved away from 0 (user continued past a short bounce
-      // into real scrolling), abort the pull.
-      if (el.scrollTop > 0) { pullActive.current = false; updatePull(0); return; }
       const dy = (e.touches[0]?.clientY ?? 0) - pullStartY.current;
+      // If the user pulled back up AND scrollTop moved away from the top,
+      // they transitioned into a real scroll — abort the pull gesture.
+      if (dy < 0 && el.scrollTop > 2) { pullActive.current = false; updatePull(0); return; }
       if (dy <= 0) { updatePull(0); return; }
       // Rubber-band: linear up to the threshold, damped beyond so it feels
       // like pulling against resistance.
@@ -3264,22 +3289,21 @@ function LeftColumn({contactMeta, archivedContacts, selectedId, mergeId, onSelec
       </div>
     );
 
-    // Scrollable contacts list.  We use a wrapper div so the pull indicator
-    // can sit absolutely above the scroll container without being clipped
-    // by its overflow. Touch events are bound natively in the useEffect
-    // above (see `scrollRef`); using `padding-top` on the scroll container
-    // to reveal the indicator strip — this is the standard pull-to-refresh
-    // pattern and plays well with iOS rubber-band, unlike a CSS transform.
-    const pullPad = syncing ? 40 : (pullDist > 0 ? Math.min(pullDist, 80) : 0);
+    // Scrollable contacts list. Touch handlers are bound natively in the
+    // useEffect above (see scrollRef). We do NOT modify the scroll container
+    // layout during a pull — no padding, no transform — because layout
+    // changes mid-gesture confuse iOS into reporting scrollTop>0 and abort
+    // the pull on long lists. Instead, the pull indicator is an absolute
+    // overlay at the top that fades in based on pullDist; the user's finger
+    // sees iOS' native rubber-band bounce and the indicator above it.
     const contactsList = !collapsed.contacts && (
       <div className="flex-1 min-h-0 relative overflow-hidden bg-gray-50">
-        {/* Pull indicator — absolute overlay, never moves the scroll container */}
         {(pullDist>0 || syncing) && (
           <div className="absolute left-0 right-0 top-0 z-10 flex items-center justify-center pointer-events-none"
-            style={{height: 40, opacity: syncing ? 1 : Math.min(1, pullDist/PULL_THRESHOLD)}}>
-            <div className="flex items-center gap-2 px-3 py-1.5 bg-white/95 rounded-full shadow-sm border border-gray-100">
+            style={{paddingTop: 6, opacity: syncing ? 1 : Math.min(1, pullDist/PULL_THRESHOLD)}}>
+            <div className="flex items-center gap-2 px-3 py-1.5 bg-white/95 rounded-full shadow-md border border-gray-200">
               <Spinner size={12} className={syncing || pullDist>=PULL_THRESHOLD ? '' : '!animate-none'}/>
-              <span className="text-xs text-gray-500">
+              <span className="text-xs text-gray-600 font-medium">
                 {syncing ? 'Syncing…' : (pullDist>=PULL_THRESHOLD ? 'Release to sync' : 'Pull to sync')}
               </span>
             </div>
@@ -3287,9 +3311,7 @@ function LeftColumn({contactMeta, archivedContacts, selectedId, mergeId, onSelec
         )}
         <div ref={scrollRef}
           className="absolute inset-0 overflow-y-auto scroll"
-          style={{WebkitOverflowScrolling:'touch', overscrollBehaviorY:'contain',
-                  paddingTop: pullPad,
-                  transition: (syncing || pullDist>0) ? undefined : 'padding-top 0.2s ease'}}>
+          style={{WebkitOverflowScrolling:'touch', overscrollBehaviorY:'contain'}}>
           <div style={{minHeight:'calc(100% + 1px)'}}>
             {dataLoading && contactMeta.length===0 ? (
               <div className="flex flex-col items-center justify-center gap-2 py-16 text-gray-400">
