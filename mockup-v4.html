@@ -87,7 +87,7 @@ const { useState, useMemo, useRef, useEffect, useCallback } = React;
 
 // ─── Constants ───────────────────────────────────────────────────────────────
 
-const APP_VERSION = "0.0.51"; // bumped on every deploy — keep in sync with version.json
+const APP_VERSION = "0.0.52"; // bumped on every deploy — keep in sync with version.json
 
 // ─── Backend + Supabase config ───────────────────────────────────────────────
 const SUPABASE_URL = "https://oyrlzqbjcsliesvunbwj.supabase.co";
@@ -3008,38 +3008,69 @@ function LeftColumn({contactMeta, archivedContacts, selectedId, mergeId, onSelec
 
   // ── Mobile pull-to-refresh ────────────────────────────────────────────────
   // Drag the contacts list down when scrolled to the top to trigger a mail
-  // sync — same action as the "Get mail" button. Threshold is 64px; below
-  // that the indicator just follows the finger and snaps back. We also use
-  // the pull state to render a spinner hint at the top of the list.
+  // sync — same action as the "Get mail" button. Bound via native
+  // addEventListener instead of React's onTouch* because iOS WebKit
+  // sometimes drops React-synthesized touch events during native
+  // rubber-band overscroll, which caused the gesture to silently fail.
+  // Using a ref for pullDistRef (mirroring the state) keeps the touchend
+  // handler in sync with the latest value without waiting for a React
+  // render to rebind the closure.
   const scrollRef = useRef(null);
   const pullStartY = useRef(null);
   const pullActive = useRef(false);
+  const pullDistRef = useRef(0);
   const [pullDist, setPullDist] = useState(0);
+  const syncingRef = useRef(syncing);
+  useEffect(() => { syncingRef.current = syncing; }, [syncing]);
+  const onPullRefreshRef = useRef(onPullRefresh);
+  useEffect(() => { onPullRefreshRef.current = onPullRefresh; }, [onPullRefresh]);
   const PULL_THRESHOLD = 64;
-  function handlePullTouchStart(e) {
-    if (!scrollRef.current) return;
-    // Only initiate when we're already at the top of the scroll container —
-    // otherwise the gesture is a normal downward scroll.
-    if (scrollRef.current.scrollTop > 0) { pullActive.current = false; return; }
-    pullStartY.current = e.touches[0]?.clientY ?? null;
-    pullActive.current = true;
-  }
-  function handlePullTouchMove(e) {
-    if (!pullActive.current || pullStartY.current == null) return;
-    const dy = (e.touches[0]?.clientY ?? 0) - pullStartY.current;
-    if (dy <= 0) { setPullDist(0); return; }
-    // Dampen past threshold so the user feels rubber-band resistance.
-    const dampened = dy <= PULL_THRESHOLD ? dy : PULL_THRESHOLD + (dy - PULL_THRESHOLD) * 0.4;
-    setPullDist(Math.min(dampened, 120));
-  }
-  function handlePullTouchEnd() {
-    if (pullActive.current && pullDist >= PULL_THRESHOLD && onPullRefresh && !syncing) {
-      onPullRefresh();
+  useEffect(() => {
+    const el = scrollRef.current;
+    if (!el) return;
+    function updatePull(v) {
+      pullDistRef.current = v;
+      setPullDist(v);
     }
-    pullActive.current = false;
-    pullStartY.current = null;
-    setPullDist(0);
-  }
+    function onTouchStart(e) {
+      if (el.scrollTop > 0 || syncingRef.current) { pullActive.current = false; return; }
+      pullStartY.current = e.touches[0]?.clientY ?? null;
+      pullActive.current = true;
+    }
+    function onTouchMove(e) {
+      if (!pullActive.current || pullStartY.current == null) return;
+      // If scrollTop has moved away from 0 (user continued past a short bounce
+      // into real scrolling), abort the pull.
+      if (el.scrollTop > 0) { pullActive.current = false; updatePull(0); return; }
+      const dy = (e.touches[0]?.clientY ?? 0) - pullStartY.current;
+      if (dy <= 0) { updatePull(0); return; }
+      // Rubber-band: linear up to the threshold, damped beyond so it feels
+      // like pulling against resistance.
+      const dampened = dy <= PULL_THRESHOLD ? dy : PULL_THRESHOLD + (dy - PULL_THRESHOLD) * 0.4;
+      updatePull(Math.min(dampened, 120));
+    }
+    function onTouchEnd() {
+      if (pullActive.current && pullDistRef.current >= PULL_THRESHOLD && onPullRefreshRef.current && !syncingRef.current) {
+        onPullRefreshRef.current();
+      }
+      pullActive.current = false;
+      pullStartY.current = null;
+      updatePull(0);
+    }
+    // Passive listeners — we never preventDefault, and passive:true keeps
+    // scroll performance buttery on iOS.
+    const opts = { passive: true };
+    el.addEventListener('touchstart', onTouchStart, opts);
+    el.addEventListener('touchmove',  onTouchMove,  opts);
+    el.addEventListener('touchend',   onTouchEnd,   opts);
+    el.addEventListener('touchcancel',onTouchEnd,   opts);
+    return () => {
+      el.removeEventListener('touchstart', onTouchStart);
+      el.removeEventListener('touchmove',  onTouchMove);
+      el.removeEventListener('touchend',   onTouchEnd);
+      el.removeEventListener('touchcancel',onTouchEnd);
+    };
+  }, [collapsed.contacts]); // re-bind whenever the scroll div is (re)mounted
 
   function getTab(id){
     const c = contactMeta.find(m => m.contact.id === id)?.contact;
@@ -3199,21 +3230,20 @@ function LeftColumn({contactMeta, archivedContacts, selectedId, mergeId, onSelec
       </div>
     );
 
-    // Scrollable contacts list. Pull-to-refresh handlers live here; the
-    // list itself bounces (even when short) via `minHeight: calc(100% + 1px)`
-    // on the inner wrapper + native iOS momentum scrolling. Only shown when
-    // contacts section is not collapsed.
+    // Scrollable contacts list.  We use a wrapper div so the pull indicator
+    // can sit absolutely above the scroll container without being clipped
+    // by its overflow. Touch events are bound natively in the useEffect
+    // above (see `scrollRef`); using `padding-top` on the scroll container
+    // to reveal the indicator strip — this is the standard pull-to-refresh
+    // pattern and plays well with iOS rubber-band, unlike a CSS transform.
+    const pullPad = syncing ? 40 : (pullDist > 0 ? Math.min(pullDist, 80) : 0);
     const contactsList = !collapsed.contacts && (
-      <div ref={scrollRef}
-        onTouchStart={handlePullTouchStart} onTouchMove={handlePullTouchMove} onTouchEnd={handlePullTouchEnd} onTouchCancel={handlePullTouchEnd}
-        className="flex-1 min-h-0 overflow-y-auto scroll bg-gray-50 relative"
-        style={{WebkitOverflowScrolling:'touch', overscrollBehaviorY:'contain', transform: pullDist>0 ? `translateY(${pullDist*0.5}px)` : undefined, transition: pullDist===0 ? 'transform 0.2s ease' : undefined}}>
-        {/* Pull indicator lives inside the list (pins to the top while pulling
-            and during sync). Sits above the list content visually. */}
+      <div className="flex-1 min-h-0 relative overflow-hidden bg-gray-50">
+        {/* Pull indicator — absolute overlay, never moves the scroll container */}
         {(pullDist>0 || syncing) && (
-          <div className="sticky top-0 z-20 flex items-center justify-center pointer-events-none"
-            style={{height: syncing ? 32 : 0, marginBottom: syncing ? -32 : 0, opacity: syncing ? 1 : Math.min(1, pullDist/PULL_THRESHOLD)}}>
-            <div className="flex items-center gap-2 px-3 py-1.5 bg-white/90 backdrop-blur rounded-full shadow-sm border border-gray-100 mt-1">
+          <div className="absolute left-0 right-0 top-0 z-10 flex items-center justify-center pointer-events-none"
+            style={{height: 40, opacity: syncing ? 1 : Math.min(1, pullDist/PULL_THRESHOLD)}}>
+            <div className="flex items-center gap-2 px-3 py-1.5 bg-white/95 rounded-full shadow-sm border border-gray-100">
               <Spinner size={12} className={syncing || pullDist>=PULL_THRESHOLD ? '' : '!animate-none'}/>
               <span className="text-xs text-gray-500">
                 {syncing ? 'Syncing…' : (pullDist>=PULL_THRESHOLD ? 'Release to sync' : 'Pull to sync')}
@@ -3221,20 +3251,26 @@ function LeftColumn({contactMeta, archivedContacts, selectedId, mergeId, onSelec
             </div>
           </div>
         )}
-        <div style={{minHeight:'calc(100% + 1px)'}}>
-          {dataLoading && contactMeta.length===0 ? (
-            <div className="flex flex-col items-center justify-center gap-2 py-16 text-gray-400">
-              <Spinner size={24}/>
-              <span className="text-xs">Loading contacts…</span>
-            </div>
-          ) : (<>
-            {activeContacts.length===0 && (
-              <div className="px-3 py-3 text-xs text-gray-300 italic">
-                {contactTab==='News'?'No newsletter contacts':contactTab==='Muted'?'No muted contacts':contactTab==='Archive'?'No archived contacts':'No contacts'}
+        <div ref={scrollRef}
+          className="absolute inset-0 overflow-y-auto scroll"
+          style={{WebkitOverflowScrolling:'touch', overscrollBehaviorY:'contain',
+                  paddingTop: pullPad,
+                  transition: (syncing || pullDist>0) ? undefined : 'padding-top 0.2s ease'}}>
+          <div style={{minHeight:'calc(100% + 1px)'}}>
+            {dataLoading && contactMeta.length===0 ? (
+              <div className="flex flex-col items-center justify-center gap-2 py-16 text-gray-400">
+                <Spinner size={24}/>
+                <span className="text-xs">Loading contacts…</span>
               </div>
-            )}
-            {activeContacts.map(({contact,unread,hasR2m,r2mCount})=><ContactRow key={contact.id} contact={contact} unread={unread} hasR2m={hasR2m} r2mCount={r2mCount}/>)}
-          </>)}
+            ) : (<>
+              {activeContacts.length===0 && (
+                <div className="px-3 py-3 text-xs text-gray-300 italic">
+                  {contactTab==='News'?'No newsletter contacts':contactTab==='Muted'?'No muted contacts':contactTab==='Archive'?'No archived contacts':'No contacts'}
+                </div>
+              )}
+              {activeContacts.map(({contact,unread,hasR2m,r2mCount})=><ContactRow key={contact.id} contact={contact} unread={unread} hasR2m={hasR2m} r2mCount={r2mCount}/>)}
+            </>)}
+          </div>
         </div>
       </div>
     );
