@@ -77,7 +77,7 @@ const { useState, useMemo, useRef, useEffect, useCallback } = React;
 
 // ─── Constants ───────────────────────────────────────────────────────────────
 
-const APP_VERSION = "0.0.47"; // bumped on every deploy — keep in sync with version.json
+const APP_VERSION = "0.0.48"; // bumped on every deploy — keep in sync with version.json
 
 // ─── Backend + Supabase config ───────────────────────────────────────────────
 const SUPABASE_URL = "https://oyrlzqbjcsliesvunbwj.supabase.co";
@@ -1350,6 +1350,7 @@ function ComposePane({replyTo, replyKind='reply', toContact, draft, initTo:initT
         // the draft id to pull them into the MIME and clean up afterwards.
         draft_id: attachments.length > 0 ? draftId : null,
         draft_id_to_delete: attachments.length === 0 ? draftId : null,
+        tags: msgTags,
         revert2me_days: withR2m ? Number(r2mDays) || 0 : undefined,
       });
     } catch (e) {
@@ -1444,6 +1445,7 @@ function ComposePane({replyTo, replyKind='reply', toContact, draft, initTo:initT
         from, to, cc: showCC ? cc : '', bcc: showBCC ? bcc : '',
         subject: subj, body,
         reply_to_id: replyTo?.id,
+        tags: msgTags,
       }, draftId);
       if (newId && !draftId) setDraftId(newId);
     } catch (e) {
@@ -3931,6 +3933,8 @@ function App({onSignOut}) {
             body: d.body || '',
             replyToId: d.reply_to_message_id || null,
             attachments: attsByDraft.get(d.id) || [],
+            // Compose tags persisted on the draft: array of tag names.
+            tags: Array.isArray(d.tags) ? d.tags : [],
             sender: {
               name: senderName,
               emails: [accountEmail],
@@ -4605,7 +4609,7 @@ function App({onSignOut}) {
       else setMobileCol(0);
     }
   }
-  async function handleSend({from, to, cc, bcc, subject, body, reply_to_id, draft_id, draft_id_to_delete, revert2me_days}) {
+  async function handleSend({from, to, cc, bcc, subject, body, reply_to_id, draft_id, draft_id_to_delete, tags, revert2me_days}) {
     const acc = mailAccounts.find(a => (a.email||'').toLowerCase() === (from||'').toLowerCase());
     if (!acc) throw new Error(`Sending account "${from}" not found`);
     const result = await apiFetch(`/mail-accounts/${acc.id}/send`, {
@@ -4620,6 +4624,9 @@ function App({onSignOut}) {
         // When the draft has attachments we let the backend pull them into
         // the MIME and delete the draft itself (keys cleaned up after send).
         draft_id: draft_id || undefined,
+        // Compose tags (inherited from original on reply) get attached to the
+        // newly-inserted Sent row via message_tags.
+        tags: Array.isArray(tags) && tags.length > 0 ? tags : undefined,
         revert2me_days: (typeof revert2me_days === 'number' && revert2me_days >= 0) ? revert2me_days : undefined,
       }),
     });
@@ -4632,13 +4639,14 @@ function App({onSignOut}) {
     refreshData();
   }
   // Returns the draft id (new or existing). Pane keeps it locally for subsequent PATCHes.
-  async function handleSaveDraft({from, to, cc, bcc, subject, body, reply_to_id}, existingId) {
+  async function handleSaveDraft({from, to, cc, bcc, subject, body, reply_to_id, tags}, existingId) {
     const acc = mailAccounts.find(a => (a.email||'').toLowerCase() === (from||'').toLowerCase());
     const body_ = {
       mail_account_id: acc?.id || null,
       to: to || '', cc: cc || '', bcc: bcc || '',
       subject: subject || '', body: body || '',
       reply_to_id: reply_to_id || null,
+      tags: Array.isArray(tags) ? tags : [],
     };
     if (existingId) {
       await apiFetch(`/drafts/${existingId}`, { method: 'PATCH', body: JSON.stringify(body_) });
@@ -5161,7 +5169,7 @@ function App({onSignOut}) {
                     replyTo={replyTo} replyKind={replyKind} toContact={composeContact} draft={composeDraft}
                     myEmails={mailAccounts.map(a=>(a.email||'').toLowerCase())} mailAccounts={mailAccounts} mailAccounts={mailAccounts}
                     initTo={tagComposeInit?.to??""} initCC={tagComposeInit?.cc??""} initBCC={tagComposeInit?.bcc??""} initTag={tagComposeInit?.tag??null}
-                    initMsgTags={composeDraft?msgTags[composeDraft.id]||[]:replyTo?msgTags[replyTo.id]||[]:[]}
+                    initMsgTags={composeDraft?composeDraft.tags||[]:replyTo?msgTags[replyTo.id]||[]:[]}
                     allKnownTags={allKnownTags} selAccounts={selAccounts}
                     signatures={signatures} accountSigs={accountSigs}
                     onSend={handleSend} onSaveDraft={handleSaveDraft} onDeleteDraft={handleDeleteDraft}
@@ -5225,7 +5233,7 @@ function App({onSignOut}) {
                   replyTo={replyTo} replyKind={replyKind} toContact={composeContact} draft={composeDraft}
                   myEmails={mailAccounts.map(a=>(a.email||'').toLowerCase())} mailAccounts={mailAccounts}
                   initTo={tagComposeInit?.to??""} initCC={tagComposeInit?.cc??""} initBCC={tagComposeInit?.bcc??""} initTag={tagComposeInit?.tag??null}
-                  initMsgTags={composeDraft?msgTags[composeDraft.id]||[]:replyTo?msgTags[replyTo.id]||[]:[]}
+                  initMsgTags={composeDraft?composeDraft.tags||[]:replyTo?msgTags[replyTo.id]||[]:[]}
                   allKnownTags={allKnownTags}
                   selAccounts={selAccounts}
                   signatures={signatures} accountSigs={accountSigs}

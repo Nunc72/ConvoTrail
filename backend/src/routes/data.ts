@@ -25,7 +25,7 @@ export async function registerDataRoutes(app: FastifyInstance) {
       ).order("date", { ascending: false }).limit(limit),
       sb.from("drafts").select(
         "id, mail_account_id, to_emails, cc_emails, bcc_emails, subject, body, " +
-        "reply_to_message_id, created_at, modified_at",
+        "reply_to_message_id, tags, created_at, modified_at",
       ).order("modified_at", { ascending: false }),
       sb.from("tags").select("id, name, archived_at, created_at, email_roles")
         .order("name", { ascending: true }),

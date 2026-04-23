@@ -28,6 +28,9 @@ interface DraftBody {
   subject?: string;
   body?: string;
   reply_to_id?: string | null;
+  // Compose-time tag names. Inherited from the original on reply, then
+  // carried through draft save/send so the sent row gets the same tags.
+  tags?: string[];
 }
 
 export async function registerDraftsRoutes(app: FastifyInstance) {
@@ -48,8 +51,9 @@ export async function registerDraftsRoutes(app: FastifyInstance) {
         subject: b.subject ?? null,
         body: b.body ?? null,
         reply_to_message_id: b.reply_to_id || null,
+        tags: Array.isArray(b.tags) ? b.tags : [],
       })
-      .select("id, mail_account_id, to_emails, cc_emails, bcc_emails, subject, body, reply_to_message_id, created_at, modified_at")
+      .select("id, mail_account_id, to_emails, cc_emails, bcc_emails, subject, body, reply_to_message_id, tags, created_at, modified_at")
       .single();
     if (error) return reply.internalServerError(error.message);
     return { draft: data };
@@ -79,6 +83,7 @@ export async function registerDraftsRoutes(app: FastifyInstance) {
     if (b.subject !== undefined)         setField("subject", b.subject ?? null);
     if (b.body !== undefined)            setField("body", b.body ?? null);
     if (b.reply_to_id !== undefined)     setField("reply_to_message_id", b.reply_to_id || null);
+    if (Array.isArray(b.tags))           setField("tags", JSON.stringify(b.tags));
 
     vals.push(id);
     await pool.query(`UPDATE drafts SET ${sets.join(", ")} WHERE id = $${p}`, vals);

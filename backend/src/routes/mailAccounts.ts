@@ -190,6 +190,10 @@ export async function registerMailAccountsRoutes(app: FastifyInstance) {
       // the outgoing MIME, and — on successful delivery — the draft row +
       // storage blobs are removed (CASCADE handles draft_attachments rows).
       draft_id?: string;
+      // Tag names to attach to the newly-inserted Sent row. On reply the
+      // frontend inherits these from the original message; on send we
+      // create-or-get each tag and drop message_tags rows.
+      tags?: string[];
     };
   }>("/mail-accounts/:id/send", auth, async (req, reply) => {
     const { id } = req.params;
@@ -299,6 +303,35 @@ export async function registerMailAccountsRoutes(app: FastifyInstance) {
             await armR2m(newMessageId, req.authUser!.id, b.revert2me_days);
           } catch (e) {
             req.log.warn({ err: e }, "send: arming r2m failed");
+          }
+        }
+        // Attach tags to the sent row. Tag names come from the compose pane
+        // (inherited from the original on reply). Each name is create-or-got
+        // against the user's tags; message_tags rows are upserted.
+        if (newMessageId && Array.isArray(b.tags) && b.tags.length > 0) {
+          try {
+            for (const rawName of b.tags) {
+              const name = (rawName || "").trim();
+              if (!name) continue;
+              // Create-or-get the tag
+              let tagId: string | null = null;
+              const ins1 = await pool.query<{ id: string }>(
+                `INSERT INTO tags (user_id, name) VALUES ($1, $2)
+                 ON CONFLICT (user_id, name) DO UPDATE SET name = EXCLUDED.name
+                 RETURNING id`,
+                [req.authUser!.id, name],
+              );
+              tagId = ins1.rows[0]?.id || null;
+              if (!tagId) continue;
+              await pool.query(
+                `INSERT INTO message_tags (message_id, tag_id, user_id)
+                   VALUES ($1, $2, $3)
+                 ON CONFLICT (message_id, tag_id) DO NOTHING`,
+                [newMessageId, tagId, req.authUser!.id],
+              );
+            }
+          } catch (e) {
+            req.log.warn({ err: e }, "send: tag attach failed");
           }
         }
       } catch (e) {
