@@ -1,6 +1,6 @@
 # ConvoTrail — feature roadmap
 
-_Last updated: 2026-04-22, v0.0.48_
+_Last updated: 2026-04-23, v0.0.49_
 
 Status legend:
 - ✅ **Done** — works end-to-end, persists where relevant
