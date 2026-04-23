@@ -1,6 +1,6 @@
 # ConvoTrail — handover
 
-_Last updated: 2026-04-23, v0.0.49_
+_Last updated: 2026-04-23, v0.0.50_
 
 A conversation-centric email client. Mail stays on IMAP (Gmail/iCloud/own);
 ConvoTrail adds grouping per contact, tags, revert-to-me, merge/unmerge,
@@ -128,6 +128,7 @@ auth.users                        (managed by Supabase)
 
 ## Recent history (terse)
 
+- v0.0.50 — UI consistency + mobile niceties: compose Delete button now matches the MessageDetail Delete pill exactly (rounded gray bg, icon on mobile / icon+label on desktop); topbar action order reversed — on mobile `[user][+]` with the + at the thumb-reachable corner, on desktop `[user][Get mail][New message]`; mobile contacts list bounces (iOS rubber-band) even when short via `minHeight: calc(100% + 1px)` wrapper; pull-down gesture on the contacts list triggers a mail sync (pull indicator shows "Pull to sync" → "Release to sync" → "Syncing…"); initial-load spinner now rendered inside the contacts panel itself (both mobile + desktop) while `dataLoading && contactMeta.length===0`; tag-card mail list avatar bumped from 20 → 28 to match the contacts rail (sub-row indent updated to pl-[38px] so subject aligns with name).
 - v0.0.49 — Polish: compose Delete button shows text on desktop / icon on mobile; Cancel X hidden once draft has a draftId (avoids accidental discard, works on both mobile and desktop); Settings → Profile gains recovery_email (persisted to user_metadata alongside display_name + mobile); user-menu pulldown now shows authenticated display name + email from sb.auth.getUser() instead of the legacy CURRENT_USER mock; avatar initials derived from display_name.
 - v0.0.48 — Compose tags persist on draft (migration 0005 → drafts.tags JSONB) and carry through to the Sent row via message_tags on /send; reply inherits original's tags as before, now it actually sticks
 - v0.0.47 — MessageDetail single-scroll (header + body scroll together; iframe no longer scrollable on its own), Delete-draft button icon-only, Settings profile form persists via sb.auth.updateUser (display_name, mobile, password)
