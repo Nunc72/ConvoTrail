@@ -87,7 +87,7 @@ const { useState, useMemo, useRef, useEffect, useCallback } = React;
 
 // ─── Constants ───────────────────────────────────────────────────────────────
 
-const APP_VERSION = "0.0.54"; // bumped on every deploy — keep in sync with version.json
+const APP_VERSION = "0.0.55"; // bumped on every deploy — keep in sync with version.json
 
 // ─── Backend + Supabase config ───────────────────────────────────────────────
 const SUPABASE_URL = "https://oyrlzqbjcsliesvunbwj.supabase.co";
@@ -1979,10 +1979,41 @@ function AttachmentPreviewModal({messageId, attachment, attachments, onClose, on
   const [err, setErr] = useState('');
   const [loading, setLoading] = useState(false);
   // Zoom state for images only. null = fit-to-screen (default), number = CSS
-  // scale factor. Tap toggles between fit and 2x. We reset to null whenever
-  // we switch to a different attachment.
+  // zoom factor (1.0–5.0). Tap cycles fit → 2× → 3× → fit; pinch adjusts
+  // continuously. Resets whenever we switch to a different attachment.
   const [imgZoom, setImgZoom] = useState(null);
   useEffect(() => { setImgZoom(null); }, [attachment?.index]);
+  // Pinch-gesture tracking. We capture the distance between two fingers at
+  // touchstart and the zoom level at that moment, then derive the new zoom
+  // from the ratio of current to initial distance. React's onTouchMove is
+  // passive by default which is fine — we don't need preventDefault because
+  // `touch-action: pan-x pan-y` on the container already tells the browser
+  // not to interpret 2-finger gestures as its own zoom (viewport-level
+  // pinch is already disabled by `user-scalable=no` in the page meta).
+  const pinchRef = useRef({ startDist: 0, startZoom: 1 });
+  function handleImgTouchStart(e) {
+    if (e.touches.length === 2) {
+      const dx = e.touches[0].clientX - e.touches[1].clientX;
+      const dy = e.touches[0].clientY - e.touches[1].clientY;
+      pinchRef.current = { startDist: Math.hypot(dx, dy), startZoom: imgZoom || 1 };
+    }
+  }
+  function handleImgTouchMove(e) {
+    if (e.touches.length !== 2 || !pinchRef.current.startDist) return;
+    const dx = e.touches[0].clientX - e.touches[1].clientX;
+    const dy = e.touches[0].clientY - e.touches[1].clientY;
+    const d  = Math.hypot(dx, dy);
+    const ratio = d / pinchRef.current.startDist;
+    const next  = pinchRef.current.startZoom * ratio;
+    // Snap back to null (fit-to-screen) if the user pinched all the way
+    // back; otherwise clamp to [1, 5] and round to 1 decimal so the label
+    // doesn't jitter.
+    const clamped = Math.max(1, Math.min(5, next));
+    setImgZoom(clamped <= 1.05 ? null : Math.round(clamped * 10) / 10);
+  }
+  function handleImgTouchEnd(e) {
+    if (e.touches.length < 2) pinchRef.current = { startDist: 0, startZoom: 1 };
+  }
   const kind = attachment ? attachmentKind(attachment.contentType) : null;
 
   useEffect(() => {
@@ -2051,17 +2082,24 @@ function AttachmentPreviewModal({messageId, attachment, attachments, onClose, on
         )}
         {!loading && err && <div className="text-red-300 text-sm">Preview failed: {err}</div>}
         {!loading && !err && kind === 'image' && blobUrl && (
-          // Zoom UX: tap image cycles fit → 2x → 3x → fit. When zoomed, the
-          // wrapper becomes a pan-scroll surface so the user can drag
-          // around the oversized image. We use CSS `zoom` (vs `transform:
-          // scale`) because `zoom` actually affects layout, so the wrapper
-          // correctly scrolls the enlarged content.
+          // Zoom UX:
+          //  • Mobile pinch: spread 2 fingers to zoom in, pinch to zoom out.
+          //    Continuous between 1× and 5×, snaps back to fit-to-screen
+          //    when released near 1×.
+          //  • Tap (single click): cycles fit → 2× → 3× → fit as a quick
+          //    shortcut.
+          //  • When zoomed, the wrapping div becomes a pan-scroll surface
+          //    so the user can drag around the enlarged image.
+          //  • CSS `zoom` (not `transform: scale`) so the enlarged image
+          //    actually takes more layout space and the overflow scrolls.
           // stopPropagation keeps taps on the image from bubbling to the
           // backdrop (which would close the modal).
           <div className={imgZoom ? "w-full h-full overflow-auto scroll flex items-start justify-start" : "w-full h-full flex items-center justify-center"}
-            onClick={e=>{ e.stopPropagation(); setImgZoom(z => z === null ? 2 : z === 2 ? 3 : null); }}
-            style={{cursor: imgZoom ? 'zoom-in' : 'zoom-in', WebkitOverflowScrolling:'touch', touchAction:'pan-x pan-y'}}
-            title={imgZoom ? `Tap to ${imgZoom===2?'zoom further':'reset zoom'}` : 'Tap to zoom'}>
+            onClick={e=>{ e.stopPropagation(); setImgZoom(z => z === null ? 2 : z < 2.5 ? 3 : null); }}
+            onTouchStart={handleImgTouchStart} onTouchMove={handleImgTouchMove}
+            onTouchEnd={handleImgTouchEnd} onTouchCancel={handleImgTouchEnd}
+            style={{cursor: 'zoom-in', WebkitOverflowScrolling:'touch', touchAction:'pan-x pan-y'}}
+            title={imgZoom ? 'Tap or pinch to zoom' : 'Tap or pinch to zoom in'}>
             <img src={blobUrl} alt={attachment.filename} draggable={false}
               className={imgZoom ? "select-none block" : "max-w-full max-h-full object-contain select-none"}
               style={imgZoom ? {zoom: imgZoom} : {}}/>
@@ -2069,7 +2107,7 @@ function AttachmentPreviewModal({messageId, attachment, attachments, onClose, on
         )}
         {!loading && !err && kind === 'image' && blobUrl && imgZoom && (
           <div className="absolute bottom-3 left-1/2 -translate-x-1/2 z-10 px-2.5 py-1 rounded-full bg-white/90 text-gray-700 text-xs shadow pointer-events-none">
-            {imgZoom}× · tap image to {imgZoom===3?'reset':'zoom more'}
+            {imgZoom.toFixed(1)}× · tap to {imgZoom >= 2.5 ? 'reset' : 'zoom more'}, pinch to adjust
           </div>
         )}
         {!loading && !err && kind === 'pdf' && blobUrl && (
