@@ -1,6 +1,6 @@
 # ConvoTrail — handover
 
-_Last updated: 2026-04-22, v0.0.46_
+_Last updated: 2026-04-22, v0.0.47_
 
 A conversation-centric email client. Mail stays on IMAP (Gmail/iCloud/own);
 ConvoTrail adds grouping per contact, tags, revert-to-me, merge/unmerge,
@@ -128,6 +128,7 @@ auth.users                        (managed by Supabase)
 
 ## Recent history (terse)
 
+- v0.0.47 — MessageDetail single-scroll (header + body scroll together; iframe no longer scrollable on its own), Delete-draft button icon-only, Settings profile form persists via sb.auth.updateUser (display_name, mobile, password)
 - v0.0.46 — UX polish: preview modal via Portal (fixes mobile stuck-overlay), re-save draft button, HTML newsletter auto-fit-to-iframe on mobile, spinners (attachments + initial load), iOS safe-area padding, Seen/R2mSeen toasts removed, contact-edit form cleaned up (News/Mute already on card)
 - v0.0.45 — fix: outgoing messages table row now records has_attachments (was false → frontend skipped the /body fetch → no chips on Sent view)
 - v0.0.44 — Compose attachments: migration 0004 (draft_attachments), Supabase Storage bucket, POST/DELETE/GET /drafts/:id/attachments, send pulls attachments into MIME + cleans up storage; ComposePane 📎 button + drag-drop, 25 MB/draft cap
