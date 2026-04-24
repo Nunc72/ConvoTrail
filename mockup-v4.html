@@ -93,7 +93,7 @@ const { useState, useMemo, useRef, useEffect, useCallback } = React;
 
 // ─── Constants ───────────────────────────────────────────────────────────────
 
-const APP_VERSION = "0.0.61"; // bumped on every deploy — keep in sync with version.json
+const APP_VERSION = "0.0.62"; // bumped on every deploy — keep in sync with version.json
 
 // ─── Backend + Supabase config ───────────────────────────────────────────────
 const SUPABASE_URL = "https://oyrlzqbjcsliesvunbwj.supabase.co";
@@ -3174,16 +3174,17 @@ function LeftColumn({contactMeta, archivedContacts, selectedId, mergeId, onSelec
   },[accDropOpen]);
 
   // ── Mobile pull-to-refresh ────────────────────────────────────────────────
-  // Approach: keep scrollTop parked at >= 1 via a 1-px sentinel below.
-  // Reason: on truly scrollable lists (Convo), iOS claims a downward
-  // swipe at scrollTop=0 for native rubber-band at a layer below JS
-  // events. preventDefault() and dynamic touch-action both fire too
-  // late on that path. By making sure the scroll position is always
-  // "just below the top", iOS sees the downward gesture as a normal
-  // up-scroll (toward scrollTop=0) — no overscroll, no claim, touchmove
-  // events stream through cleanly. We enforce the floor via a scroll
-  // handler that snaps back to 1, and trigger the pull logic in touch
-  // handlers when startScrollTop was at the sentinel.
+  // Full JS-driven scroll. Reason we gave up on native + pull-to-refresh:
+  // on truly scrollable lists (Convo), iOS claims a downward swipe at
+  // scrollTop=0 for rubber-band in a layer below DOM events. Sentinel
+  // tricks (scrollTop=1) fail because iOS buffers scroll events during
+  // an active gesture and only flushes after touchend — too late to
+  // clamp. So we take scroll ownership: touch-action:none kills all
+  // native touch handling, and we drive scrollTop ourselves in
+  // touchmove. Same code path runs on Muted (where it already worked),
+  // so no regression there; Convo now gets the same guarantees.
+  // Wheel/trackpad scroll on desktop still uses the native path
+  // (touch-action only affects touch), so nothing changes there.
   const scrollRef = useRef(null);
   const pullDistRef = useRef(0);
   const [pullDist, setPullDist] = useState(0);
@@ -3192,7 +3193,6 @@ function LeftColumn({contactMeta, archivedContacts, selectedId, mergeId, onSelec
   const onPullRefreshRef = useRef(onPullRefresh);
   useEffect(() => { onPullRefreshRef.current = onPullRefresh; }, [onPullRefresh]);
   const PULL_THRESHOLD = 60;
-  const SENTINEL = 1;
   function updatePull(v) {
     pullDistRef.current = v;
     setPullDist(v);
@@ -3200,37 +3200,45 @@ function LeftColumn({contactMeta, archivedContacts, selectedId, mergeId, onSelec
   useEffect(() => {
     const el = scrollRef.current;
     if (!el) return;
-    if (el.scrollTop < SENTINEL) el.scrollTop = SENTINEL;
-    function onScroll() {
-      if (el.scrollTop < SENTINEL) el.scrollTop = SENTINEL;
-    }
-    el.addEventListener('scroll', onScroll, { passive: true });
+    el.style.touchAction = 'none';
     let startY = null;
+    let startScrollTop = 0;
     let active = false;
+    let pulling = false;
     function onTouchStart(e) {
       if (e.touches.length !== 1 || syncingRef.current) { active = false; return; }
-      if (el.scrollTop > SENTINEL + 4) { active = false; return; }
       startY = e.touches[0].clientY;
+      startScrollTop = el.scrollTop;
       active = true;
+      pulling = false;
       updatePull(0);
     }
     function onTouchMove(e) {
       if (!active || startY == null || e.touches.length !== 1) return;
       const dy = e.touches[0].clientY - startY;
-      if (dy <= 0) {
-        updatePull(0);
-        if (el.scrollTop > SENTINEL + 9) active = false;
-        return;
+      const maxScroll = Math.max(0, el.scrollHeight - el.clientHeight);
+      if (startScrollTop <= 0 && dy > 0) {
+        // Pull-to-refresh: track pullDist, don't scroll the list.
+        pulling = true;
+        e.preventDefault();
+        const dampened = dy <= PULL_THRESHOLD ? dy : PULL_THRESHOLD + (dy - PULL_THRESHOLD) * 0.4;
+        updatePull(Math.min(dampened, 120));
+      } else {
+        // Plain scroll: drive scrollTop ourselves. preventDefault stops
+        // any lingering browser attempts to also handle the gesture.
+        if (pulling) { pulling = false; updatePull(0); }
+        e.preventDefault();
+        const newTop = Math.max(0, Math.min(maxScroll, startScrollTop - dy));
+        el.scrollTop = newTop;
       }
-      e.preventDefault();
-      const dampened = dy <= PULL_THRESHOLD ? dy : PULL_THRESHOLD + (dy - PULL_THRESHOLD) * 0.4;
-      updatePull(Math.min(dampened, 120));
     }
     function onTouchEnd() {
-      if (active && pullDistRef.current >= PULL_THRESHOLD && onPullRefreshRef.current && !syncingRef.current) {
+      if (active && pulling && pullDistRef.current >= PULL_THRESHOLD
+          && onPullRefreshRef.current && !syncingRef.current) {
         onPullRefreshRef.current();
       }
       active = false;
+      pulling = false;
       startY = null;
       updatePull(0);
     }
@@ -3239,7 +3247,6 @@ function LeftColumn({contactMeta, archivedContacts, selectedId, mergeId, onSelec
     el.addEventListener('touchend',   onTouchEnd,   { passive: true });
     el.addEventListener('touchcancel',onTouchEnd,   { passive: true });
     return () => {
-      el.removeEventListener('scroll', onScroll);
       el.removeEventListener('touchstart', onTouchStart);
       el.removeEventListener('touchmove',  onTouchMove);
       el.removeEventListener('touchend',   onTouchEnd);
@@ -3426,16 +3433,11 @@ function LeftColumn({contactMeta, archivedContacts, selectedId, mergeId, onSelec
         )}
         <div ref={scrollRef}
           className="absolute inset-0 overflow-y-auto scroll"
-          style={{WebkitOverflowScrolling:'touch',
-                  // overscroll-behavior:none keeps any stray bounce from
-                  // masking the pull indicator. touch-action:pan-y keeps
-                  // normal vertical scrolling available; the pull-to-
-                  // refresh trigger is driven by the scrollTop=1 sentinel
-                  // (see pull-to-refresh effect above), not by flipping
-                  // touch-action mid-gesture — which on iOS lands after
-                  // the browser has already made its scroll-claim decision.
-                  overscrollBehaviorY:'none', touchAction:'pan-y',
-                  paddingTop: pullDist > 0 ? Math.min(pullDist, 100) : 0,
+          // touch-action:none is set imperatively in the pull-to-refresh
+          // effect so React re-renders can't stomp it. No -webkit-
+          // overflow-scrolling:touch either — we drive scrollTop in JS
+          // so the native momentum engine must be out of the loop.
+          style={{paddingTop: pullDist > 0 ? Math.min(pullDist, 100) : 0,
                   transition: pullDist === 0 ? 'padding-top 0.2s ease' : undefined}}>
           <div style={{minHeight:'calc(100% + 1px)'}}>
             {dataLoading && contactMeta.length===0 ? (
