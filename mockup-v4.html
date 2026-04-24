@@ -103,7 +103,7 @@ const { useState, useMemo, useRef, useEffect, useCallback } = React;
 
 // ─── Constants ───────────────────────────────────────────────────────────────
 
-const APP_VERSION = "0.0.66"; // bumped on every deploy — keep in sync with version.json
+const APP_VERSION = "0.0.67"; // bumped on every deploy — keep in sync with version.json
 
 // ─── Backend + Supabase config ───────────────────────────────────────────────
 const SUPABASE_URL = "https://oyrlzqbjcsliesvunbwj.supabase.co";
@@ -3168,7 +3168,7 @@ function LeftColumn({contactMeta, archivedContacts, selectedId, mergeId, onSelec
                      emailFlags,
                      selAccounts, onToggleAccount,
                      mailAccounts=[],
-                     dataLoading=false, syncing=false, onPullRefresh}) {
+                     dataLoading=false}) {
   const [accDropOpen, setAccDropOpen] = useState(false);
   const [contactTab,  setContactTab]  = useState('Convo');
   const [archiveTagsVisible, setArchiveTagsVisible] = useState(false);
@@ -3182,87 +3182,6 @@ function LeftColumn({contactMeta, archivedContacts, selectedId, mergeId, onSelec
     document.addEventListener("mousedown",h);
     return()=>document.removeEventListener("mousedown",h);
   },[accDropOpen]);
-
-  // ── Mobile pull-to-refresh ────────────────────────────────────────────────
-  // Observation-only approach. iOS handles scroll + rubber-band bounce
-  // natively (touch-action default, no preventDefault), so the list
-  // keeps its normal feel. We listen to touch events passively and
-  // compute "how far past the top has the finger pulled" from the
-  // finger coords + initial scrollTop:
-  //   pastTop = max(0, dy - startScrollTop)
-  // Short list at top: startScrollTop=0, dy=100 -> pastTop=100.
-  // Long list mid-scrolled: startScrollTop=50, dy=200 -> iOS first
-  // scrolls up, reaching scrollTop=0 around dy=50; remaining 150 is
-  // overshoot that we feed into pullDist. Native rubber-band visualizes
-  // the pull; the pill overlay shows the threshold label.
-  const scrollRef = useRef(null);
-  const pullDistRef = useRef(0);
-  const [pullDist, setPullDist] = useState(0);
-  const syncingRef = useRef(syncing);
-  useEffect(() => { syncingRef.current = syncing; }, [syncing]);
-  const onPullRefreshRef = useRef(onPullRefresh);
-  useEffect(() => { onPullRefreshRef.current = onPullRefresh; }, [onPullRefresh]);
-  const PULL_THRESHOLD = 60;
-  function updatePull(v) {
-    pullDistRef.current = v;
-    setPullDist(v);
-  }
-  useEffect(() => {
-    const el = scrollRef.current;
-    if (!el) return;
-    let startY = null;
-    let startScrollTop = 0;
-    let active = false;
-    let pulling = false;
-    function onTouchStart(e) {
-      if (e.touches.length !== 1 || syncingRef.current) { active = false; return; }
-      startY = e.touches[0].clientY;
-      startScrollTop = el.scrollTop;
-      active = true;
-      pulling = false;
-      updatePull(0);
-    }
-    function onTouchMove(e) {
-      if (!active || startY == null || e.touches.length !== 1) return;
-      const dy = e.touches[0].clientY - startY;
-      // Effective past-top = finger-down distance beyond how far the
-      // list could scroll up. Once the list is scrolled to top (iOS
-      // has scrollTop=0 at that moment, bouncing visually), any extra
-      // dy becomes pull distance.
-      const pastTop = dy - startScrollTop;
-      if (pastTop > 0 && el.scrollTop === 0) {
-        pulling = true;
-        const dampened = pastTop <= PULL_THRESHOLD ? pastTop : PULL_THRESHOLD + (pastTop - PULL_THRESHOLD) * 0.4;
-        updatePull(Math.min(dampened, 120));
-      } else if (pulling) {
-        pulling = false;
-        updatePull(0);
-      }
-    }
-    function onTouchEnd() {
-      if (active && pulling && pullDistRef.current >= PULL_THRESHOLD
-          && onPullRefreshRef.current && !syncingRef.current) {
-        onPullRefreshRef.current();
-      }
-      active = false;
-      pulling = false;
-      startY = null;
-      updatePull(0);
-    }
-    // All listeners passive: we never preventDefault, so iOS keeps full
-    // control of native scroll and rubber-band. Passive also lets iOS
-    // optimize and never throttle our events mid-gesture.
-    el.addEventListener('touchstart', onTouchStart, { passive: true });
-    el.addEventListener('touchmove',  onTouchMove,  { passive: true });
-    el.addEventListener('touchend',   onTouchEnd,   { passive: true });
-    el.addEventListener('touchcancel',onTouchEnd,   { passive: true });
-    return () => {
-      el.removeEventListener('touchstart', onTouchStart);
-      el.removeEventListener('touchmove',  onTouchMove);
-      el.removeEventListener('touchend',   onTouchEnd);
-      el.removeEventListener('touchcancel',onTouchEnd);
-    };
-  }, [collapsed.contacts]);
 
   function getTab(id){
     const c = contactMeta.find(m => m.contact.id === id)?.contact;
@@ -3421,51 +3340,25 @@ function LeftColumn({contactMeta, archivedContacts, selectedId, mergeId, onSelec
       </div>
     );
 
-    // Scrollable contacts list. Touch handlers are bound natively in the
-    // useEffect above (see scrollRef). We do NOT modify the scroll container
-    // layout during a pull — no padding, no transform — because layout
-    // changes mid-gesture confuse iOS into reporting scrollTop>0 and abort
-    // the pull on long lists. Instead, the pull indicator is an absolute
-    // overlay at the top that fades in based on pullDist; the user's finger
-    // sees iOS' native rubber-band bounce and the indicator above it.
+    // Scrollable contacts list. Native iOS scroll + rubber-band bounce
+    // (via .scroll class: overscroll-behavior:contain + -webkit-overflow-
+    // scrolling:touch). No pull-to-sync — use the Sync button in the
+    // topbar to refresh mail.
     const contactsList = !collapsed.contacts && (
-      <div className="flex-1 min-h-0 relative overflow-hidden bg-gray-50">
-        {(pullDist>0 || syncing) && (
-          <div className="absolute left-0 right-0 top-0 z-10 flex items-center justify-center pointer-events-none"
-            style={{paddingTop: 6, opacity: syncing ? 1 : Math.min(1, pullDist/PULL_THRESHOLD)}}>
-            <div className="flex items-center gap-2 px-3 py-1.5 bg-white/95 rounded-full shadow-md border border-gray-200">
-              <Spinner size={12} className={syncing || pullDist>=PULL_THRESHOLD ? '' : '!animate-none'}/>
-              <span className="text-xs text-gray-600 font-medium">
-                {syncing ? 'Syncing…' : (pullDist>=PULL_THRESHOLD ? 'Release to sync' : 'Pull to sync')}
-              </span>
+      <div className="flex-1 min-h-0 overflow-y-auto scroll bg-gray-50">
+        {dataLoading && contactMeta.length===0 ? (
+          <div className="flex flex-col items-center justify-center gap-2 py-16 text-gray-400">
+            <Spinner size={24}/>
+            <span className="text-xs">Loading contacts…</span>
+          </div>
+        ) : (<>
+          {activeContacts.length===0 && (
+            <div className="px-3 py-3 text-xs text-gray-300 italic">
+              {contactTab==='News'?'No newsletter contacts':contactTab==='Muted'?'No muted contacts':contactTab==='Archive'?'No archived contacts':'No contacts'}
             </div>
-          </div>
-        )}
-        <div ref={scrollRef}
-          className="absolute inset-0 overflow-y-auto scroll"
-          // No touch-action override and no overscrollBehavior override:
-          // we want iOS' native scroll and rubber-band bounce. The
-          // .scroll class already provides overscroll-behavior:contain
-          // (local bounce, no propagation to parent) and momentum.
-          // Pull-to-refresh is detected passively in the effect above
-          // without preventDefault, so native behavior is preserved.
-          >
-          <div>
-            {dataLoading && contactMeta.length===0 ? (
-              <div className="flex flex-col items-center justify-center gap-2 py-16 text-gray-400">
-                <Spinner size={24}/>
-                <span className="text-xs">Loading contacts…</span>
-              </div>
-            ) : (<>
-              {activeContacts.length===0 && (
-                <div className="px-3 py-3 text-xs text-gray-300 italic">
-                  {contactTab==='News'?'No newsletter contacts':contactTab==='Muted'?'No muted contacts':contactTab==='Archive'?'No archived contacts':'No contacts'}
-                </div>
-              )}
-              {activeContacts.map(({contact,unread,hasR2m,r2mCount})=><ContactRow key={contact.id} contact={contact} unread={unread} hasR2m={hasR2m} r2mCount={r2mCount}/>)}
-            </>)}
-          </div>
-        </div>
+          )}
+          {activeContacts.map(({contact,unread,hasR2m,r2mCount})=><ContactRow key={contact.id} contact={contact} unread={unread} hasR2m={hasR2m} r2mCount={r2mCount}/>)}
+        </>)}
       </div>
     );
 
@@ -5416,10 +5309,8 @@ function App({onSignOut}) {
                 </div>
               )}
             </div>
-            {/* Sync button — pull-to-sync exists as a shortcut on the contacts
-                list but iOS doesn't always cooperate with multi-finger touch
-                events on scrollable content, so this is the bulletproof
-                fallback. Spinner replaces the arrows while syncing. */}
+            {/* Sync button — the only way to refresh mail on mobile.
+                Spinner replaces the icon while syncing. */}
             <button onClick={handleGetMail} disabled={mailAccounts.length===0 || syncingIds.size>0}
               title={mailAccounts.length===0 ? 'Add a mail account first' : 'Sync all accounts'}
               className="flex items-center justify-center w-8 h-8 rounded-full hover:bg-gray-100 text-gray-500 disabled:opacity-40">
@@ -5575,7 +5466,7 @@ function App({onSignOut}) {
                 emailFlags={emailFlags}
                 selAccounts={selAccounts} onToggleAccount={handleToggleAccount}
                 mailAccounts={mailAccounts}
-                dataLoading={dataLoading} syncing={syncingIds.size>0} onPullRefresh={handleGetMail}/>
+                dataLoading={dataLoading}/>
             </div>
             {/* Mobile Col 2 */}
             <div style={{width:'100vw',height:'100%',overflow:'hidden',flexShrink:0}} className="flex flex-col">
@@ -5635,7 +5526,7 @@ function App({onSignOut}) {
                 emailFlags={emailFlags}
                 selAccounts={selAccounts} onToggleAccount={handleToggleAccount}
                 mailAccounts={mailAccounts}
-                dataLoading={dataLoading} syncing={syncingIds.size>0} onPullRefresh={handleGetMail}/>
+                dataLoading={dataLoading}/>
             </div>
 
             <div onMouseDown={e=>onColDivDown(e,0)} className={`col-divider${activeColDiv===0?" active":""}`}/>
