@@ -93,7 +93,7 @@ const { useState, useMemo, useRef, useEffect, useCallback } = React;
 
 // ─── Constants ───────────────────────────────────────────────────────────────
 
-const APP_VERSION = "0.0.59"; // bumped on every deploy — keep in sync with version.json
+const APP_VERSION = "0.0.60"; // bumped on every deploy — keep in sync with version.json
 
 // ─── Backend + Supabase config ───────────────────────────────────────────────
 const SUPABASE_URL = "https://oyrlzqbjcsliesvunbwj.supabase.co";
@@ -2001,35 +2001,39 @@ function AttachmentPreviewModal({messageId, attachment, attachments, onClose, on
   // accidentally zoom the view. Resets whenever we switch attachments.
   const [imgZoom, setImgZoom] = useState(null);
   useEffect(() => { setImgZoom(null); }, [attachment?.index]);
-  // Pinch-to-zoom on the image container. On iOS / Safari the page-level
-  // `user-scalable=no` + `touch-action: pan-x pan-y` combo silently
-  // suppresses 2-finger touchmove events, so a pure touch-based pinch
-  // implementation never fires. WebKit exposes the gesture stream via its
-  // own non-standard `gesturestart / gesturechange / gestureend` events —
-  // we listen for those on iOS and fall back to touchmove-based pinch on
-  // Android (which doesn't fire gesture events). We also preventDefault on
-  // the gesture events so iOS doesn't try to run its own zoom.
-  const imgHostRef = useRef(null);
+  // Pinch-to-zoom. Listeners live on the MODAL root (via modalRef), not on
+  // the image itself. Reason: gesture events bubble up from their target
+  // but never sideways, so a pinch that starts on the black padding next
+  // to the image (common — users spread fingers from outside the image
+  // inward) had its target on a sibling container. The imgHost listener
+  // would never see it, no preventDefault ran, and iOS happily did its
+  // own page-zoom — which is what the user sees as "the image jumps up".
+  // Binding on the modal root catches pinches anywhere in the preview.
+  // We also set touch-action:none on the modal root to kill iOS' native
+  // gesture claim outright. The zoomed-image pan surface (imgHost) keeps
+  // its own `touch-action: pan-x pan-y` — a more-specific child wins.
+  const modalRef = useRef(null);
   const imgZoomRef = useRef(null);
+  const kindRef = useRef(kind);
   useEffect(() => { imgZoomRef.current = imgZoom; }, [imgZoom]);
+  useEffect(() => { kindRef.current = kind; }, [kind]);
   useEffect(() => {
-    const el = imgHostRef.current;
+    const el = modalRef.current;
     if (!el) return;
     const hasGesture = 'ongesturestart' in window;
     let startZoom = 1;
-    // ── iOS WebKit gesture events (preferred) ─────────────────────────
     function onGestureStart(e) {
       e.preventDefault();
       startZoom = imgZoomRef.current || 1;
     }
     function onGestureChange(e) {
       e.preventDefault();
+      if (kindRef.current !== 'image') return;
       const next = startZoom * e.scale;
       const clamped = Math.max(1, Math.min(5, next));
       setImgZoom(clamped <= 1.05 ? null : Math.round(clamped * 10) / 10);
     }
     function onGestureEnd(e) { e.preventDefault(); }
-    // ── Android / touch fallback ──────────────────────────────────────
     let tStartDist = 0, tStartZoom = 1;
     function onTouchStart(e) {
       if (e.touches.length === 2) {
@@ -2041,7 +2045,8 @@ function AttachmentPreviewModal({messageId, attachment, attachments, onClose, on
     }
     function onTouchMove(e) {
       if (e.touches.length !== 2 || !tStartDist) return;
-      e.preventDefault(); // keep the browser from panning mid-pinch
+      e.preventDefault();
+      if (kindRef.current !== 'image') return;
       const dx = e.touches[0].clientX - e.touches[1].clientX;
       const dy = e.touches[0].clientY - e.touches[1].clientY;
       const d = Math.hypot(dx, dy);
@@ -2073,7 +2078,7 @@ function AttachmentPreviewModal({messageId, attachment, attachments, onClose, on
         el.removeEventListener('touchcancel',onTouchEnd);
       }
     };
-  }, [blobUrl, kind]);
+  }, []);
 
   useEffect(() => {
     if (!attachment || !messageId) return;
@@ -2123,7 +2128,8 @@ function AttachmentPreviewModal({messageId, attachment, attachments, onClose, on
   // Click on the backdrop (or the toolbar / footer bar background) closes;
   // only the explicit content + action buttons stopPropagation.
   const modal = (
-    <div className="fixed inset-0 z-[60] bg-black/85 flex flex-col" onClick={onClose}>
+    <div ref={modalRef} className="fixed inset-0 z-[60] bg-black/85 flex flex-col" onClick={onClose}
+      style={{touchAction: 'none'}}>
       <div className="flex items-center gap-3 px-4 py-3 border-b border-white/10 text-white">
         <span className="truncate flex-1 text-sm" title={attachment.filename}>{attachment.filename}</span>
         <span className="text-xs text-white/60 flex-shrink-0">{Math.round((attachment.size||0)/1024)} KB</span>
@@ -2153,12 +2159,13 @@ function AttachmentPreviewModal({messageId, attachment, attachments, onClose, on
           //    actually takes more layout space and the overflow scrolls.
           // stopPropagation keeps taps on the image from bubbling to the
           // backdrop (which would close the modal).
-          <div ref={imgHostRef}
+          <div
             className={imgZoom ? "w-full h-full overflow-auto scroll flex items-start justify-start" : "w-full h-full flex items-center justify-center"}
             onClick={isMobile ? e => e.stopPropagation() : e => { e.stopPropagation(); setImgZoom(z => z === null ? 2 : z < 2.5 ? 3 : null); }}
             style={{cursor: isMobile ? 'default' : 'zoom-in', WebkitOverflowScrolling:'touch',
-                    // iOS gesture events fire regardless of touch-action; allowing
-                    // pan-x/pan-y keeps one-finger pan working when zoomed.
+                    // Modal root has touch-action:none to kill iOS page-zoom,
+                    // but a more-specific pan-x/pan-y here keeps 1-finger pan
+                    // working on a zoomed-in image.
                     touchAction: 'pan-x pan-y'}}
             title={isMobile ? 'Pinch to zoom' : 'Click to zoom'}>
             <img src={blobUrl} alt={attachment.filename} draggable={false}
@@ -3163,18 +3170,16 @@ function LeftColumn({contactMeta, archivedContacts, selectedId, mergeId, onSelec
   },[accDropOpen]);
 
   // ── Mobile pull-to-refresh ────────────────────────────────────────────────
-  // Drag the contacts list down when scrolled to the top to trigger a mail
-  // sync. CRUCIAL: listeners are attached to the OUTER (non-scrolling,
-  // overflow:hidden) wrapper, not the inner scrollable div. On long
-  // scrollable lists (Convo tab), iOS's native scroll-handling on the
-  // scrollable element can silently suppress touchmove updates once
-  // momentum kicks in, even with {passive:false}+preventDefault. Binding
-  // on the non-scrolling parent sidesteps that entirely — touch events
-  // bubble up from the inner div, we see every one. We still read
-  // scrollTop from the inner element (via scrollRef) to decide when
-  // we're at the top.
-  const scrollRef = useRef(null);   // inner scrollable list (for scrollTop)
-  const outerRef  = useRef(null);   // outer non-scrolling wrapper (for touch listeners)
+  // The tricky bit on long scrollable lists (Convo): at scrollTop=0 iOS
+  // claims a downward swipe for native rubber-band at a level below the
+  // JS event loop, so preventDefault() on a DOM listener is too late. The
+  // only reliable way to stop iOS from claiming the gesture is to flip
+  // `touch-action: none` on the scroll element itself *at touchstart*.
+  // On touchend we restore `pan-y` so normal scrolling works again. On
+  // lists that aren't actually scrollable (Muted with 0 items), iOS never
+  // claims anything in the first place — which is why pull-to-sync
+  // always worked there, and not on Convo until this change.
+  const scrollRef = useRef(null);
   const pullDistRef = useRef(0);
   const [pullDist, setPullDist] = useState(0);
   const syncingRef = useRef(syncing);
@@ -3187,31 +3192,30 @@ function LeftColumn({contactMeta, archivedContacts, selectedId, mergeId, onSelec
     setPullDist(v);
   }
   useEffect(() => {
-    const outer = outerRef.current;
-    if (!outer) return;
+    const el = scrollRef.current;
+    if (!el) return;
+    el.style.touchAction = 'pan-y';
     let startY = null;
     let active = false;
-    function getScrollEl() { return scrollRef.current; }
     function onTouchStart(e) {
       if (e.touches.length !== 1 || syncingRef.current) { active = false; return; }
-      const sc = getScrollEl();
-      if (sc && sc.scrollTop > 5) { active = false; return; }
+      if (el.scrollTop > 5) { active = false; return; }
       startY = e.touches[0].clientY;
       active = true;
       updatePull(0);
+      // Kill iOS' native gesture-claim for the duration of this pull.
+      // Done directly on the style property so React re-renders (which
+      // happen on every pullDist update) can't stomp it via inline style.
+      el.style.touchAction = 'none';
     }
     function onTouchMove(e) {
       if (!active || startY == null || e.touches.length !== 1) return;
       const dy = e.touches[0].clientY - startY;
-      const sc = getScrollEl();
       if (dy <= 0) {
         updatePull(0);
-        if (sc && sc.scrollTop > 10) active = false;
+        if (el.scrollTop > 10) { active = false; el.style.touchAction = 'pan-y'; }
         return;
       }
-      // We're actively pulling down. preventDefault locks out iOS' own
-      // rubber-band / momentum-scroll so touchmove keeps firing reliably.
-      // Requires {passive:false} on the listener (see below).
       e.preventDefault();
       const dampened = dy <= PULL_THRESHOLD ? dy : PULL_THRESHOLD + (dy - PULL_THRESHOLD) * 0.4;
       updatePull(Math.min(dampened, 120));
@@ -3223,24 +3227,19 @@ function LeftColumn({contactMeta, archivedContacts, selectedId, mergeId, onSelec
       active = false;
       startY = null;
       updatePull(0);
+      el.style.touchAction = 'pan-y';
     }
-    // capture:true puts our preventDefault() ahead of iOS' own scroll-begin
-    // logic on the inner scrollable target. Without it, on long lists (Convo)
-    // iOS claims the down-swipe as rubber-band / momentum before our bubble-
-    // phase listener runs, so touchmove deltas get swallowed mid-pull.
-    const opts = { passive: false, capture: true };
-    const endOpts = { passive: true, capture: true };
-    outer.addEventListener('touchstart', onTouchStart, opts);
-    outer.addEventListener('touchmove',  onTouchMove,  opts);
-    outer.addEventListener('touchend',   onTouchEnd,   endOpts);
-    outer.addEventListener('touchcancel',onTouchEnd,   endOpts);
+    el.addEventListener('touchstart', onTouchStart, { passive: false });
+    el.addEventListener('touchmove',  onTouchMove,  { passive: false });
+    el.addEventListener('touchend',   onTouchEnd,   { passive: true });
+    el.addEventListener('touchcancel',onTouchEnd,   { passive: true });
     return () => {
-      outer.removeEventListener('touchstart', onTouchStart, opts);
-      outer.removeEventListener('touchmove',  onTouchMove,  opts);
-      outer.removeEventListener('touchend',   onTouchEnd,   endOpts);
-      outer.removeEventListener('touchcancel',onTouchEnd,   endOpts);
+      el.removeEventListener('touchstart', onTouchStart);
+      el.removeEventListener('touchmove',  onTouchMove);
+      el.removeEventListener('touchend',   onTouchEnd);
+      el.removeEventListener('touchcancel',onTouchEnd);
     };
-  }, [collapsed.contacts]); // rebind whenever outer wrapper is (re)mounted
+  }, [collapsed.contacts]);
 
   function getTab(id){
     const c = contactMeta.find(m => m.contact.id === id)?.contact;
@@ -3408,7 +3407,7 @@ function LeftColumn({contactMeta, archivedContacts, selectedId, mergeId, onSelec
     // overlay at the top that fades in based on pullDist; the user's finger
     // sees iOS' native rubber-band bounce and the indicator above it.
     const contactsList = !collapsed.contacts && (
-      <div ref={outerRef} className="flex-1 min-h-0 relative overflow-hidden bg-gray-50">
+      <div className="flex-1 min-h-0 relative overflow-hidden bg-gray-50">
         {(pullDist>0 || syncing) && (
           <div className="absolute left-0 right-0 top-0 z-10 flex items-center justify-center pointer-events-none"
             style={{paddingTop: 6, opacity: syncing ? 1 : Math.min(1, pullDist/PULL_THRESHOLD)}}>
@@ -3423,11 +3422,14 @@ function LeftColumn({contactMeta, archivedContacts, selectedId, mergeId, onSelec
         <div ref={scrollRef}
           className="absolute inset-0 overflow-y-auto scroll"
           style={{WebkitOverflowScrolling:'touch',
-                  // 'none' (not 'contain') stops iOS from rubber-banding at
-                  // the top of the list — with rubber-band on, iOS swallows
-                  // the downward-pull touchmoves so the pull never reaches
-                  // threshold on long lists (Convo).
-                  overscrollBehaviorY:'none', touchAction:'pan-y',
+                  // 'none' (not 'contain') stops iOS from rubber-banding
+                  // on top of the list, which otherwise visually masks
+                  // the pull. touchAction is managed imperatively in the
+                  // pull-to-refresh effect (flip to 'none' during pull,
+                  // back to 'pan-y' on release) — not set here, because
+                  // React inline-style would stomp the imperative write
+                  // on every pullDist-driven re-render.
+                  overscrollBehaviorY:'none',
                   paddingTop: pullDist > 0 ? Math.min(pullDist, 100) : 0,
                   transition: pullDist === 0 ? 'padding-top 0.2s ease' : undefined}}>
           <div style={{minHeight:'calc(100% + 1px)'}}>
