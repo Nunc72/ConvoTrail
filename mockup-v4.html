@@ -103,7 +103,7 @@ const { useState, useMemo, useRef, useEffect, useCallback } = React;
 
 // ─── Constants ───────────────────────────────────────────────────────────────
 
-const APP_VERSION = "0.0.67"; // bumped on every deploy — keep in sync with version.json
+const APP_VERSION = "0.0.68"; // bumped on every deploy — keep in sync with version.json
 
 // ─── Backend + Supabase config ───────────────────────────────────────────────
 const SUPABASE_URL = "https://oyrlzqbjcsliesvunbwj.supabase.co";
@@ -3340,25 +3340,32 @@ function LeftColumn({contactMeta, archivedContacts, selectedId, mergeId, onSelec
       </div>
     );
 
-    // Scrollable contacts list. Native iOS scroll + rubber-band bounce
-    // (via .scroll class: overscroll-behavior:contain + -webkit-overflow-
-    // scrolling:touch). No pull-to-sync — use the Sync button in the
-    // topbar to refresh mail.
+    // Scrollable contacts list. Inner wrapper with `minHeight:
+    // calc(100% + 1px)` guarantees scrollHeight > clientHeight on
+    // every tab, even when the rows fit the screen — iOS Safari
+    // otherwise refuses to rubber-band on a non-overflowing element,
+    // which is why tabs with only a handful of contacts didn't
+    // bounce (while tags bounced because users typically have enough
+    // tags to overflow). No pull-to-sync — use the Sync button in
+    // the topbar to refresh mail.
     const contactsList = !collapsed.contacts && (
-      <div className="flex-1 min-h-0 overflow-y-auto scroll bg-gray-50">
-        {dataLoading && contactMeta.length===0 ? (
-          <div className="flex flex-col items-center justify-center gap-2 py-16 text-gray-400">
-            <Spinner size={24}/>
-            <span className="text-xs">Loading contacts…</span>
-          </div>
-        ) : (<>
-          {activeContacts.length===0 && (
-            <div className="px-3 py-3 text-xs text-gray-300 italic">
-              {contactTab==='News'?'No newsletter contacts':contactTab==='Muted'?'No muted contacts':contactTab==='Archive'?'No archived contacts':'No contacts'}
+      <div className="flex-1 min-h-0 overflow-y-auto scroll bg-gray-50"
+        style={{WebkitOverflowScrolling:'touch'}}>
+        <div style={{minHeight:'calc(100% + 1px)'}}>
+          {dataLoading && contactMeta.length===0 ? (
+            <div className="flex flex-col items-center justify-center gap-2 py-16 text-gray-400">
+              <Spinner size={24}/>
+              <span className="text-xs">Loading contacts…</span>
             </div>
-          )}
-          {activeContacts.map(({contact,unread,hasR2m,r2mCount})=><ContactRow key={contact.id} contact={contact} unread={unread} hasR2m={hasR2m} r2mCount={r2mCount}/>)}
-        </>)}
+          ) : (<>
+            {activeContacts.length===0 && (
+              <div className="px-3 py-3 text-xs text-gray-300 italic">
+                {contactTab==='News'?'No newsletter contacts':contactTab==='Muted'?'No muted contacts':contactTab==='Archive'?'No archived contacts':'No contacts'}
+              </div>
+            )}
+            {activeContacts.map(({contact,unread,hasR2m,r2mCount})=><ContactRow key={contact.id} contact={contact} unread={unread} hasR2m={hasR2m} r2mCount={r2mCount}/>)}
+          </>)}
+        </div>
       </div>
     );
 
