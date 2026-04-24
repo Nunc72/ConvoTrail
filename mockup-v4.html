@@ -103,7 +103,7 @@ const { useState, useMemo, useRef, useEffect, useCallback } = React;
 
 // ─── Constants ───────────────────────────────────────────────────────────────
 
-const APP_VERSION = "0.0.63"; // bumped on every deploy — keep in sync with version.json
+const APP_VERSION = "0.0.64"; // bumped on every deploy — keep in sync with version.json
 
 // ─── Backend + Supabase config ───────────────────────────────────────────────
 const SUPABASE_URL = "https://oyrlzqbjcsliesvunbwj.supabase.co";
@@ -3225,21 +3225,24 @@ function LeftColumn({contactMeta, archivedContacts, selectedId, mergeId, onSelec
     }
     function onTouchMove(e) {
       if (!active || startY == null || e.touches.length !== 1) return;
+      e.preventDefault();
       const dy = e.touches[0].clientY - startY;
       const maxScroll = Math.max(0, el.scrollHeight - el.clientHeight);
-      if (startScrollTop <= 0 && dy > 0) {
-        // Pull-to-refresh: track pullDist, don't scroll the list.
-        pulling = true;
-        e.preventDefault();
-        const dampened = dy <= PULL_THRESHOLD ? dy : PULL_THRESHOLD + (dy - PULL_THRESHOLD) * 0.4;
-        updatePull(Math.min(dampened, 120));
-      } else {
-        // Plain scroll: drive scrollTop ourselves. preventDefault stops
-        // any lingering browser attempts to also handle the gesture.
+      const desiredTop = startScrollTop - dy;
+      if (desiredTop >= 0) {
+        // Inside the scrollable range — drive scrollTop ourselves.
         if (pulling) { pulling = false; updatePull(0); }
-        e.preventDefault();
-        const newTop = Math.max(0, Math.min(maxScroll, startScrollTop - dy));
-        el.scrollTop = newTop;
+        el.scrollTop = Math.min(maxScroll, desiredTop);
+      } else {
+        // Overshooting the top — pull-to-refresh zone. This triggers
+        // whether the user started at scrollTop=0 (short list) or was
+        // scrolled-down on a long list and pulled back through the top;
+        // either way, once they try to go below 0 we're in pull mode.
+        el.scrollTop = 0;
+        pulling = true;
+        const overshoot = -desiredTop;
+        const dampened = overshoot <= PULL_THRESHOLD ? overshoot : PULL_THRESHOLD + (overshoot - PULL_THRESHOLD) * 0.4;
+        updatePull(Math.min(dampened, 120));
       }
     }
     function onTouchEnd() {
