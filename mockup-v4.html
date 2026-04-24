@@ -56,6 +56,16 @@
       box-sizing: border-box;
       background: #ffffff;
     }
+    /* iOS-only belt: in standalone PWA mode, if env(safe-area-inset-top)
+       ever resolves to 0 (observed on some iOS versions after restore-
+       from-background), guarantee at least enough room for the native
+       status bar so app content can't slide under the clock/battery.
+       @supports picks up iOS specifically via -webkit-touch-callout. */
+    @supports (-webkit-touch-callout: none) {
+      @media all and (display-mode: standalone) and (orientation: portrait) {
+        #root { padding-top: max(env(safe-area-inset-top, 0px), 20px); }
+      }
+    }
     /* Scrollable areas: allow native bounce but contain it (don't propagate to outer frame) */
     .scroll {
       overflow-y: auto;
@@ -93,7 +103,7 @@ const { useState, useMemo, useRef, useEffect, useCallback } = React;
 
 // ─── Constants ───────────────────────────────────────────────────────────────
 
-const APP_VERSION = "0.0.62"; // bumped on every deploy — keep in sync with version.json
+const APP_VERSION = "0.0.63"; // bumped on every deploy — keep in sync with version.json
 
 // ─── Backend + Supabase config ───────────────────────────────────────────────
 const SUPABASE_URL = "https://oyrlzqbjcsliesvunbwj.supabase.co";
@@ -3437,7 +3447,8 @@ function LeftColumn({contactMeta, archivedContacts, selectedId, mergeId, onSelec
           // effect so React re-renders can't stomp it. No -webkit-
           // overflow-scrolling:touch either — we drive scrollTop in JS
           // so the native momentum engine must be out of the loop.
-          style={{paddingTop: pullDist > 0 ? Math.min(pullDist, 100) : 0,
+          style={{overscrollBehaviorY:'none',
+                  paddingTop: pullDist > 0 ? Math.min(pullDist, 100) : 0,
                   transition: pullDist === 0 ? 'padding-top 0.2s ease' : undefined}}>
           <div style={{minHeight:'calc(100% + 1px)'}}>
             {dataLoading && contactMeta.length===0 ? (
