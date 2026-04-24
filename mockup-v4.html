@@ -103,7 +103,7 @@ const { useState, useMemo, useRef, useEffect, useCallback } = React;
 
 // ─── Constants ───────────────────────────────────────────────────────────────
 
-const APP_VERSION = "0.0.64"; // bumped on every deploy — keep in sync with version.json
+const APP_VERSION = "0.0.65"; // bumped on every deploy — keep in sync with version.json
 
 // ─── Backend + Supabase config ───────────────────────────────────────────────
 const SUPABASE_URL = "https://oyrlzqbjcsliesvunbwj.supabase.co";
@@ -3232,13 +3232,11 @@ function LeftColumn({contactMeta, archivedContacts, selectedId, mergeId, onSelec
       if (desiredTop >= 0) {
         // Inside the scrollable range — drive scrollTop ourselves.
         if (pulling) { pulling = false; updatePull(0); }
-        el.scrollTop = Math.min(maxScroll, desiredTop);
+        const newTop = Math.min(maxScroll, desiredTop);
+        if (el.scrollTop !== newTop) el.scrollTop = newTop;
       } else {
-        // Overshooting the top — pull-to-refresh zone. This triggers
-        // whether the user started at scrollTop=0 (short list) or was
-        // scrolled-down on a long list and pulled back through the top;
-        // either way, once they try to go below 0 we're in pull mode.
-        el.scrollTop = 0;
+        // Overshooting the top — pull-to-refresh zone.
+        if (el.scrollTop !== 0) el.scrollTop = 0;
         pulling = true;
         const overshoot = -desiredTop;
         const dampened = overshoot <= PULL_THRESHOLD ? overshoot : PULL_THRESHOLD + (overshoot - PULL_THRESHOLD) * 0.4;
@@ -3446,14 +3444,15 @@ function LeftColumn({contactMeta, archivedContacts, selectedId, mergeId, onSelec
         )}
         <div ref={scrollRef}
           className="absolute inset-0 overflow-y-auto scroll"
-          // touch-action:none is set imperatively in the pull-to-refresh
-          // effect so React re-renders can't stomp it. No -webkit-
-          // overflow-scrolling:touch either — we drive scrollTop in JS
-          // so the native momentum engine must be out of the loop.
-          style={{overscrollBehaviorY:'none',
-                  paddingTop: pullDist > 0 ? Math.min(pullDist, 100) : 0,
-                  transition: pullDist === 0 ? 'padding-top 0.2s ease' : undefined}}>
-          <div style={{minHeight:'calc(100% + 1px)'}}>
+          // touch-action:none set imperatively in the pull-to-refresh
+          // effect so React re-renders can't stomp it. No paddingTop
+          // during pull: growing the scroll div's padding every frame
+          // during a gesture makes iOS' scroll engine reconsider the
+          // element mid-touch (scrollHeight changes) and appears to
+          // stall touchmove dispatch on short non-scrolling lists.
+          // Pull feedback comes from the overlay pill above instead.
+          style={{overscrollBehaviorY:'none'}}>
+          <div>
             {dataLoading && contactMeta.length===0 ? (
               <div className="flex flex-col items-center justify-center gap-2 py-16 text-gray-400">
                 <Spinner size={24}/>
