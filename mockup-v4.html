@@ -93,7 +93,7 @@ const { useState, useMemo, useRef, useEffect, useCallback } = React;
 
 // ─── Constants ───────────────────────────────────────────────────────────────
 
-const APP_VERSION = "0.0.58"; // bumped on every deploy — keep in sync with version.json
+const APP_VERSION = "0.0.59"; // bumped on every deploy — keep in sync with version.json
 
 // ─── Backend + Supabase config ───────────────────────────────────────────────
 const SUPABASE_URL = "https://oyrlzqbjcsliesvunbwj.supabase.co";
@@ -1991,6 +1991,9 @@ function AttachmentPreviewModal({messageId, attachment, attachments, onClose, on
   const [err, setErr] = useState('');
   const [loading, setLoading] = useState(false);
   const isMobile = typeof window !== 'undefined' && window.innerWidth < 768;
+  // Derived from the attachment MIME — read by multiple hooks below, so
+  // declare before any useEffect that references it (TDZ-safe).
+  const kind = attachment ? attachmentKind(attachment.contentType) : null;
   // Zoom state for images only. null = fit-to-screen (default), number = CSS
   // zoom factor (1.0–5.0). On desktop a mouse click / trackpad tap cycles
   // fit → 2× → 3× → fit; on mobile we only respond to pinch gestures so
@@ -2071,7 +2074,6 @@ function AttachmentPreviewModal({messageId, attachment, attachments, onClose, on
       }
     };
   }, [blobUrl, kind]);
-  const kind = attachment ? attachmentKind(attachment.contentType) : null;
 
   useEffect(() => {
     if (!attachment || !messageId) return;
@@ -2190,16 +2192,16 @@ function AttachmentPreviewModal({messageId, attachment, attachments, onClose, on
             <button onClick={onDownload} className="px-4 py-2 rounded bg-indigo-600 hover:bg-indigo-700 text-white text-sm">Download {attachment.filename}</button>
           </div>
         )}
-        {/* Big side-arrows — overlay on top so they work even when a PDF
-            iframe or <video> has keyboard focus. Rendered only when there's
-            somewhere to go in that direction. */}
-        {onPrev && (
+        {/* Big side-arrows — desktop only. On mobile they intercept pinch
+            touches on the image edges, so navigation is keyboard/swipe-less
+            there (multi-attachment phones are rare enough that it's fine). */}
+        {!isMobile && onPrev && (
           <button onClick={(e)=>{e.stopPropagation(); onPrev();}} aria-label="Previous (←)"
             className="absolute left-4 top-1/2 -translate-y-1/2 w-12 h-12 rounded-full bg-white/10 hover:bg-white/25 text-white text-2xl leading-none flex items-center justify-center transition-colors">
             ‹
           </button>
         )}
-        {onNext && (
+        {!isMobile && onNext && (
           <button onClick={(e)=>{e.stopPropagation(); onNext();}} aria-label="Next (→)"
             className="absolute right-4 top-1/2 -translate-y-1/2 w-12 h-12 rounded-full bg-white/10 hover:bg-white/25 text-white text-2xl leading-none flex items-center justify-center transition-colors">
             ›
@@ -3222,15 +3224,21 @@ function LeftColumn({contactMeta, archivedContacts, selectedId, mergeId, onSelec
       startY = null;
       updatePull(0);
     }
-    outer.addEventListener('touchstart', onTouchStart, { passive: false });
-    outer.addEventListener('touchmove',  onTouchMove,  { passive: false });
-    outer.addEventListener('touchend',   onTouchEnd,   { passive: true });
-    outer.addEventListener('touchcancel',onTouchEnd,   { passive: true });
+    // capture:true puts our preventDefault() ahead of iOS' own scroll-begin
+    // logic on the inner scrollable target. Without it, on long lists (Convo)
+    // iOS claims the down-swipe as rubber-band / momentum before our bubble-
+    // phase listener runs, so touchmove deltas get swallowed mid-pull.
+    const opts = { passive: false, capture: true };
+    const endOpts = { passive: true, capture: true };
+    outer.addEventListener('touchstart', onTouchStart, opts);
+    outer.addEventListener('touchmove',  onTouchMove,  opts);
+    outer.addEventListener('touchend',   onTouchEnd,   endOpts);
+    outer.addEventListener('touchcancel',onTouchEnd,   endOpts);
     return () => {
-      outer.removeEventListener('touchstart', onTouchStart);
-      outer.removeEventListener('touchmove',  onTouchMove);
-      outer.removeEventListener('touchend',   onTouchEnd);
-      outer.removeEventListener('touchcancel',onTouchEnd);
+      outer.removeEventListener('touchstart', onTouchStart, opts);
+      outer.removeEventListener('touchmove',  onTouchMove,  opts);
+      outer.removeEventListener('touchend',   onTouchEnd,   endOpts);
+      outer.removeEventListener('touchcancel',onTouchEnd,   endOpts);
     };
   }, [collapsed.contacts]); // rebind whenever outer wrapper is (re)mounted
 
@@ -3414,7 +3422,12 @@ function LeftColumn({contactMeta, archivedContacts, selectedId, mergeId, onSelec
         )}
         <div ref={scrollRef}
           className="absolute inset-0 overflow-y-auto scroll"
-          style={{WebkitOverflowScrolling:'touch', overscrollBehaviorY:'contain',
+          style={{WebkitOverflowScrolling:'touch',
+                  // 'none' (not 'contain') stops iOS from rubber-banding at
+                  // the top of the list — with rubber-band on, iOS swallows
+                  // the downward-pull touchmoves so the pull never reaches
+                  // threshold on long lists (Convo).
+                  overscrollBehaviorY:'none', touchAction:'pan-y',
                   paddingTop: pullDist > 0 ? Math.min(pullDist, 100) : 0,
                   transition: pullDist === 0 ? 'padding-top 0.2s ease' : undefined}}>
           <div style={{minHeight:'calc(100% + 1px)'}}>
