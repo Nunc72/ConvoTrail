@@ -2,7 +2,13 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, minimum-scale=1.0, user-scalable=no, viewport-fit=cover" />
+  <!-- viewport-fit=cover lets the page extend under the iOS safe-areas.
+       Pinch-zoom is left ENABLED (no user-scalable=no) so pinch gestures
+       fire on iOS — the image preview modal relies on WebKit gesture
+       events, and the HTML iframe body allows native zoom inside itself.
+       iOS won't auto-zoom on input focus because we force font-size:16px
+       on all inputs below 768px (see the media query in the stylesheet). -->
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
   <title>ConvoMail</title>
   <!-- PWA -->
   <link rel="manifest" href="manifest.json"/>
@@ -87,7 +93,7 @@ const { useState, useMemo, useRef, useEffect, useCallback } = React;
 
 // ─── Constants ───────────────────────────────────────────────────────────────
 
-const APP_VERSION = "0.0.57"; // bumped on every deploy — keep in sync with version.json
+const APP_VERSION = "0.0.58"; // bumped on every deploy — keep in sync with version.json
 
 // ─── Backend + Supabase config ───────────────────────────────────────────────
 const SUPABASE_URL = "https://oyrlzqbjcsliesvunbwj.supabase.co";
@@ -3156,14 +3162,17 @@ function LeftColumn({contactMeta, archivedContacts, selectedId, mergeId, onSelec
 
   // ── Mobile pull-to-refresh ────────────────────────────────────────────────
   // Drag the contacts list down when scrolled to the top to trigger a mail
-  // sync. Implemented via native addEventListener with {passive:false} so
-  // we can preventDefault() during the pull — this takes ownership of the
-  // gesture from iOS. Without it, iOS's own rubber-band handler silently
-  // swallows touchmove updates on long scrollable lists, so the pull never
-  // crosses the threshold (the symptom on the Convo tab).
-  // A ref mirror for pullDist / syncing / onPullRefresh keeps the listener
-  // body in sync with the latest state without a rebind storm.
-  const scrollRef = useRef(null);
+  // sync. CRUCIAL: listeners are attached to the OUTER (non-scrolling,
+  // overflow:hidden) wrapper, not the inner scrollable div. On long
+  // scrollable lists (Convo tab), iOS's native scroll-handling on the
+  // scrollable element can silently suppress touchmove updates once
+  // momentum kicks in, even with {passive:false}+preventDefault. Binding
+  // on the non-scrolling parent sidesteps that entirely — touch events
+  // bubble up from the inner div, we see every one. We still read
+  // scrollTop from the inner element (via scrollRef) to decide when
+  // we're at the top.
+  const scrollRef = useRef(null);   // inner scrollable list (for scrollTop)
+  const outerRef  = useRef(null);   // outer non-scrolling wrapper (for touch listeners)
   const pullDistRef = useRef(0);
   const [pullDist, setPullDist] = useState(0);
   const syncingRef = useRef(syncing);
@@ -3176,13 +3185,15 @@ function LeftColumn({contactMeta, archivedContacts, selectedId, mergeId, onSelec
     setPullDist(v);
   }
   useEffect(() => {
-    const el = scrollRef.current;
-    if (!el) return;
+    const outer = outerRef.current;
+    if (!outer) return;
     let startY = null;
     let active = false;
+    function getScrollEl() { return scrollRef.current; }
     function onTouchStart(e) {
       if (e.touches.length !== 1 || syncingRef.current) { active = false; return; }
-      if (el.scrollTop > 5) { active = false; return; }
+      const sc = getScrollEl();
+      if (sc && sc.scrollTop > 5) { active = false; return; }
       startY = e.touches[0].clientY;
       active = true;
       updatePull(0);
@@ -3190,16 +3201,15 @@ function LeftColumn({contactMeta, archivedContacts, selectedId, mergeId, onSelec
     function onTouchMove(e) {
       if (!active || startY == null || e.touches.length !== 1) return;
       const dy = e.touches[0].clientY - startY;
+      const sc = getScrollEl();
       if (dy <= 0) {
         updatePull(0);
-        // If the user is now scrolling down (scrollTop moved), release
-        // the gesture so iOS can scroll normally.
-        if (el.scrollTop > 10) active = false;
+        if (sc && sc.scrollTop > 10) active = false;
         return;
       }
       // We're actively pulling down. preventDefault locks out iOS' own
-      // rubber-band so touchmove keeps firing reliably. Requires
-      // {passive:false} on the listener (see below).
+      // rubber-band / momentum-scroll so touchmove keeps firing reliably.
+      // Requires {passive:false} on the listener (see below).
       e.preventDefault();
       const dampened = dy <= PULL_THRESHOLD ? dy : PULL_THRESHOLD + (dy - PULL_THRESHOLD) * 0.4;
       updatePull(Math.min(dampened, 120));
@@ -3212,18 +3222,17 @@ function LeftColumn({contactMeta, archivedContacts, selectedId, mergeId, onSelec
       startY = null;
       updatePull(0);
     }
-    // touchstart/move must be non-passive so preventDefault takes effect.
-    el.addEventListener('touchstart', onTouchStart, { passive: false });
-    el.addEventListener('touchmove',  onTouchMove,  { passive: false });
-    el.addEventListener('touchend',   onTouchEnd,   { passive: true });
-    el.addEventListener('touchcancel',onTouchEnd,   { passive: true });
+    outer.addEventListener('touchstart', onTouchStart, { passive: false });
+    outer.addEventListener('touchmove',  onTouchMove,  { passive: false });
+    outer.addEventListener('touchend',   onTouchEnd,   { passive: true });
+    outer.addEventListener('touchcancel',onTouchEnd,   { passive: true });
     return () => {
-      el.removeEventListener('touchstart', onTouchStart);
-      el.removeEventListener('touchmove',  onTouchMove);
-      el.removeEventListener('touchend',   onTouchEnd);
-      el.removeEventListener('touchcancel',onTouchEnd);
+      outer.removeEventListener('touchstart', onTouchStart);
+      outer.removeEventListener('touchmove',  onTouchMove);
+      outer.removeEventListener('touchend',   onTouchEnd);
+      outer.removeEventListener('touchcancel',onTouchEnd);
     };
-  }, [collapsed.contacts]); // rebind whenever scroll div is (re)mounted
+  }, [collapsed.contacts]); // rebind whenever outer wrapper is (re)mounted
 
   function getTab(id){
     const c = contactMeta.find(m => m.contact.id === id)?.contact;
@@ -3391,7 +3400,7 @@ function LeftColumn({contactMeta, archivedContacts, selectedId, mergeId, onSelec
     // overlay at the top that fades in based on pullDist; the user's finger
     // sees iOS' native rubber-band bounce and the indicator above it.
     const contactsList = !collapsed.contacts && (
-      <div className="flex-1 min-h-0 relative overflow-hidden bg-gray-50">
+      <div ref={outerRef} className="flex-1 min-h-0 relative overflow-hidden bg-gray-50">
         {(pullDist>0 || syncing) && (
           <div className="absolute left-0 right-0 top-0 z-10 flex items-center justify-center pointer-events-none"
             style={{paddingTop: 6, opacity: syncing ? 1 : Math.min(1, pullDist/PULL_THRESHOLD)}}>
