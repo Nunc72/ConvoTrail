@@ -103,7 +103,7 @@ const { useState, useMemo, useRef, useEffect, useCallback } = React;
 
 // ─── Constants ───────────────────────────────────────────────────────────────
 
-const APP_VERSION = "0.0.65"; // bumped on every deploy — keep in sync with version.json
+const APP_VERSION = "0.0.66"; // bumped on every deploy — keep in sync with version.json
 
 // ─── Backend + Supabase config ───────────────────────────────────────────────
 const SUPABASE_URL = "https://oyrlzqbjcsliesvunbwj.supabase.co";
@@ -3184,17 +3184,17 @@ function LeftColumn({contactMeta, archivedContacts, selectedId, mergeId, onSelec
   },[accDropOpen]);
 
   // ── Mobile pull-to-refresh ────────────────────────────────────────────────
-  // Full JS-driven scroll. Reason we gave up on native + pull-to-refresh:
-  // on truly scrollable lists (Convo), iOS claims a downward swipe at
-  // scrollTop=0 for rubber-band in a layer below DOM events. Sentinel
-  // tricks (scrollTop=1) fail because iOS buffers scroll events during
-  // an active gesture and only flushes after touchend — too late to
-  // clamp. So we take scroll ownership: touch-action:none kills all
-  // native touch handling, and we drive scrollTop ourselves in
-  // touchmove. Same code path runs on Muted (where it already worked),
-  // so no regression there; Convo now gets the same guarantees.
-  // Wheel/trackpad scroll on desktop still uses the native path
-  // (touch-action only affects touch), so nothing changes there.
+  // Observation-only approach. iOS handles scroll + rubber-band bounce
+  // natively (touch-action default, no preventDefault), so the list
+  // keeps its normal feel. We listen to touch events passively and
+  // compute "how far past the top has the finger pulled" from the
+  // finger coords + initial scrollTop:
+  //   pastTop = max(0, dy - startScrollTop)
+  // Short list at top: startScrollTop=0, dy=100 -> pastTop=100.
+  // Long list mid-scrolled: startScrollTop=50, dy=200 -> iOS first
+  // scrolls up, reaching scrollTop=0 around dy=50; remaining 150 is
+  // overshoot that we feed into pullDist. Native rubber-band visualizes
+  // the pull; the pill overlay shows the threshold label.
   const scrollRef = useRef(null);
   const pullDistRef = useRef(0);
   const [pullDist, setPullDist] = useState(0);
@@ -3210,7 +3210,6 @@ function LeftColumn({contactMeta, archivedContacts, selectedId, mergeId, onSelec
   useEffect(() => {
     const el = scrollRef.current;
     if (!el) return;
-    el.style.touchAction = 'none';
     let startY = null;
     let startScrollTop = 0;
     let active = false;
@@ -3225,22 +3224,19 @@ function LeftColumn({contactMeta, archivedContacts, selectedId, mergeId, onSelec
     }
     function onTouchMove(e) {
       if (!active || startY == null || e.touches.length !== 1) return;
-      e.preventDefault();
       const dy = e.touches[0].clientY - startY;
-      const maxScroll = Math.max(0, el.scrollHeight - el.clientHeight);
-      const desiredTop = startScrollTop - dy;
-      if (desiredTop >= 0) {
-        // Inside the scrollable range — drive scrollTop ourselves.
-        if (pulling) { pulling = false; updatePull(0); }
-        const newTop = Math.min(maxScroll, desiredTop);
-        if (el.scrollTop !== newTop) el.scrollTop = newTop;
-      } else {
-        // Overshooting the top — pull-to-refresh zone.
-        if (el.scrollTop !== 0) el.scrollTop = 0;
+      // Effective past-top = finger-down distance beyond how far the
+      // list could scroll up. Once the list is scrolled to top (iOS
+      // has scrollTop=0 at that moment, bouncing visually), any extra
+      // dy becomes pull distance.
+      const pastTop = dy - startScrollTop;
+      if (pastTop > 0 && el.scrollTop === 0) {
         pulling = true;
-        const overshoot = -desiredTop;
-        const dampened = overshoot <= PULL_THRESHOLD ? overshoot : PULL_THRESHOLD + (overshoot - PULL_THRESHOLD) * 0.4;
+        const dampened = pastTop <= PULL_THRESHOLD ? pastTop : PULL_THRESHOLD + (pastTop - PULL_THRESHOLD) * 0.4;
         updatePull(Math.min(dampened, 120));
+      } else if (pulling) {
+        pulling = false;
+        updatePull(0);
       }
     }
     function onTouchEnd() {
@@ -3253,8 +3249,11 @@ function LeftColumn({contactMeta, archivedContacts, selectedId, mergeId, onSelec
       startY = null;
       updatePull(0);
     }
-    el.addEventListener('touchstart', onTouchStart, { passive: false });
-    el.addEventListener('touchmove',  onTouchMove,  { passive: false });
+    // All listeners passive: we never preventDefault, so iOS keeps full
+    // control of native scroll and rubber-band. Passive also lets iOS
+    // optimize and never throttle our events mid-gesture.
+    el.addEventListener('touchstart', onTouchStart, { passive: true });
+    el.addEventListener('touchmove',  onTouchMove,  { passive: true });
     el.addEventListener('touchend',   onTouchEnd,   { passive: true });
     el.addEventListener('touchcancel',onTouchEnd,   { passive: true });
     return () => {
@@ -3444,14 +3443,13 @@ function LeftColumn({contactMeta, archivedContacts, selectedId, mergeId, onSelec
         )}
         <div ref={scrollRef}
           className="absolute inset-0 overflow-y-auto scroll"
-          // touch-action:none set imperatively in the pull-to-refresh
-          // effect so React re-renders can't stomp it. No paddingTop
-          // during pull: growing the scroll div's padding every frame
-          // during a gesture makes iOS' scroll engine reconsider the
-          // element mid-touch (scrollHeight changes) and appears to
-          // stall touchmove dispatch on short non-scrolling lists.
-          // Pull feedback comes from the overlay pill above instead.
-          style={{overscrollBehaviorY:'none'}}>
+          // No touch-action override and no overscrollBehavior override:
+          // we want iOS' native scroll and rubber-band bounce. The
+          // .scroll class already provides overscroll-behavior:contain
+          // (local bounce, no propagation to parent) and momentum.
+          // Pull-to-refresh is detected passively in the effect above
+          // without preventDefault, so native behavior is preserved.
+          >
           <div>
             {dataLoading && contactMeta.length===0 ? (
               <div className="flex flex-col items-center justify-center gap-2 py-16 text-gray-400">
