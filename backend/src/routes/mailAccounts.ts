@@ -278,6 +278,49 @@ export async function registerMailAccountsRoutes(app: FastifyInstance) {
         .concat(splitAddresses(b.cc).map(email => ({ email, role: "cc" })))
         .concat(splitAddresses(b.bcc).map(email => ({ email, role: "bcc" })));
       const snippet = (b.body || "").substring(0, 200);
+
+      // Make sure each recipient has a contact + contact_emails row.
+      // Without this, sending to a brand-new address inserts the message
+      // but the UI's email->contact_id lookup misses, the message is
+      // filtered out (frontend drops m.contactId === null rows), and the
+      // user sees neither the new contact nor the sent mail until the
+      // next IMAP Sent-folder sync runs.
+      const recipientEmails = Array.from(new Set(
+        toList.map(t => (t.email || "").toLowerCase()).filter(Boolean),
+      ));
+      if (recipientEmails.length > 0) {
+        try {
+          const existing = await pool.query<{ email: string }>(
+            `SELECT email FROM contact_emails WHERE user_id = $1 AND email = ANY($2::text[])`,
+            [req.authUser!.id, recipientEmails],
+          );
+          const have = new Set(existing.rows.map(r => r.email.toLowerCase()));
+          for (const email of recipientEmails) {
+            if (have.has(email)) continue;
+            const local = email.split("@")[0];
+            const guessedName = local.split(/[._-]+/).filter(Boolean)
+              .map(p => p[0].toUpperCase() + p.slice(1)).join(" ") || email;
+            const cIns = await pool.query<{ id: string }>(
+              `INSERT INTO contacts (user_id, name, primary_email)
+                 VALUES ($1, $2, $3)
+                 RETURNING id`,
+              [req.authUser!.id, guessedName, email],
+            );
+            const newContactId = cIns.rows[0]?.id;
+            if (newContactId) {
+              await pool.query(
+                `INSERT INTO contact_emails (contact_id, user_id, email)
+                   VALUES ($1, $2, $3)
+                 ON CONFLICT DO NOTHING`,
+                [newContactId, req.authUser!.id, email],
+              );
+            }
+          }
+        } catch (e) {
+          req.log.warn({ err: e }, "send: contact upsert failed");
+        }
+      }
+
       try {
         const ins = await pool.query<{ id: string }>(
           `INSERT INTO messages (
