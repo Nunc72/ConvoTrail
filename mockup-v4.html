@@ -103,7 +103,7 @@ const { useState, useMemo, useRef, useEffect, useCallback } = React;
 
 // ─── Constants ───────────────────────────────────────────────────────────────
 
-const APP_VERSION = "0.0.69"; // bumped on every deploy — keep in sync with version.json
+const APP_VERSION = "0.0.70"; // bumped on every deploy — keep in sync with version.json
 
 // ─── Backend + Supabase config ───────────────────────────────────────────────
 const SUPABASE_URL = "https://oyrlzqbjcsliesvunbwj.supabase.co";
@@ -4106,9 +4106,13 @@ function App({onSignOut}) {
         // RFC message_id (set by sync.ts from In-Reply-To/References). We use
         // the SET of incoming thread_ids to suppress r2m on any outgoing mail
         // that has already been replied to.
+        // Normalize: outgoing message_id keeps RFC angle brackets ("<abc@x>"),
+        // but mailparser strips them off references/inReplyTo, so a literal
+        // string compare misses every reply. Normalize both sides.
+        const stripBrackets = s => (s || '').replace(/^<+|>+$/g, '');
         const repliedRfcIds = new Set();
         for (const m of messages) {
-          if (m.direction === 'in' && m.thread_id) repliedRfcIds.add(m.thread_id);
+          if (m.direction === 'in' && m.thread_id) repliedRfcIds.add(stripBrackets(m.thread_id));
         }
 
         // Lookup of the full account row by id, for outgoing-sender identity
@@ -4125,7 +4129,7 @@ function App({onSignOut}) {
           // r2m is suppressed as soon as any later incoming message in the
           // same RFC thread exists — i.e. the recipient has already replied.
           const r2mActive = isR2mActive(r2mRow)
-            && !(m.direction === 'out' && m.message_id && repliedRfcIds.has(m.message_id));
+            && !(m.direction === 'out' && m.message_id && repliedRfcIds.has(stripBrackets(m.message_id)));
           // Sender identity for outgoing messages = the sending mail account.
           // Avatar component wants { name, avatar, color, portrait }.
           let sender = null;
