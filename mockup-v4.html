@@ -103,7 +103,7 @@ const { useState, useMemo, useRef, useEffect, useCallback } = React;
 
 // ─── Constants ───────────────────────────────────────────────────────────────
 
-const APP_VERSION = "0.0.82"; // bumped on every deploy — keep in sync with version.json
+const APP_VERSION = "0.0.83"; // bumped on every deploy — keep in sync with version.json
 
 // ─── Backend + Supabase config ───────────────────────────────────────────────
 const SUPABASE_URL = "https://oyrlzqbjcsliesvunbwj.supabase.co";
@@ -4452,11 +4452,20 @@ function App({onSignOut}) {
   const [leftCollapsed,    setLeftCollapsed]    = useState({contacts:false,tags:true,archive:true});
   const [settingsTab,      setSettingsTab]      = useState(null); // null | 'profile' | 'accounts' | 'signatures'
   const [selAccounts,      setSelAccounts]      = useState([]);
-  // Once real accounts are loaded, select them all by default
+  // Once real accounts are loaded, select them all by default. If the user
+  // had a subset selected and one of those accounts has been renamed (its
+  // email changed) since the last load, the prune step below could leave
+  // selAccounts empty — which silently filters every message out of the UI.
+  // Fall back to "all accounts" in that case so the inbox never goes blank
+  // because of stale state.
   useEffect(() => {
     if (mailAccounts.length === 0) return;
     const allEmails = mailAccounts.map(a => (a.email || '').toLowerCase()).filter(Boolean);
-    setSelAccounts(prev => prev.length === 0 ? allEmails : prev.filter(e => allEmails.includes(e)));
+    setSelAccounts(prev => {
+      if (prev.length === 0) return allEmails;
+      const valid = prev.filter(e => allEmails.includes(e));
+      return valid.length === 0 ? allEmails : valid;
+    });
   }, [mailAccounts]);
   const [showUserMenu,     setShowUserMenu]     = useState(false);
   // Authenticated user info for the top-right user-menu pulldown. Pulled from
