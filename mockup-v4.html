@@ -103,7 +103,7 @@ const { useState, useMemo, useRef, useEffect, useCallback } = React;
 
 // ─── Constants ───────────────────────────────────────────────────────────────
 
-const APP_VERSION = "0.0.74"; // bumped on every deploy — keep in sync with version.json
+const APP_VERSION = "0.0.75"; // bumped on every deploy — keep in sync with version.json
 
 // ─── Backend + Supabase config ───────────────────────────────────────────────
 const SUPABASE_URL = "https://oyrlzqbjcsliesvunbwj.supabase.co";
@@ -3983,7 +3983,7 @@ function LoginScreen() {
               <label className="text-xs text-gray-500 font-medium block mb-1">Username</label>
               <input type="text" value={regUsername}
                 onChange={e=>{setRegUsername(e.target.value);setErr('');}}
-                placeholder="rik or rik@example.com"
+                placeholder="you@example.com"
                 autoCapitalize="off" autoComplete="username" spellCheck={false}
                 className={inputCls}/>
               <p className="text-xs text-gray-400 mt-1.5">Free format — pick anything. You'll use this to sign in.</p>
