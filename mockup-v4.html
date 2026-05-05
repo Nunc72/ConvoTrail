@@ -103,7 +103,7 @@ const { useState, useMemo, useRef, useEffect, useCallback } = React;
 
 // ─── Constants ───────────────────────────────────────────────────────────────
 
-const APP_VERSION = "0.0.71"; // bumped on every deploy — keep in sync with version.json
+const APP_VERSION = "0.0.72"; // bumped on every deploy — keep in sync with version.json
 
 // ─── Backend + Supabase config ───────────────────────────────────────────────
 const SUPABASE_URL = "https://oyrlzqbjcsliesvunbwj.supabase.co";
@@ -4588,8 +4588,12 @@ function App({onSignOut}) {
       .map(contact=>{
         const all=messageList.filter(m=>m.contactId===contact.id && (!m.accountEmail || selAccounts.includes(m.accountEmail)));
         const active=all.filter(m=>!deletedIds.includes(m.id)&&!m.draft);
-        const unread=active.filter(m=>!m.read).length;
-        const oldestUnread=unread>0?active.filter(m=>!m.read).reduce((a,b)=>a.date<b.date?a:b).date:null;
+        // Unread count must mirror the visual unread indicator: only incoming
+        // mail without \Seen counts. An outgoing row without \Seen (e.g. sent
+        // from another client that didn't auto-set \Seen on Sent) shows no
+        // bullet anywhere, so it shouldn't inflate the badge either.
+        const unread=active.filter(m=>!m.read&&m.dir==='in').length;
+        const oldestUnread=unread>0?active.filter(m=>!m.read&&m.dir==='in').reduce((a,b)=>a.date<b.date?a:b).date:null;
         const lastDate=active.length>0?active.reduce((a,b)=>a.date>b.date?a:b).date:(all.length>0?all.reduce((a,b)=>a.date>b.date?a:b).date:"");
         const r2mMsgs=active.filter(m=>m.revert2me&&m.dir==="out");
         const hasR2m=r2mMsgs.length>0;
