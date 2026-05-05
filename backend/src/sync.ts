@@ -18,7 +18,7 @@ export interface SyncResult {
   error?: string;
 }
 
-const SINCE_DAYS = 90;
+const SINCE_DAYS = 365;
 const PER_FOLDER_CAP = 100; // MVP safety — Fly free-tier memory + 60s HTTP timeout
 
 // ─── Helpers ────────────────────────────────────────────────────────────────
