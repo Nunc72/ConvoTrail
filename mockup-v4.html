@@ -103,7 +103,7 @@ const { useState, useMemo, useRef, useEffect, useCallback } = React;
 
 // ─── Constants ───────────────────────────────────────────────────────────────
 
-const APP_VERSION = "0.0.75"; // bumped on every deploy — keep in sync with version.json
+const APP_VERSION = "0.0.76"; // bumped on every deploy — keep in sync with version.json
 
 // ─── Backend + Supabase config ───────────────────────────────────────────────
 const SUPABASE_URL = "https://oyrlzqbjcsliesvunbwj.supabase.co";
@@ -5276,7 +5276,7 @@ function App({onSignOut}) {
     .filter(m=>m.contactId===selContact)
     .filter(m=>!m.accountEmail||selAccounts.includes(m.accountEmail))
     .filter(msgMatchesSearch):[];
-  const totalUnread=messageList.filter(m=>!m.read&&!deletedIds.includes(m.id)&&!m.draft&&selAccounts.includes(m.accountEmail)).length;
+  const totalUnread=messageList.filter(m=>!m.read&&m.dir==='in'&&!deletedIds.includes(m.id)&&!m.draft&&selAccounts.includes(m.accountEmail)).length;
   const totalR2m=messageList.filter(m=>m.revert2me&&!deletedIds.includes(m.id)&&!m.draft&&selAccounts.includes(m.accountEmail)).length;
 
   function msgMatchesSearch(m) {
