@@ -99,8 +99,22 @@ export async function registerMessagesRoutes(app: FastifyInstance) {
       if (b.answered === true)   toAdd.push("\\Answered");
       if (b.answered === false)  toRm.push("\\Answered");
 
-      // Mirror to IMAP first. If the server rejects the change we don't touch
-      // the DB, so the UI-revert leaves us consistent with the mail provider.
+      // Update DB first — that's what the UI reads from on next bootstrap, so
+      // a Seen click should always stick locally. Then mirror to IMAP best
+      // effort: a transient IMAP failure (timeout, server reject) used to
+      // make us return 502 and roll back the optimistic flip, which the user
+      // experienced as the alert "coming back" after Seen. The next sync
+      // pass will reconcile if IMAP and DB drift.
+      const newFlags: Record<string, unknown> = { ...(m.flags || {}) };
+      if (b.seen !== undefined)      newFlags.seen = b.seen;
+      if (b.flagged !== undefined)   newFlags.flagged = b.flagged;
+      if (b.answered !== undefined)  newFlags.answered = b.answered;
+      await pool.query(
+        `UPDATE messages SET flags = $1::jsonb WHERE id = $2`,
+        [JSON.stringify(newFlags), id],
+      );
+
+      let imapWarning: string | null = null;
       const client = new ImapFlow({
         host: m.imap_host, port: m.imap_port, secure: true,
         auth: { user: m.imap_user || "", pass: decrypt(m.imap_cred_enc) },
@@ -117,23 +131,11 @@ export async function registerMessagesRoutes(app: FastifyInstance) {
         await client.logout();
       } catch (e) {
         try { await client.logout(); } catch { /* ignore */ }
-        return reply.code(502).send({
-          ok: false,
-          error: "IMAP flag update failed: " + (e instanceof Error ? e.message : String(e)),
-        });
+        imapWarning = "IMAP flag update failed (DB updated): " + (e instanceof Error ? e.message : String(e));
+        req.log.warn({ err: e, messageId: id }, "flags: IMAP mirror failed; DB-only update");
       }
 
-      // Now update our cached flags JSONB.
-      const newFlags: Record<string, unknown> = { ...(m.flags || {}) };
-      if (b.seen !== undefined)      newFlags.seen = b.seen;
-      if (b.flagged !== undefined)   newFlags.flagged = b.flagged;
-      if (b.answered !== undefined)  newFlags.answered = b.answered;
-      await pool.query(
-        `UPDATE messages SET flags = $1::jsonb WHERE id = $2`,
-        [JSON.stringify(newFlags), id],
-      );
-
-      return { ok: true, flags: newFlags };
+      return { ok: true, flags: newFlags, imapWarning };
     },
   );
 

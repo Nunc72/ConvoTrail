@@ -103,7 +103,7 @@ const { useState, useMemo, useRef, useEffect, useCallback } = React;
 
 // ─── Constants ───────────────────────────────────────────────────────────────
 
-const APP_VERSION = "0.0.81"; // bumped on every deploy — keep in sync with version.json
+const APP_VERSION = "0.0.82"; // bumped on every deploy — keep in sync with version.json
 
 // ─── Backend + Supabase config ───────────────────────────────────────────────
 const SUPABASE_URL = "https://oyrlzqbjcsliesvunbwj.supabase.co";
@@ -4213,12 +4213,22 @@ function App({onSignOut}) {
         const accountById = new Map((mail_accounts || []).map(a => [a.id, a]));
 
         // Shape messages first (we need them to compute per-contact accountEmails)
+        // Diagnostic: count messages per direction we got from /bootstrap so a
+        // user with "missing outgoing" can see in DevTools whether the data
+        // arrived from the API at all (vs. lost in shaping/filtering).
+        const __dbgIn  = messages.filter(m => m.direction === 'in').length;
+        const __dbgOut = messages.filter(m => m.direction === 'out').length;
+        console.log('[ConvoMail bootstrap] messages from API — in:', __dbgIn, 'out:', __dbgOut, 'drafts:', (drafts||[]).length, 'contacts:', contacts.length);
+        const __dbgDroppedOut = [];
         const shapedMessages = messages.map(m => {
           const accountEmail = accountEmailById.get(m.mail_account_id) ?? '';
           const otherEmail = m.direction === 'in'
             ? (m.from_email || '').toLowerCase()
             : (m.to_emails?.[0]?.email || '').toLowerCase();
           const contactId = emailToContactId.get(otherEmail) ?? null;
+          if (m.direction === 'out' && contactId === null) {
+            __dbgDroppedOut.push({ id: m.id, to: otherEmail, subject: m.subject });
+          }
           const r2mRow = r2mByMsg.get(m.id);
           // r2m is suppressed as soon as any later incoming message from this
           // contact exists in the same RFC thread, OR — fallback — with the
@@ -4265,6 +4275,11 @@ function App({onSignOut}) {
             sender,
           };
         }).filter(m => m.contactId !== null);
+        if (__dbgDroppedOut.length) {
+          console.warn('[ConvoMail bootstrap] dropped outgoing rows because recipient is not in contacts:', __dbgDroppedOut);
+        }
+        const __dbgKeptOut = shapedMessages.filter(m => m.dir === 'out').length;
+        console.log('[ConvoMail bootstrap] outgoing kept after shape:', __dbgKeptOut, 'of', __dbgOut);
 
         // Group draft_attachments by draft so each shaped draft can list its
         // own attachments without a second lookup.
