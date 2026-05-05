@@ -103,7 +103,7 @@ const { useState, useMemo, useRef, useEffect, useCallback } = React;
 
 // ─── Constants ───────────────────────────────────────────────────────────────
 
-const APP_VERSION = "0.0.79"; // bumped on every deploy — keep in sync with version.json
+const APP_VERSION = "0.0.80"; // bumped on every deploy — keep in sync with version.json
 
 // ─── Backend + Supabase config ───────────────────────────────────────────────
 const SUPABASE_URL = "https://oyrlzqbjcsliesvunbwj.supabase.co";
@@ -3325,7 +3325,7 @@ function LeftColumn({contactMeta, archivedContacts, selectedId, mergeId, onSelec
                     className="accent-indigo-600 flex-shrink-0 cursor-pointer"/>
                   <span className="text-xs text-gray-700 truncate flex-1 cursor-pointer"
                     onClick={()=>{onToggleAccount('__exclusive__'+email);setAccDropOpen(false);}}>
-                    {a.display_name || a.email}
+                    {a.display_name ? <><span>{a.display_name}</span> <span className="text-gray-400">· {a.imap_user || a.email}</span></> : (a.imap_user || a.email)}
                   </span>
                 </div>
               );
@@ -3455,7 +3455,7 @@ function LeftColumn({contactMeta, archivedContacts, selectedId, mergeId, onSelec
                     className="accent-indigo-600 flex-shrink-0 cursor-pointer"/>
                   <span className="text-xs text-gray-700 truncate flex-1 cursor-pointer"
                     onClick={()=>{onToggleAccount('__exclusive__'+email);setAccDropOpen(false);}}>
-                    {a.display_name || a.email}
+                    {a.display_name ? <><span>{a.display_name}</span> <span className="text-gray-400">· {a.imap_user || a.email}</span></> : (a.imap_user || a.email)}
                   </span>
                 </div>
               );
