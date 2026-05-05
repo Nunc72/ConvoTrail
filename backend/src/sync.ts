@@ -97,22 +97,28 @@ export async function syncAccount(accountId: string): Promise<SyncResult> {
         const mb = client.mailbox as { uidValidity: bigint | number };
         const uidvalidity = BigInt(mb.uidValidity);
 
-        // UIDs since SINCE_DAYS
+        // UIDs since SINCE_DAYS, IMAP returns them ascending (oldest → newest).
         const uids = (await client.search({ since }, { uid: true })) as number[];
-        const recent = uids.slice(-PER_FOLDER_CAP); // newest N
-        if (recent.length === 0) { folderStats.push(stat); continue; }
+        if (uids.length === 0) { folderStats.push(stat); continue; }
 
-        // Find UIDs we already have
+        // Find UIDs we already have. Earlier code only checked the newest N
+        // and consequently never caught up if the very first sync hit the
+        // PER_FOLDER_CAP — older messages stayed missing forever. Check
+        // every UID in the window so we can detect missing ones across the
+        // entire 90-day range.
         const { data: existing } = await supabaseAdmin
           .from("messages")
           .select("uid")
           .eq("mail_account_id", acc.id)
           .eq("folder", box.path)
           .eq("uidvalidity", uidvalidity.toString())
-          .in("uid", recent);
+          .in("uid", uids);
         const haveSet = new Set((existing ?? []).map(r => Number(r.uid)));
-        const toFetch = recent.filter(u => !haveSet.has(u));
-        stat.skipped = recent.length - toFetch.length;
+        const missing = uids.filter(u => !haveSet.has(u));
+        // Newest-first cap so the user sees recent mail immediately; older
+        // missing UIDs roll in on subsequent syncs until the backlog is gone.
+        const toFetch = missing.slice(-PER_FOLDER_CAP);
+        stat.skipped = uids.length - toFetch.length;
         if (toFetch.length === 0) { folderStats.push(stat); continue; }
 
         // Batch-fetch via UID list
