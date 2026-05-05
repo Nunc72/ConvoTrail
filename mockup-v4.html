@@ -103,7 +103,7 @@ const { useState, useMemo, useRef, useEffect, useCallback } = React;
 
 // ─── Constants ───────────────────────────────────────────────────────────────
 
-const APP_VERSION = "0.0.85"; // bumped on every deploy — keep in sync with version.json
+const APP_VERSION = "0.0.86"; // bumped on every deploy — keep in sync with version.json
 
 // ─── Backend + Supabase config ───────────────────────────────────────────────
 const SUPABASE_URL = "https://oyrlzqbjcsliesvunbwj.supabase.co";
@@ -4220,11 +4220,24 @@ function App({onSignOut}) {
         const __dbgOut = messages.filter(m => m.direction === 'out').length;
         console.log('[ConvoMail bootstrap] messages from API — in:', __dbgIn, 'out:', __dbgOut, 'drafts:', (drafts||[]).length, 'contacts:', contacts.length);
         const __dbgDroppedOut = [];
+        // Self-mails (between two of the user's own accounts) need special
+        // grouping: the natural "other party" would be your own other
+        // account, which makes the message land under the wrong contact
+        // (sender side = appears under recipient contact, etc.). For
+        // self-mails we anchor the contact to the mailbox the row is in,
+        // so prive→werk shows as IN under "Rik Werk" (it landed in werk's
+        // INBOX) and as OUT under "Prive" (it sat in prive's Sent).
+        const myAccountEmails = new Set((mail_accounts || [])
+          .map(a => (a.email || '').toLowerCase())
+          .filter(Boolean));
         const shapedMessages = messages.map(m => {
           const accountEmail = accountEmailById.get(m.mail_account_id) ?? '';
-          const otherEmail = m.direction === 'in'
-            ? (m.from_email || '').toLowerCase()
-            : (m.to_emails?.[0]?.email || '').toLowerCase();
+          const fromEmail = (m.from_email || '').toLowerCase();
+          const firstTo = (m.to_emails?.[0]?.email || '').toLowerCase();
+          const isSelfMail = myAccountEmails.has(fromEmail) && myAccountEmails.has(firstTo);
+          const otherEmail = isSelfMail
+            ? accountEmail
+            : (m.direction === 'in' ? fromEmail : firstTo);
           const contactId = emailToContactId.get(otherEmail) ?? null;
           if (m.direction === 'out' && contactId === null) {
             __dbgDroppedOut.push({ id: m.id, to: otherEmail, subject: m.subject });
