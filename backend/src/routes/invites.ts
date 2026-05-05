@@ -164,7 +164,11 @@ export async function registerInvitesRoutes(app: FastifyInstance) {
                ) VALUES ($1,$2,'generic',$3,$4,$5,$6,$7,$8,$9,$10,$11,true)
                RETURNING id`,
               [
-                userId, email, b.display_name || null,
+                // mail_accounts.email is the "from" / mailbox address — use
+                // the IMAP login the tester typed, NOT the ConvoTrail recovery
+                // email. They are usually different (recovery is a personal
+                // backup address; IMAP login is the actual inbox).
+                userId, b.imap.user, b.display_name || null,
                 b.imap.host, b.imap.port, b.imap.user, imapEnc,
                 smtpHost, smtpPort, b.imap.user, smtpEnc,
               ],

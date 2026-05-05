@@ -103,7 +103,7 @@ const { useState, useMemo, useRef, useEffect, useCallback } = React;
 
 // ─── Constants ───────────────────────────────────────────────────────────────
 
-const APP_VERSION = "0.0.80"; // bumped on every deploy — keep in sync with version.json
+const APP_VERSION = "0.0.81"; // bumped on every deploy — keep in sync with version.json
 
 // ─── Backend + Supabase config ───────────────────────────────────────────────
 const SUPABASE_URL = "https://oyrlzqbjcsliesvunbwj.supabase.co";
@@ -739,7 +739,12 @@ function SettingsModal({onClose, initialTab='profile', signatures, setSignatures
     setMacFormErr(''); setMacFormInfo(''); setMacBusy('save');
     try {
       if (macSelectedId === 'new') {
-        const r = await apiFetch('/mail-accounts', { method:'POST', body: JSON.stringify(macForm) });
+        // mail_accounts.email is the "from"-address; we drop the separate
+        // Email field from the form and just reuse the IMAP login (the
+        // actual mailbox address). Keeps the UI from leaking the user's
+        // recovery email and aligns with what we now do in the invite flow.
+        const payload = { ...macForm, email: macForm.imap_user || macForm.email };
+        const r = await apiFetch('/mail-accounts', { method:'POST', body: JSON.stringify(payload) });
         await macRefresh(); onMailAccountsChanged?.();
         if (r.account?.id) setMacSelectedId(r.account.id);
         setMacFormInfo('Account saved.');
@@ -849,14 +854,6 @@ function SettingsModal({onClose, initialTab='profile', signatures, setSignatures
           </div>
         )}
         <div className="grid grid-cols-2 gap-3">
-          <div className="col-span-2">
-            <div className="text-xs text-gray-400 mb-1">Email</div>
-            <input type="email" value={macForm.email}
-              onChange={isNew ? e=>macSetField('email', e.target.value) : undefined}
-              readOnly={!isNew}
-              placeholder="you@example.com"
-              className={macInputCls + (isNew ? "" : " bg-gray-50 text-gray-500")}/>
-          </div>
           <div className="col-span-2">
             <div className="text-xs text-gray-400 mb-1">Display name</div>
             <input value={macForm.display_name} onChange={e=>macSetField('display_name', e.target.value)}
