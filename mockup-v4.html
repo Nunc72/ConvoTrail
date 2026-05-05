@@ -103,7 +103,7 @@ const { useState, useMemo, useRef, useEffect, useCallback } = React;
 
 // ─── Constants ───────────────────────────────────────────────────────────────
 
-const APP_VERSION = "0.0.72"; // bumped on every deploy — keep in sync with version.json
+const APP_VERSION = "0.0.73"; // bumped on every deploy — keep in sync with version.json
 
 // ─── Backend + Supabase config ───────────────────────────────────────────────
 const SUPABASE_URL = "https://oyrlzqbjcsliesvunbwj.supabase.co";
@@ -3631,7 +3631,8 @@ function LoginScreen() {
     imapHost:'', imapPort:993, imapSsl:true, smtpHost:'', smtpPort:465, smtpSsl:true,
     user:'', pass:'', auth:'Password', eraseDeleted:'never', eraseSpam:'never'
   });
-  const [inviteToken, setInviteToken]         = useState(null);   // base64url token from ?invite=
+  const [inviteToken, setInviteToken]         = useState(null);   // resolved token (from URL or code field)
+  const [regCode, setRegCode]                 = useState('');     // typed-in invite code on the register form
   const [newMailAccountId, setNewMailAccountId] = useState(null); // set after register-imap save
 
   const [busy, setBusy] = useState(false);
@@ -3687,13 +3688,30 @@ function LoginScreen() {
     if (error) { setErr(error.message); return; }
     // Session is already active; Root will swap to App via onAuthStateChange
   }
-  function handleRegisterSubmit(e) {
+  async function handleRegisterSubmit(e) {
     e.preventDefault();
-    if (!inviteToken) {
-      setErr('Registration is invite-only. Ask the admin for an invite link.');
-      return;
+    if (!regEmail || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(regEmail)) {
+      setErr('Enter a valid email address.'); return;
     }
     if (!regPass || regPass.length < 8) { setErr('Choose a password of 8 characters or more.'); return; }
+    // Validate the invite code now (skip if already resolved via ?invite=)
+    let token = inviteToken;
+    if (!token) {
+      const code = (regCode || '').trim().toUpperCase();
+      if (!code) { setErr('Enter your invite code.'); return; }
+      setBusy(true);
+      try {
+        const r = await apiFetch(`/invites/${encodeURIComponent(code)}`);
+        if (!r?.ok) { setErr('This invite code is invalid, expired, or already used.'); setBusy(false); return; }
+        token = code;
+        setInviteToken(code);
+        // If the invite is bound to a specific email, that wins.
+        if (r.email) setRegEmail(r.email);
+      } catch (_) {
+        setErr('This invite code is invalid, expired, or already used.'); setBusy(false); return;
+      }
+      setBusy(false);
+    }
     setErr('');
     // Seed IMAP username with the email — most providers use the full address.
     setRegImap(p => ({ ...p, user: regEmail }));
@@ -3715,6 +3733,7 @@ function LoginScreen() {
         body: JSON.stringify({
           password: regPass,
           display_name: regDisplayName || undefined,
+          email: regEmail,
           imap: {
             host: regImap.imapHost,
             port: Number(regImap.imapPort) || 993,
@@ -3902,21 +3921,33 @@ function LoginScreen() {
           <button onClick={()=>{setMode('login');setErr('');}} className="text-xs text-gray-400 hover:text-gray-600 mb-5 flex items-center gap-1">← Back to sign in</button>
           <h1 className="text-xl font-bold text-gray-900 mb-1">Create account</h1>
           <p className="text-sm text-gray-400 mb-6">
-            {inviteToken ? 'Welcome! Pick a password to finish setting up your account.' : 'Set up your ConvoMail profile.'}
+            {inviteToken ? 'Welcome! Pick a password to finish setting up your account.' : 'Enter your invite code to get started.'}
           </p>
           {err&&<div className="mb-4 px-3 py-2 rounded-lg bg-red-50 text-red-600 text-xs">{err}</div>}
           <form onSubmit={handleRegisterSubmit} className="space-y-4">
+            {!inviteToken && (
+              <div>
+                <label className="text-xs text-gray-500 font-medium block mb-1">Invite code</label>
+                <input autoFocus type="text" value={regCode}
+                  onChange={e=>{setRegCode(e.target.value.toUpperCase());setErr('');}}
+                  placeholder="e.g. 7K2P9MXD"
+                  spellCheck={false} autoComplete="off" autoCapitalize="characters"
+                  className={inputCls + ' tracking-widest font-mono'}
+                  maxLength={16}/>
+                <p className="text-xs text-gray-400 mt-1.5">Ask the admin for a code if you don't have one.</p>
+              </div>
+            )}
             <div>
-              <label className="text-xs text-gray-500 font-medium block mb-1">Email</label>
+              <label className="text-xs text-gray-500 font-medium block mb-1">Username</label>
               <input type="email" value={regEmail}
-                onChange={inviteToken ? undefined : e=>{setRegEmail(e.target.value);setErr('');}}
-                readOnly={!!inviteToken}
+                onChange={e=>{setRegEmail(e.target.value);setErr('');}}
                 placeholder="you@example.com"
-                className={inputCls + (inviteToken ? ' bg-gray-50 text-gray-500' : '')}/>
+                className={inputCls}/>
+              <p className="text-xs text-gray-400 mt-1.5">Use your email — that's how you'll sign in.</p>
             </div>
             <div>
               <label className="text-xs text-gray-500 font-medium block mb-1">Display name</label>
-              <input autoFocus={!!inviteToken} type="text" value={regDisplayName} onChange={e=>setRegDisplayName(e.target.value)}
+              <input type="text" value={regDisplayName} onChange={e=>setRegDisplayName(e.target.value)}
                 placeholder="Your full name" className={inputCls}/>
             </div>
             <div>

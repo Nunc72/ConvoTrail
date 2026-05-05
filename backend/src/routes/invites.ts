@@ -11,6 +11,9 @@ import { encrypt } from "../crypto.js";
 interface AcceptBody {
   password: string;
   display_name?: string;
+  // Required when the invite has no bound email (modern code-based flow);
+  // ignored when the invite was created with a pre-bound email.
+  email?: string;
   imap?: {
     host: string;
     port: number;
@@ -20,6 +23,8 @@ interface AcceptBody {
     smtp_port?: number;
   };
 }
+
+const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
 export async function registerInvitesRoutes(app: FastifyInstance) {
   // ─── Inspect an invite (public) ──────────────────────────────────────────
@@ -67,10 +72,20 @@ export async function registerInvitesRoutes(app: FastifyInstance) {
           await client.query("ROLLBACK");
           return reply.code(410).send({ ok:false, error:"Invite expired" });
         }
-        if (!inv.email) { await client.query("ROLLBACK"); return reply.badRequest("Invite has no bound email"); }
+        // Resolve the email: pre-bound on the invite row wins; otherwise the
+        // tester supplies one in the accept body (modern code-based flow).
+        let email = inv.email;
+        if (!email) {
+          const supplied = (b.email || "").trim().toLowerCase();
+          if (!supplied || !EMAIL_RE.test(supplied)) {
+            await client.query("ROLLBACK");
+            return reply.badRequest("Valid email required");
+          }
+          email = supplied;
+        }
 
         const { data, error } = await supabaseAdmin.auth.admin.createUser({
-          email: inv.email,
+          email,
           password: b.password,
           email_confirm: true,
           user_metadata: b.display_name ? { display_name: b.display_name } : undefined,
@@ -97,7 +112,7 @@ export async function registerInvitesRoutes(app: FastifyInstance) {
                ) VALUES ($1,$2,'generic',$3,$4,$5,$6,$7,$8,$9,$10,$11,true)
                RETURNING id`,
               [
-                userId, inv.email, b.display_name || null,
+                userId, email, b.display_name || null,
                 b.imap.host, b.imap.port, b.imap.user, imapEnc,
                 smtpHost, smtpPort, b.imap.user, smtpEnc,
               ],
@@ -121,7 +136,7 @@ export async function registerInvitesRoutes(app: FastifyInstance) {
           [userId, req.params.token],
         );
         await client.query("COMMIT");
-        return { ok: true, email: inv.email, userId, mailAccountId };
+        return { ok: true, email, userId, mailAccountId };
       } catch (e) {
         await client.query("ROLLBACK");
         return reply.internalServerError((e as Error).message);
