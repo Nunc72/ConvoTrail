@@ -14,6 +14,13 @@ interface AcceptBody {
   // Required when the invite has no bound email (modern code-based flow);
   // ignored when the invite was created with a pre-bound email.
   email?: string;
+  // Free-format login identifier, decoupled from the email. Stored in
+  // user_usernames with a case-insensitive UNIQUE constraint.
+  username?: string;
+  // Optional secondary contact info, persisted to user_metadata so the
+  // Profile screen can edit them later.
+  recovery_email?: string;
+  mobile?: string;
   imap?: {
     host: string;
     port: number;
@@ -25,6 +32,7 @@ interface AcceptBody {
 }
 
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+const USERNAME_RE = /^[A-Za-z0-9._@+\-]{2,64}$/;
 
 export async function registerInvitesRoutes(app: FastifyInstance) {
   // ─── Inspect an invite (public) ──────────────────────────────────────────
@@ -56,6 +64,10 @@ export async function registerInvitesRoutes(app: FastifyInstance) {
       if (b.imap && (!b.imap.host || !b.imap.port || !b.imap.user || !b.imap.password)) {
         return reply.badRequest("Incomplete IMAP settings");
       }
+      const username = (b.username || "").trim();
+      if (!username || !USERNAME_RE.test(username)) {
+        return reply.badRequest("Username must be 2-64 chars (letters, digits, . _ @ + -)");
+      }
 
       const pool = requirePool();
       const client = await pool.connect();
@@ -84,17 +96,57 @@ export async function registerInvitesRoutes(app: FastifyInstance) {
           email = supplied;
         }
 
+        // Pre-flight uniqueness check on the username — it's marginally
+        // racy (someone could grab the same username between this check
+        // and the INSERT below) but the UNIQUE index will catch the loser
+        // and we'll surface a clean error.
+        const uPre = await client.query<{ user_id: string }>(
+          `SELECT user_id FROM user_usernames WHERE LOWER(username) = LOWER($1)`,
+          [username],
+        );
+        if (uPre.rows.length > 0) {
+          await client.query("ROLLBACK");
+          return reply.code(409).send({ ok:false, error: "Username is already taken" });
+        }
+
+        const metadata: Record<string, unknown> = {};
+        if (b.display_name) metadata.display_name = b.display_name;
+        if (b.recovery_email) metadata.recovery_email = b.recovery_email;
+        if (b.mobile) metadata.mobile = b.mobile;
+        metadata.username = username; // mirror so the Profile UI sees it without an extra fetch
+
         const { data, error } = await supabaseAdmin.auth.admin.createUser({
           email,
           password: b.password,
           email_confirm: true,
-          user_metadata: b.display_name ? { display_name: b.display_name } : undefined,
+          user_metadata: Object.keys(metadata).length ? metadata : undefined,
         });
         if (error || !data.user) {
           await client.query("ROLLBACK");
           return reply.code(409).send({ ok:false, error: error?.message || "Failed to create user" });
         }
         const userId = data.user.id;
+
+        // Persist the username with the UNIQUE constraint. On a race-loss
+        // we leave the Supabase user in place; the tester can sign in and
+        // pick a new username from Settings. Same trade-off as the IMAP
+        // failure path below.
+        try {
+          await client.query(
+            `INSERT INTO user_usernames (user_id, username) VALUES ($1, $2)`,
+            [userId, username],
+          );
+        } catch (e: unknown) {
+          await client.query("ROLLBACK");
+          const code = (e as { code?: string })?.code;
+          if (code === "23505") {
+            return reply.code(409).send({
+              ok: false, userCreated: true,
+              error: "Username was just claimed by someone else. Sign in and pick a new one from Settings.",
+            });
+          }
+          throw e;
+        }
 
         let mailAccountId: string | null = null;
         if (b.imap) {

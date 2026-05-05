@@ -103,7 +103,7 @@ const { useState, useMemo, useRef, useEffect, useCallback } = React;
 
 // ─── Constants ───────────────────────────────────────────────────────────────
 
-const APP_VERSION = "0.0.73"; // bumped on every deploy — keep in sync with version.json
+const APP_VERSION = "0.0.74"; // bumped on every deploy — keep in sync with version.json
 
 // ─── Backend + Supabase config ───────────────────────────────────────────────
 const SUPABASE_URL = "https://oyrlzqbjcsliesvunbwj.supabase.co";
@@ -519,10 +519,11 @@ const INIT_ACCOUNT_SIGS = {
 
 function SettingsModal({onClose, initialTab='profile', signatures, setSignatures, accountSigs, setAccountSigs, mailAccounts=[], onMailAccountsChanged}) {
   const [activeTab, setActiveTab] = useState(initialTab);
-  // Profile is hydrated from the authenticated Supabase user; display_name /
-  // username / mobile / recovery_email live in user_metadata, email is
-  // immutable here (changing auth email is a bigger flow we don't need for
-  // MVP). Username is a short handle shown in the top-right user pulldown.
+  // Profile is hydrated from the authenticated Supabase user. display_name /
+  // mobile / recovery_email live in user_metadata; username is the canonical
+  // login key persisted in user_usernames (UNIQUE), with a mirror in
+  // user_metadata so the user-menu can render it without an extra fetch.
+  // The auth email is immutable here — changing it is a bigger flow.
   const [profile, setProfile] = useState({ name: '', username: '', email: '', mobile: '', recovery: '', pass: '' });
   useEffect(() => {
     sb.auth.getUser().then(({ data }) => {
@@ -555,9 +556,27 @@ function SettingsModal({onClose, initialTab='profile', signatures, setSignatures
     setProfileErr(''); setProfileInfo(''); setProfileBusy(true);
     try {
       if (profile.pass && profile.pass.length < 8) throw new Error('Password must be at least 8 characters');
-      // Normalize username: strip a leading @, trim, lowercase — keeps it
-      // consistent wherever it's rendered (pulldown, future @mentions).
-      const cleanUsername = (profile.username || '').replace(/^@/, '').trim().toLowerCase();
+      // Normalize username: strip a leading @, trim. Case is preserved (the
+      // backend's UNIQUE index is case-insensitive so "Rik" and "rik" can't
+      // both register, but display-case is the user's choice).
+      const cleanUsername = (profile.username || '').replace(/^@/, '').trim();
+      if (cleanUsername && !/^[A-Za-z0-9._@+\-]{2,64}$/.test(cleanUsername)) {
+        throw new Error('Username: 2-64 chars (letters, digits, . _ @ + -).');
+      }
+      // Persist username via the dedicated endpoint first — its UNIQUE index
+      // is the canonical store. Bail out before touching anything else if
+      // the name is taken, so we never half-save.
+      if (cleanUsername) {
+        try {
+          await apiFetch('/me/username', {
+            method: 'PATCH',
+            body: JSON.stringify({ username: cleanUsername }),
+          });
+        } catch (e) {
+          // apiFetch surfaces the body's `error` field on non-2xx
+          throw new Error(e?.message?.includes('taken') ? 'Username is already taken' : (e?.message || 'Could not save username'));
+        }
+      }
       const updates = { data: {
         display_name:   profile.name     || '',
         username:       cleanUsername,
@@ -3610,7 +3629,7 @@ function CreatingAccountBar({onComplete}) {
 function LoginScreen() {
   // mode: 'login' | 'forgot' | 'reset-code' | 'reset-done' | 'register' | 'register-imap' | 'creating'
   const [mode, setMode]               = useState('login');
-  const [email, setEmail]             = useState('');
+  const [username, setUsername]       = useState(''); // login key (free format)
   const [pass, setPass]               = useState('');
   const [showPass, setShowPass]       = useState(false);
   const [codeMethod, setCodeMethod]   = useState(null); // 'sms'|'email'
@@ -3619,13 +3638,11 @@ function LoginScreen() {
   const [newPass2, setNewPass2]       = useState('');
   const [err, setErr]                 = useState('');
   // Register state
-  const [regEmail, setRegEmail]               = useState('');
+  const [regUsername, setRegUsername]         = useState('');
+  const [regRecovEmail, setRegRecovEmail]     = useState('');
   const [regPass, setRegPass]                 = useState('');
   const [showRegPass, setShowRegPass]         = useState(false);
   const [regMobile, setRegMobile]             = useState('');
-  const [showRegMobile, setShowRegMobile]     = useState(false);
-  const [regRecovEmail, setRegRecovEmail]     = useState('');
-  const [showRegRecovEmail, setShowRegRecovEmail] = useState(false);
   const [regDisplayName, setRegDisplayName]   = useState('');
   const [regImap, setRegImap]                 = useState({
     imapHost:'', imapPort:993, imapSsl:true, smtpHost:'', smtpPort:465, smtpSsl:true,
@@ -3638,9 +3655,9 @@ function LoginScreen() {
   const [busy, setBusy] = useState(false);
 
   // ── Invite link support ──
-  // If the URL carries `?invite=TOKEN`, look it up and pre-fill the register
-  // form with the bound email. Only then is the register flow reachable —
-  // without a valid token the UI shows "invite-only" on submit.
+  // If the URL carries `?invite=TOKEN`, resolve it so the register form can
+  // skip the code field. The bound email (legacy URL invites) becomes the
+  // recovery-email default; the user still picks their own username.
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
     const t = params.get('invite');
@@ -3650,7 +3667,7 @@ function LoginScreen() {
         const r = await apiFetch(`/invites/${encodeURIComponent(t)}`);
         if (r?.ok) {
           setInviteToken(t);
-          setRegEmail(r.email || '');
+          if (r.email) setRegRecovEmail(r.email);
           setMode('register');
           setErr('');
         }
@@ -3659,19 +3676,34 @@ function LoginScreen() {
       }
     })();
   }, []);
+  // Translate username → email via backend lookup. Wraps both sign-in and
+  // forgot-password — Supabase Auth keys off email, the UI keys off username.
+  async function lookupUsernameEmail(uname) {
+    const r = await apiFetch('/auth/username-to-email', {
+      method: 'POST',
+      body: JSON.stringify({ username: uname }),
+    });
+    return r?.ok ? r.email : null;
+  }
   async function handleLogin(e) {
     e.preventDefault();
-    if(!email||!pass){setErr('Fill in email and password.');return;}
+    if(!username||!pass){setErr('Fill in username and password.');return;}
     setErr(''); setBusy(true);
-    const { error } = await sb.auth.signInWithPassword({ email, password: pass });
+    let lookupEmail = null;
+    try { lookupEmail = await lookupUsernameEmail(username.trim()); } catch (_) {}
+    if (!lookupEmail) { setBusy(false); setErr('No account with that username.'); return; }
+    const { error } = await sb.auth.signInWithPassword({ email: lookupEmail, password: pass });
     setBusy(false);
     if (error) { setErr(error.message); return; }
     // Root listens to auth state changes and will swap views
   }
   async function handleSendResetEmail() {
-    if(!email){setErr('Enter your email first.');return;}
+    if(!username){setErr('Enter your username first.');return;}
     setErr(''); setBusy(true);
-    const { error } = await sb.auth.resetPasswordForEmail(email, {
+    let lookupEmail = null;
+    try { lookupEmail = await lookupUsernameEmail(username.trim()); } catch (_) {}
+    if (!lookupEmail) { setBusy(false); setErr('No account with that username.'); return; }
+    const { error } = await sb.auth.resetPasswordForEmail(lookupEmail, {
       redirectTo: window.location.origin + window.location.pathname,
     });
     setBusy(false);
@@ -3690,8 +3722,12 @@ function LoginScreen() {
   }
   async function handleRegisterSubmit(e) {
     e.preventDefault();
-    if (!regEmail || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(regEmail)) {
-      setErr('Enter a valid email address.'); return;
+    const uname = (regUsername || '').trim();
+    if (!uname || !/^[A-Za-z0-9._@+\-]{2,64}$/.test(uname)) {
+      setErr('Username: 2-64 chars (letters, digits, . _ @ + -).'); return;
+    }
+    if (!regRecovEmail || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(regRecovEmail)) {
+      setErr('Enter a valid recovery email address.'); return;
     }
     if (!regPass || regPass.length < 8) { setErr('Choose a password of 8 characters or more.'); return; }
     // Validate the invite code now (skip if already resolved via ?invite=)
@@ -3705,16 +3741,15 @@ function LoginScreen() {
         if (!r?.ok) { setErr('This invite code is invalid, expired, or already used.'); setBusy(false); return; }
         token = code;
         setInviteToken(code);
-        // If the invite is bound to a specific email, that wins.
-        if (r.email) setRegEmail(r.email);
       } catch (_) {
         setErr('This invite code is invalid, expired, or already used.'); setBusy(false); return;
       }
       setBusy(false);
     }
     setErr('');
-    // Seed IMAP username with the email — most providers use the full address.
-    setRegImap(p => ({ ...p, user: regEmail }));
+    // Seed IMAP username with the recovery email — most providers use the
+    // full address. The user can change it on the next screen if needed.
+    setRegImap(p => ({ ...p, user: regRecovEmail }));
     setMode('register-imap');
   }
   // Final step of the invite-driven onboarding: accept the invite with the
@@ -3733,7 +3768,12 @@ function LoginScreen() {
         body: JSON.stringify({
           password: regPass,
           display_name: regDisplayName || undefined,
-          email: regEmail,
+          username: regUsername.trim(),
+          // The recovery email becomes the Supabase user.email under the hood
+          // (Auth needs an email identifier for password reset etc.).
+          email: regRecovEmail,
+          recovery_email: regRecovEmail,
+          mobile: regMobile || undefined,
           imap: {
             host: regImap.imapHost,
             port: Number(regImap.imapPort) || 993,
@@ -3754,7 +3794,7 @@ function LoginScreen() {
   // user in — onAuthStateChange then fires and Root swaps to the app.
   async function finishOnboarding() {
     try {
-      const { error } = await sb.auth.signInWithPassword({ email: regEmail, password: regPass });
+      const { error } = await sb.auth.signInWithPassword({ email: regRecovEmail, password: regPass });
       if (error) {
         setErr(`Account ready, but sign-in failed: ${error.message}. Try signing in again.`);
         setMode('login');
@@ -3790,9 +3830,10 @@ function LoginScreen() {
           {err&&<div className="mb-4 px-3 py-2 rounded-lg bg-red-50 text-red-600 text-xs">{err}</div>}
           <form onSubmit={handleLogin} className="space-y-4">
             <div>
-              <label className="text-xs text-gray-500 font-medium block mb-1">Email address</label>
-              <input autoFocus type="email" value={email} onChange={e=>{setEmail(e.target.value);setErr('');}}
-                placeholder="you@example.com" className={inputCls}/>
+              <label className="text-xs text-gray-500 font-medium block mb-1">Username</label>
+              <input autoFocus type="text" value={username} onChange={e=>{setUsername(e.target.value);setErr('');}}
+                placeholder="your username" autoCapitalize="off" autoComplete="username"
+                spellCheck={false} className={inputCls}/>
             </div>
             <div>
               <label className="text-xs text-gray-500 font-medium block mb-1">Password</label>
@@ -3832,13 +3873,14 @@ function LoginScreen() {
         <div className={cardCls}>
           <button onClick={()=>{setMode('login');setErr('');}} className="text-xs text-gray-400 hover:text-gray-600 mb-5 flex items-center gap-1">← Back to sign in</button>
           <h1 className="text-xl font-bold text-gray-900 mb-1">Reset password</h1>
-          <p className="text-sm text-gray-400 mb-7">We'll email you a link to set a new password.</p>
+          <p className="text-sm text-gray-400 mb-7">We'll send a reset link to your recovery email.</p>
           {err&&<div className="mb-4 px-3 py-2 rounded-lg bg-red-50 text-red-600 text-xs">{err}</div>}
           <div className="space-y-4">
             <div>
-              <label className="text-xs text-gray-500 font-medium block mb-1">Email address</label>
-              <input autoFocus type="email" value={email} onChange={e=>{setEmail(e.target.value);setErr('');}}
-                placeholder="you@example.com" className={inputCls}/>
+              <label className="text-xs text-gray-500 font-medium block mb-1">Username</label>
+              <input autoFocus type="text" value={username} onChange={e=>{setUsername(e.target.value);setErr('');}}
+                placeholder="your username" autoCapitalize="off" autoComplete="username"
+                spellCheck={false} className={inputCls}/>
             </div>
             <button onClick={handleSendResetEmail} disabled={busy}
               className="w-full py-2.5 rounded-xl bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 text-white text-sm font-semibold transition">
@@ -3939,11 +3981,12 @@ function LoginScreen() {
             )}
             <div>
               <label className="text-xs text-gray-500 font-medium block mb-1">Username</label>
-              <input type="email" value={regEmail}
-                onChange={e=>{setRegEmail(e.target.value);setErr('');}}
-                placeholder="you@example.com"
+              <input type="text" value={regUsername}
+                onChange={e=>{setRegUsername(e.target.value);setErr('');}}
+                placeholder="rik or rik@example.com"
+                autoCapitalize="off" autoComplete="username" spellCheck={false}
                 className={inputCls}/>
-              <p className="text-xs text-gray-400 mt-1.5">Use your email — that's how you'll sign in.</p>
+              <p className="text-xs text-gray-400 mt-1.5">Free format — pick anything. You'll use this to sign in.</p>
             </div>
             <div>
               <label className="text-xs text-gray-500 font-medium block mb-1">Display name</label>
@@ -3962,17 +4005,18 @@ function LoginScreen() {
                 </button>
               </div>
             </div>
+            <div>
+              <label className="text-xs text-gray-500 font-medium block mb-1">Recovery email address</label>
+              <input type="email" value={regRecovEmail} onChange={e=>{setRegRecovEmail(e.target.value);setErr('');}}
+                placeholder="you@example.com"
+                className={inputCls}/>
+              <p className="text-xs text-gray-400 mt-1.5">For password reset. Use a personal address you control — outside of ConvoMail.</p>
+            </div>
             {!inviteToken && (<>
               <div>
-                <label className="text-xs text-gray-500 font-medium block mb-1">Recovery mobile number</label>
+                <label className="text-xs text-gray-500 font-medium block mb-1">Recovery mobile number (optional)</label>
                 <input type="text" value={regMobile} onChange={e=>setRegMobile(e.target.value)}
-                  className="w-full border border-gray-200 rounded-xl px-4 py-2.5 text-sm outline-none focus:border-indigo-400 focus:ring-2 focus:ring-indigo-100 transition"/>
-              </div>
-              <div>
-                <label className="text-xs text-gray-500 font-medium block mb-1">Recovery email address</label>
-                <input type="email" value={regRecovEmail} onChange={e=>setRegRecovEmail(e.target.value)}
-                  className="w-full border border-gray-200 rounded-xl px-4 py-2.5 text-sm outline-none focus:border-indigo-400 focus:ring-2 focus:ring-indigo-100 transition"/>
-                <p className="text-xs text-gray-400 mt-1.5">Used for account recovery only. Must be outside of ConvoMail.</p>
+                  className={inputCls}/>
               </div>
             </>)}
             <button type="submit" disabled={busy}
