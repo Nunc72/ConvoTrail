@@ -103,7 +103,7 @@ const { useState, useMemo, useRef, useEffect, useCallback } = React;
 
 // ─── Constants ───────────────────────────────────────────────────────────────
 
-const APP_VERSION = "0.0.90"; // bumped on every deploy — keep in sync with version.json
+const APP_VERSION = "0.0.91"; // bumped on every deploy — keep in sync with version.json
 
 // ─── Backend + Supabase config ───────────────────────────────────────────────
 const SUPABASE_URL = "https://oyrlzqbjcsliesvunbwj.supabase.co";
@@ -3256,7 +3256,9 @@ function LeftColumn({contactMeta, archivedContacts, selectedId, mergeId, onSelec
   function ContactRow({contact, unread, hasR2m, r2mCount}) {
     const isSel=contact.id===selectedId, isMerge=contact.id===mergeId;
     const badge = unread + (r2mCount||0);
-    const badgeColor = (r2mCount||0)>0 ? 'bg-amber-500' : 'bg-indigo-600';
+    // New-mail (blue) wins when both kinds of alert are present — it's the
+    // more urgent of the two. Pure-r2m contacts still show amber.
+    const badgeColor = unread > 0 ? 'bg-indigo-600' : 'bg-amber-500';
     return (
       <div onClick={e=>onSelect(contact.id,e)}
         className={`px-3 py-2 border-b border-gray-100 cursor-pointer transition-colors
@@ -4240,13 +4242,12 @@ function App({onSignOut}) {
         const __dbgOut = messages.filter(m => m.direction === 'out').length;
         console.log('[ConvoMail bootstrap] messages from API — in:', __dbgIn, 'out:', __dbgOut, 'drafts:', (drafts||[]).length, 'contacts:', contacts.length);
         const __dbgDroppedOut = [];
-        // Self-mails (between two of the user's own accounts) need special
-        // grouping: the natural "other party" would be your own other
-        // account, which makes the message land under the wrong contact
-        // (sender side = appears under recipient contact, etc.). For
-        // self-mails we anchor the contact to the mailbox the row is in,
-        // so prive→werk shows as IN under "Rik Werk" (it landed in werk's
-        // INBOX) and as OUT under "Prive" (it sat in prive's Sent).
+        // Self-mails (between two of the user's own accounts) always group
+        // under the *recipient* contact, regardless of direction:
+        //   prive@ → werk@   →  both copies land under "Rik Werk"
+        //   werk@ → prive@   →  both copies land under "Prive"
+        // So under "Rik Werk" you only see mail addressed TO werk@, never
+        // mail SENT FROM werk@ to your other accounts.
         const myAccountEmails = new Set((mail_accounts || [])
           .map(a => (a.email || '').toLowerCase())
           .filter(Boolean));
@@ -4256,7 +4257,7 @@ function App({onSignOut}) {
           const firstTo = (m.to_emails?.[0]?.email || '').toLowerCase();
           const isSelfMail = myAccountEmails.has(fromEmail) && myAccountEmails.has(firstTo);
           const otherEmail = isSelfMail
-            ? accountEmail
+            ? firstTo
             : (m.direction === 'in' ? fromEmail : firstTo);
           const contactId = emailToContactId.get(otherEmail) ?? null;
           if (m.direction === 'out' && contactId === null) {
