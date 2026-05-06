@@ -103,7 +103,7 @@ const { useState, useMemo, useRef, useEffect, useCallback } = React;
 
 // ─── Constants ───────────────────────────────────────────────────────────────
 
-const APP_VERSION = "0.0.88"; // bumped on every deploy — keep in sync with version.json
+const APP_VERSION = "0.0.89"; // bumped on every deploy — keep in sync with version.json
 
 // ─── Backend + Supabase config ───────────────────────────────────────────────
 const SUPABASE_URL = "https://oyrlzqbjcsliesvunbwj.supabase.co";
@@ -4194,12 +4194,20 @@ function App({onSignOut}) {
         const subjectKey = s => (s || '').toLowerCase()
           .replace(/^\s*(?:(?:re|fwd?|antw|aw)\s*:\s*)+/i, '')
           .trim();
+        const myAccountEmailsForReply = new Set((mail_accounts || [])
+          .map(a => (a.email || '').toLowerCase())
+          .filter(Boolean));
         const repliedRfcIds = new Set();
         const incomingByContact = new Map(); // contactId → [{ date, subjKey }]
         for (const m of messages) {
           if (m.direction !== 'in') continue;
+          // The INBOX-side of a self-mail (e.g. werk@→prive@) is your own
+          // outgoing copy, not a reply. Including it would suppress the
+          // r2m alert on the moment you send to yourself.
+          const fromLower = (m.from_email || '').toLowerCase();
+          if (myAccountEmailsForReply.has(fromLower)) continue;
           if (m.thread_id) repliedRfcIds.add(stripBrackets(m.thread_id));
-          const cid = emailToContactId.get((m.from_email || '').toLowerCase());
+          const cid = emailToContactId.get(fromLower);
           if (cid == null) continue;
           if (!incomingByContact.has(cid)) incomingByContact.set(cid, []);
           incomingByContact.get(cid).push({ date: m.date || '', subjKey: subjectKey(m.subject) });
