@@ -93,6 +93,11 @@
     @media (max-width: 767px) {
       input, textarea, select { font-size: 16px !important; }
     }
+    /* Number-input spinner buttons clutter the layout for port-style fields.
+       WebKit/Blink: -webkit-inner/outer-spin-button. Firefox: -moz-appearance. */
+    input[type="number"]::-webkit-inner-spin-button,
+    input[type="number"]::-webkit-outer-spin-button { -webkit-appearance: none; margin: 0; }
+    input[type="number"] { -moz-appearance: textfield; }
   </style>
 </head>
 <body>
@@ -103,7 +108,7 @@ const { useState, useMemo, useRef, useEffect, useCallback } = React;
 
 // ─── Constants ───────────────────────────────────────────────────────────────
 
-const APP_VERSION = "0.0.93"; // bumped on every deploy — keep in sync with version.json
+const APP_VERSION = "0.0.94"; // bumped on every deploy — keep in sync with version.json
 
 // ─── Backend + Supabase config ───────────────────────────────────────────────
 const SUPABASE_URL = "https://oyrlzqbjcsliesvunbwj.supabase.co";
@@ -2481,10 +2486,10 @@ function MessageDetail({message,contact,isDeleted,msgTags,allTags,onReply,onRepl
           <div className="flex-1 min-w-0">
             <div className="flex items-center justify-between gap-2">
               <span className="text-sm font-medium text-gray-800 truncate">{senderPerson.name}</span>
-              <span className="text-xs text-gray-400 flex-shrink-0 text-right leading-tight">
+              <span className="text-xs text-gray-400 flex-shrink-0 whitespace-nowrap">
                 {isMobile ? (() => {
                   const d = new Date(message.date);
-                  return <>{d.toLocaleDateString("nl-NL",{day:"numeric",month:"short"})}<br/>{d.toLocaleTimeString("nl-NL",{hour:"2-digit",minute:"2-digit"})}</>;
+                  return d.toLocaleDateString("nl-NL",{day:"numeric",month:"short"}) + ' ' + d.toLocaleTimeString("nl-NL",{hour:"2-digit",minute:"2-digit"});
                 })() : formatFull(message.date)}
               </span>
             </div>
@@ -3330,7 +3335,7 @@ function LeftColumn({contactMeta, archivedContacts, selectedId, mergeId, onSelec
     const accountHeader = (
       <div className="border-b border-gray-100 bg-white relative flex-shrink-0" ref={accDropRef}>
         <button onClick={()=>setAccDropOpen(o=>!o)}
-          className="w-full px-3 pt-2 pb-1 text-xs font-semibold text-gray-500 flex items-center justify-between hover:text-gray-700 transition-colors">
+          className="w-full px-3 pt-2 pb-1 text-xs font-semibold text-gray-400 flex items-center justify-between hover:text-gray-600 transition-colors">
           <span className="truncate flex-1 text-left">{accountLabel}</span>
           <svg width="10" height="10" viewBox="0 0 10 10" fill="none" className="flex-shrink-0 mr-1">
             <path d="M2 3.5L5 6.5L8 3.5" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
@@ -3460,7 +3465,7 @@ function LeftColumn({contactMeta, archivedContacts, selectedId, mergeId, onSelec
       {/* Account selector */}
       <div className="border-b border-gray-100 flex-shrink-0 bg-white relative" ref={accDropRef}>
         <button onClick={()=>setAccDropOpen(o=>!o)}
-          className="w-full px-3 pt-2 pb-1 text-xs font-semibold text-gray-500 flex items-center justify-between hover:text-gray-700 transition-colors">
+          className="w-full px-3 pt-2 pb-1 text-xs font-semibold text-gray-400 flex items-center justify-between hover:text-gray-600 transition-colors">
           <span className="truncate flex-1 text-left">{accountLabel}</span>
           <svg width="10" height="10" viewBox="0 0 10 10" fill="none" className="flex-shrink-0 mr-1">
             <path d="M2 3.5L5 6.5L8 3.5" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
@@ -3630,23 +3635,46 @@ function MergeDialog({primary,secondary,onMerge,onCancel}) {
 
 // ─── Login Screen ────────────────────────────────────────────────────────────
 
-function CreatingAccountBar({onComplete}) {
+function CreatingAccountBar({onComplete, inviteToken, mailAccountId}) {
   const [progress, setProgress] = useState(0);
-  useEffect(()=>{
-    const start = Date.now();
-    const duration = 8000;
-    const interval = setInterval(()=>{
-      const elapsed = Date.now() - start;
-      const p = Math.min(100, (elapsed / duration) * 100);
-      setProgress(p);
-      if(p >= 100){ clearInterval(interval); setTimeout(onComplete, 300); }
-    }, 50);
-    return ()=>clearInterval(interval);
-  },[]);
+  const [phase, setPhase] = useState('Setting up your account…');
+  useEffect(() => {
+    let cancelled = false;
+    setProgress(15);
+    setPhase('Syncing your mail…');
+    // Slowly approach 90% while the sync request is in flight, so the bar
+    // moves even if the network round-trip is fast or slow.
+    const ramp = setInterval(() => {
+      if (cancelled) return;
+      setProgress(p => p < 90 ? p + 0.6 : p);
+    }, 80);
+    (async () => {
+      try {
+        if (inviteToken && mailAccountId) {
+          await apiFetch(`/invites/${encodeURIComponent(inviteToken)}/first-sync`, {
+            method: 'POST',
+            body: JSON.stringify({ mailAccountId }),
+          });
+        }
+      } catch (_) {
+        // Sync failure shouldn't block onboarding — the user can retry from
+        // Settings. We still progress to the app.
+      }
+      if (cancelled) return;
+      clearInterval(ramp);
+      setProgress(100);
+      setPhase('Signing in…');
+      setTimeout(() => { if (!cancelled) onComplete?.(); }, 400);
+    })();
+    return () => { cancelled = true; clearInterval(ramp); };
+  }, [inviteToken, mailAccountId]);
   return (
-    <div className="w-full bg-gray-100 rounded-full h-2 overflow-hidden">
-      <div className="bg-indigo-600 h-2 rounded-full" style={{width:`${progress}%`, transition:'width 0.05s linear'}}/>
-    </div>
+    <>
+      <div className="w-full bg-gray-100 rounded-full h-2 overflow-hidden">
+        <div className="bg-indigo-600 h-2 rounded-full" style={{width:`${progress}%`, transition:'width 0.2s linear'}}/>
+      </div>
+      <p className="text-xs text-gray-500 mt-3">{phase}</p>
+    </>
   );
 }
 
@@ -3799,7 +3827,7 @@ function LoginScreen() {
     if (!regImap.pass) { setErr('Password is required.'); return; }
     setErr(''); setBusy(true);
     try {
-      await apiFetch(`/invites/${encodeURIComponent(inviteToken)}/accept`, {
+      const acceptRes = await apiFetch(`/invites/${encodeURIComponent(inviteToken)}/accept`, {
         method: 'POST',
         body: JSON.stringify({
           password: regPass,
@@ -3820,6 +3848,10 @@ function LoginScreen() {
           },
         }),
       });
+      // Stash the new mail-account id so CreatingAccountBar can run a real
+      // first sync against it (via the public /invites/:token/first-sync
+      // endpoint) while the bar animates.
+      if (acceptRes?.mailAccountId) setNewMailAccountId(acceptRes.mailAccountId);
       setMode('creating');
     } catch (e) {
       setErr(e?.message || 'Could not finish setup. Check IMAP hostname / credentials.');
@@ -4151,7 +4183,7 @@ function LoginScreen() {
             <div className="w-14 h-14 rounded-full bg-indigo-100 flex items-center justify-center text-2xl mx-auto mb-5">⚙️</div>
             <h1 className="text-xl font-bold text-gray-900 mb-2">Creating your account</h1>
             <p className="text-sm text-gray-400 mb-8">Please wait while we set everything up…</p>
-            <CreatingAccountBar onComplete={finishOnboarding}/>
+            <CreatingAccountBar onComplete={finishOnboarding} inviteToken={inviteToken} mailAccountId={newMailAccountId}/>
             <p className="text-xs text-gray-400 mt-4">This may take a few seconds</p>
           </div>
         </div>

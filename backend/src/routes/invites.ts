@@ -7,6 +7,7 @@ import type { FastifyInstance } from "fastify";
 import { supabaseAdmin } from "../supabase.js";
 import { requirePool } from "../db.js";
 import { encrypt } from "../crypto.js";
+import { syncAccount } from "../sync.js";
 
 interface AcceptBody {
   password: string;
@@ -199,6 +200,38 @@ export async function registerInvitesRoutes(app: FastifyInstance) {
       } finally {
         client.release();
       }
+    },
+  );
+
+  // ─── First-sync after invite acceptance (public, time-limited) ─────────
+  // Runs the first IMAP sync while the onboarding progress bar is showing,
+  // so the user lands in an inbox with mail already loaded. Authenticated
+  // by the invite token + mail_account ownership check, valid for a short
+  // window after the invite was used (so a leaked token can't trigger
+  // arbitrary syncs forever).
+  app.post<{ Params: { token: string }; Body: { mailAccountId?: string } }>(
+    "/invites/:token/first-sync", async (req, reply) => {
+      const mailAccountId = (req.body?.mailAccountId || "").trim();
+      if (!mailAccountId) return reply.badRequest("mailAccountId required");
+
+      const pool = requirePool();
+      const inv = await pool.query<{ used_by: string | null; used_at: string | null }>(
+        `SELECT used_by, used_at FROM invites WHERE token = $1`, [req.params.token],
+      );
+      if (inv.rows.length === 0) return reply.notFound("Invite not found");
+      const i = inv.rows[0];
+      if (!i.used_by || !i.used_at) return reply.code(403).send({ ok: false, error: "Invite not yet accepted" });
+      if (Date.now() - new Date(i.used_at).getTime() > 10 * 60_000) {
+        return reply.code(403).send({ ok: false, error: "Onboarding window expired" });
+      }
+      const ma = await pool.query<{ user_id: string }>(
+        `SELECT user_id FROM mail_accounts WHERE id = $1`, [mailAccountId],
+      );
+      if (ma.rows.length === 0) return reply.notFound("mail account not found");
+      if (ma.rows[0].user_id !== i.used_by) return reply.forbidden();
+
+      const result = await syncAccount(mailAccountId);
+      return result;
     },
   );
 }
