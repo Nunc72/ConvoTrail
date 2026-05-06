@@ -101,26 +101,80 @@
 
     /* ─── Polish overlay ────────────────────────────────────────────────
        Activated by the runtime script below based on ?level=A|B (default A).
-       Kept conservative: tighter corners (≤4px), softer shadows, gentle
-       column-separator depth, slight hover lift on tappable rows. */
+       Targets the three places that should feel separated:
+        1. Between the three columns (col-divider)
+        2. Between cards/rows in lists (contacts, messages)
+        3. Between header/body/footer of the message detail */
+
+    /* Tighter corners (cap at 4-6px) on cards, inputs, banners. Round
+       badges stay round. */
     body[data-polish] .rounded-2xl { border-radius: 6px; }
     body[data-polish] .rounded-xl  { border-radius: 4px; }
     body[data-polish] .rounded-lg  { border-radius: 4px; }
     body[data-polish] .rounded-md  { border-radius: 3px; }
-    /* Column dividers — keep the border, add a faint inner shadow for depth */
-    body[data-polish] .border-r { box-shadow: inset -1px 0 0 rgba(15,23,42,0.03); }
-    /* Subtle level-A: hover-only shadow on rows */
-    body[data-polish="A"] .border-b.cursor-pointer { transition: background-color .15s ease, box-shadow .15s ease; }
-    body[data-polish="A"] .border-b.cursor-pointer:hover { box-shadow: 0 1px 2px rgba(15,23,42,0.05); position: relative; z-index: 1; }
-    /* Level-B: persistent very-soft shadow + larger hover shadow */
-    body[data-polish="B"] .border-b.cursor-pointer { box-shadow: 0 1px 0 rgba(15,23,42,0.025); transition: box-shadow .15s ease; }
-    body[data-polish="B"] .border-b.cursor-pointer:hover { box-shadow: 0 2px 4px rgba(15,23,42,0.07); position: relative; z-index: 1; }
-    /* Tag chips and small pills: 3px corners */
-    body[data-polish] .rounded-full { border-radius: 999px; } /* leave round badges alone */
-    body[data-polish] .tag-chip { border-radius: 3px; }
-    /* Subtle ring around the auth card so the login screen also feels lifted */
-    body[data-polish] .max-w-sm.bg-white { box-shadow: 0 1px 3px rgba(15,23,42,0.06), 0 8px 24px rgba(15,23,42,0.04); }
-    /* Tiny banner so the user knows this is a preview build */
+    body[data-polish] .tag-chip    { border-radius: 3px; }
+
+    /* (1) Column dividers — replace the flat grey strip with a white
+       channel that has a soft shadow on both sides. Resize handle still
+       works because it's the same element. */
+    body[data-polish] .col-divider {
+      background: #ffffff;
+      box-shadow:
+        inset 1px 0 2px rgba(15,23,42,0.07),
+        inset -1px 0 2px rgba(15,23,42,0.07);
+    }
+    body[data-polish="B"] .col-divider {
+      box-shadow:
+        inset 2px 0 3px rgba(15,23,42,0.11),
+        inset -2px 0 3px rgba(15,23,42,0.11);
+    }
+
+    /* (2) List rows: contact rows in col 1, message rows in col 2.
+       Replace the harsh bottom-border with a soft drop shadow so each row
+       reads as its own card. Hover lifts a touch. */
+    body[data-polish] .border-b.cursor-pointer {
+      background: #ffffff;
+      border-bottom-color: transparent;
+      box-shadow: 0 1px 1px rgba(15,23,42,0.04);
+      transition: box-shadow .15s ease;
+      position: relative;
+      z-index: 0;
+    }
+    body[data-polish] .border-b.cursor-pointer:hover {
+      box-shadow: 0 2px 4px rgba(15,23,42,0.08);
+      z-index: 1;
+    }
+    body[data-polish="B"] .border-b.cursor-pointer {
+      box-shadow: 0 1px 3px rgba(15,23,42,0.07);
+    }
+    body[data-polish="B"] .border-b.cursor-pointer:hover {
+      box-shadow: 0 3px 6px rgba(15,23,42,0.12);
+    }
+
+    /* (3) MessageDetail (col 3): header / alert banners / footer
+       separations get a soft drop shadow under their bottom border so
+       the body reads as a separate plane. */
+    body[data-polish] .flex-shrink-0.border-b {
+      border-bottom-color: rgba(15,23,42,0.05);
+      box-shadow: 0 1px 2px rgba(15,23,42,0.04);
+      position: relative;
+      z-index: 1;
+    }
+    body[data-polish] .flex-shrink-0.border-t {
+      border-top-color: rgba(15,23,42,0.05);
+      box-shadow: 0 -1px 2px rgba(15,23,42,0.04);
+      position: relative;
+      z-index: 1;
+    }
+    body[data-polish="B"] .flex-shrink-0.border-b { box-shadow: 0 2px 4px rgba(15,23,42,0.07); }
+    body[data-polish="B"] .flex-shrink-0.border-t { box-shadow: 0 -2px 4px rgba(15,23,42,0.07); }
+
+    /* Slight lift around the auth card on the login page so it matches. */
+    body[data-polish] .max-w-sm.bg-white {
+      box-shadow: 0 1px 3px rgba(15,23,42,0.06), 0 8px 24px rgba(15,23,42,0.04);
+    }
+
+    /* Tiny preview banner so it's obvious this isn't the production build. */
     body[data-polish]::before {
       content: "Polish preview — level " attr(data-polish) " · use ?level=A or ?level=B";
       position: fixed; top: 0; left: 0; right: 0; z-index: 9999;
