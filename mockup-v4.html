@@ -103,7 +103,7 @@ const { useState, useMemo, useRef, useEffect, useCallback } = React;
 
 // ─── Constants ───────────────────────────────────────────────────────────────
 
-const APP_VERSION = "0.0.87"; // bumped on every deploy — keep in sync with version.json
+const APP_VERSION = "0.0.88"; // bumped on every deploy — keep in sync with version.json
 
 // ─── Backend + Supabase config ───────────────────────────────────────────────
 const SUPABASE_URL = "https://oyrlzqbjcsliesvunbwj.supabase.co";
@@ -2520,12 +2520,6 @@ function MessageDetail({message,contact,isDeleted,msgTags,allTags,onReply,onRepl
         {(() => {
           const htmlToRender = enriched?.html || message.bodyHtml;
           if (htmlToRender) return <HtmlMessageBody html={htmlToRender}/>;
-          if (enrichedLoading) return (
-            <div className="flex items-center gap-2 text-sm text-gray-400 italic">
-              <Spinner size={14}/>
-              <span>Loading full message…</span>
-            </div>
-          );
           // Plain-text body: each newline becomes its own <p>.
           // `overflow-wrap: anywhere` on the parent wraps long unbroken runs
           // like signature dividers (————————…) and URL-ish tokens so the
@@ -2533,6 +2527,19 @@ function MessageDetail({message,contact,isDeleted,msgTags,allTags,onReply,onRepl
           if (message.body?.trim()) return message.body.split("\n").map((line,i)=>(
             <p key={i} className={line.startsWith("—")||line.startsWith("——")?"text-gray-300 mt-3":"min-h-[1em]"}>{line}</p>
           ));
+          // Spinner only when we expect inline HTML images to be rewritten
+          // server-side (the /body endpoint replaces cid: refs with data URIs).
+          // For attachment-only mails or genuinely empty bodies, skip the
+          // spinner — it just lingered without ever resolving to content.
+          const expectingInlineRewrite = enrichedLoading
+            && typeof message.bodyHtml === 'string'
+            && /cid:/i.test(message.bodyHtml);
+          if (expectingInlineRewrite) return (
+            <div className="flex items-center gap-2 text-sm text-gray-400 italic">
+              <Spinner size={14}/>
+              <span>Loading full message…</span>
+            </div>
+          );
           return <p className="italic text-gray-300">(no body text)</p>;
         })()}
         {enrichedErr && <p className="mt-3 text-xs text-red-500">Attachments load failed: {enrichedErr}</p>}
@@ -4586,6 +4593,10 @@ function App({onSignOut}) {
       setSlidingOut(false);
       setPendingMsgId(undefined);
       setActionToast(null);
+      // Without this, the captureAlert-frozen banner state was carried
+      // onto the next mail (Seen on mail A → blue banner appearing on
+      // mail B even though it was already read).
+      setFadingAlert(null);
       if(nid) setSlidingIn(true);
     }, 300);
     return ()=>clearTimeout(t);
@@ -4730,8 +4741,13 @@ function App({onSignOut}) {
   }
   function navigateTo(nextId, alwaysGo=false, transition='none') {
     // alwaysGo=true: navigate even when nextId is null
-    if(!alwaysGo && (nextId===null||nextId===undefined)) return; // stay — only toast
-    if(nextId===selMsg) return; // stay
+    if(!alwaysGo && (nextId===null||nextId===undefined)) {
+      // Staying on the same mail. Drop the captureAlert freeze so the
+      // banner reflects the new state (e.g. Seen → no blue banner).
+      setFadingAlert(null);
+      return;
+    }
+    if(nextId===selMsg) { setFadingAlert(null); return; } // stay
     if(transition==='fade') {
       setFadingOut(true);
       setPendingMsgId(nextId??null);
