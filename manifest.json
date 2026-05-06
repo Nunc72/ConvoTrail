@@ -1,6 +1,6 @@
 {
-  "name": "ConvoMail",
-  "short_name": "ConvoMail",
+  "name": "Convooz",
+  "short_name": "Convooz",
   "description": "Conversation-centric email client",
   "start_url": "./mockup-v4.html",
   "scope": "./",

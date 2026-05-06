@@ -9,13 +9,13 @@
        iOS won't auto-zoom on input focus because we force font-size:16px
        on all inputs below 768px (see the media query in the stylesheet). -->
   <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
-  <title>ConvoMail</title>
+  <title>Convooz</title>
   <!-- PWA -->
   <link rel="manifest" href="manifest.json"/>
   <meta name="theme-color" content="#6366f1"/>
   <!-- iOS "Add to Home Screen" -->
   <meta name="apple-mobile-web-app-capable" content="yes"/>
-  <meta name="apple-mobile-web-app-title" content="ConvoMail"/>
+  <meta name="apple-mobile-web-app-title" content="Convooz"/>
   <meta name="apple-mobile-web-app-status-bar-style" content="default"/>
   <link rel="apple-touch-icon" href="apple-touch-icon-180.png"/>
   <link rel="apple-touch-icon" sizes="152x152" href="apple-touch-icon-152.png"/>
@@ -108,7 +108,7 @@ const { useState, useMemo, useRef, useEffect, useCallback } = React;
 
 // ─── Constants ───────────────────────────────────────────────────────────────
 
-const APP_VERSION = "0.0.94"; // bumped on every deploy — keep in sync with version.json
+const APP_VERSION = "0.0.95"; // bumped on every deploy — keep in sync with version.json
 
 // ─── Backend + Supabase config ───────────────────────────────────────────────
 const SUPABASE_URL = "https://oyrlzqbjcsliesvunbwj.supabase.co";
@@ -3887,7 +3887,7 @@ function LoginScreen() {
             <path d="M3 5h14M3 10h14M3 15h8" stroke="white" strokeWidth="2" strokeLinecap="round"/>
           </svg>
         </div>
-        <span className="font-bold text-indigo-700 text-2xl tracking-tight">ConvoMail</span>
+        <span className="font-bold text-indigo-700 text-2xl tracking-tight">Convooz</span>
       </div>
 
       {/* ── Login ── */}
@@ -3927,7 +3927,7 @@ function LoginScreen() {
             </button>
           </form>
           <div className="mt-6 pt-5 border-t border-gray-100 text-center">
-            <span className="text-xs text-gray-400">New to ConvoMail? </span>
+            <span className="text-xs text-gray-400">New to Convooz? </span>
             <button onClick={()=>{setMode('register');setErr('');}}
               className="text-xs text-indigo-500 hover:text-indigo-700 font-medium hover:underline">
               Create account
@@ -4189,7 +4189,7 @@ function LoginScreen() {
         </div>
       )}
 
-      <p className="mt-8 text-xs text-gray-400">© 2026 ConvoMail</p>
+      <p className="mt-8 text-xs text-gray-400">© 2026 Convooz</p>
     </div>
   );
 }
@@ -4322,7 +4322,7 @@ function App({onSignOut}) {
         // arrived from the API at all (vs. lost in shaping/filtering).
         const __dbgIn  = messages.filter(m => m.direction === 'in').length;
         const __dbgOut = messages.filter(m => m.direction === 'out').length;
-        console.log('[ConvoMail bootstrap] messages from API — in:', __dbgIn, 'out:', __dbgOut, 'drafts:', (drafts||[]).length, 'contacts:', contacts.length);
+        console.log('[Convooz bootstrap] messages from API — in:', __dbgIn, 'out:', __dbgOut, 'drafts:', (drafts||[]).length, 'contacts:', contacts.length);
         const __dbgDroppedOut = [];
         // Self-mails (between two of the user's own accounts) always group
         // under the *recipient* contact, regardless of direction:
@@ -4392,10 +4392,10 @@ function App({onSignOut}) {
           };
         }).filter(m => m.contactId !== null);
         if (__dbgDroppedOut.length) {
-          console.warn('[ConvoMail bootstrap] dropped outgoing rows because recipient is not in contacts:', __dbgDroppedOut);
+          console.warn('[Convooz bootstrap] dropped outgoing rows because recipient is not in contacts:', __dbgDroppedOut);
         }
         const __dbgKeptOut = shapedMessages.filter(m => m.dir === 'out').length;
-        console.log('[ConvoMail bootstrap] outgoing kept after shape:', __dbgKeptOut, 'of', __dbgOut);
+        console.log('[Convooz bootstrap] outgoing kept after shape:', __dbgKeptOut, 'of', __dbgOut);
 
         // Group draft_attachments by draft so each shaped draft can list its
         // own attachments without a second lookup.
@@ -5532,7 +5532,7 @@ function App({onSignOut}) {
           {/* Left: logo */}
           <button onClick={()=>{setSelContact(null);setMergeContact(null);setSelMsg(null);setSelTag(null);setShowCompose(false);setReplyTo(null);setReplyKind(null);setComposeContact(null);setComposeDraft(null);setEditingContact(null);setMobileCol(0);}}
             className="font-bold text-indigo-600 text-base tracking-tight flex-shrink-0">
-            ConvoMail
+            Convooz
           </button>
           {/* Center: search (flex-1, centered) */}
           <div className="flex-1 flex items-center justify-center min-w-0">
@@ -5608,7 +5608,7 @@ function App({onSignOut}) {
           <div style={{width:colWidths[0]+"%",minWidth:"10%",flexShrink:0}} className="flex items-center px-4">
             <button onClick={()=>{setSelContact(null);setMergeContact(null);setSelMsg(null);setSelTag(null);setShowCompose(false);setReplyTo(null);setReplyKind(null);setComposeContact(null);setComposeDraft(null);setEditingContact(null);}}
               className="font-bold text-indigo-600 text-lg tracking-tight hover:text-indigo-800 transition-colors">
-              ConvoMail
+              Convooz
             </button>
           </div>
           {/* divider spacer */}

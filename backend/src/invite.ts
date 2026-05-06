@@ -47,5 +47,5 @@ console.log(`✓ Invite code: ${token}`);
 console.log(`  Expires in ${expireDays} days, single use.`);
 console.log("");
 console.log("Share with the tester:");
-console.log("  ConvoTrail: https://nunc72.github.io/ConvoTrail/");
+console.log("  Convooz: https://nunc72.github.io/ConvoTrail/");
 console.log(`  Code: ${token}`);
