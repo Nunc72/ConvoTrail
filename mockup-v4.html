@@ -103,7 +103,7 @@ const { useState, useMemo, useRef, useEffect, useCallback } = React;
 
 // ─── Constants ───────────────────────────────────────────────────────────────
 
-const APP_VERSION = "0.0.89"; // bumped on every deploy — keep in sync with version.json
+const APP_VERSION = "0.0.90"; // bumped on every deploy — keep in sync with version.json
 
 // ─── Backend + Supabase config ───────────────────────────────────────────────
 const SUPABASE_URL = "https://oyrlzqbjcsliesvunbwj.supabase.co";
@@ -1396,8 +1396,11 @@ function ComposePane({replyTo, replyKind='reply', toContact, draft, initTo:initT
   );
   const initBody = draft?.body ?? (replyTo ? "\n\n" + quoteHeader(replyTo) : "");
 
-  // Compute initial auto-signature (only for new messages, not replies/drafts)
-  const initFromAcct = selAccounts[0] || '';
+  // Compute initial auto-signature (only for new messages, not replies/drafts).
+  // For a reply, the from-address must match the account the original mail
+  // landed in / was sent from — replying from a different account confuses
+  // the recipient and breaks threading.
+  const initFromAcct = (replyTo?.accountEmail) || (draft?.from) || (selAccounts[0] || '');
   const initAcctSig  = accountSigs[initFromAcct]||{linked:[],autoId:null};
   const initAutoSig  = (!draft&&!replyTo&&initAcctSig.autoId)
     ? signatures.find(s=>s.id===initAcctSig.autoId)||null : null;
@@ -2474,7 +2477,9 @@ function MessageDetail({message,contact,isDeleted,msgTags,allTags,onReply,onRepl
             </div>
             <div className="text-xs text-gray-400 mt-0.5">
               {message.dir==="in"
-                ? <><span className="text-gray-500">From:</span> {message.from}</>
+                ? <><span className="text-gray-500">From:</span> {message.from}
+                    {selAccounts.length > 1 && <><br/><span className="text-gray-500">To:</span> {message.to}</>}
+                  </>
                 : <><span className="text-gray-500">To:</span> {message.to}
                     {selAccounts.length > 1 && <><br/><span className="text-gray-500">From:</span> {message.from}</>}
                   </>}
@@ -4471,6 +4476,14 @@ function App({onSignOut}) {
   const [selContact,   setSelContact]   = useState(null);
   const [mergeContact, setMergeContact] = useState(null);
   const [selMsg,       setSelMsg]       = useState(null);
+  // Drop selMsg when the message gets filtered out by the account selector
+  // — keeping a stale detail open after toggling accounts looked like a bug.
+  useEffect(() => {
+    if (!selMsg) return;
+    const m = messageList.find(x => x.id === selMsg);
+    if (!m) { setSelMsg(null); return; }
+    if (m.accountEmail && !selAccounts.includes(m.accountEmail)) setSelMsg(null);
+  }, [selAccounts, messageList, selMsg]);
   const [selTag,       setSelTag]       = useState(null);
   const [editingContact,setEditingContact]=useState(null);
   const [archivedContacts, setArchivedContacts] = useState(new Set());
@@ -5093,6 +5106,13 @@ function App({onSignOut}) {
     // No-attachment drafts are still deleted client-side for simplicity.
     if (draft_id_to_delete) {
       try { await apiFetch(`/drafts/${draft_id_to_delete}`, { method: 'DELETE' }); } catch { /* ignore */ }
+    }
+    // Replying counts as having dealt with the original — drop its New-mail
+    // alert so the user doesn't have to click Seen separately. Same path as
+    // the Seen button: optimistic flip + persistSeen mirrors to IMAP \Seen.
+    if (reply_to_id) {
+      setMessageList(prev => prev.map(m => m.id === reply_to_id ? { ...m, read: true } : m));
+      persistSeen(reply_to_id);
     }
     handleCloseCompose();
     setActionToast(result.warning || 'Message sent');
