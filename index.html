@@ -17,11 +17,13 @@
   <link rel="icon" type="image/png" sizes="192x192" href="icon-192.png"/>
   <link rel="icon" type="image/png" sizes="512x512" href="icon-512.png"/>
   <script>
-    // Auto-route: phones → direct mobile app, desktops → phone-frame preview
+    // Auto-route: phones → direct mobile app, desktops → phone-frame preview.
+    // mockup-v5 carries the Apple-style polish; v4 stays in the repo for
+    // history and is reachable directly via /mockup-v4.html.
     (function(){
       var w = Math.min(window.innerWidth, window.screen.width);
       if (w < 768) {
-        window.location.replace('mockup-v4.html');
+        window.location.replace('mockup-v5.html');
       } else {
         window.location.replace('mockup-v4-phone.html');
       }
@@ -34,6 +36,6 @@
   </style>
 </head>
 <body>
-  <p>Loading Convooz — <a href="mockup-v4.html">mobile app</a> · <a href="mockup-v4-phone.html">iPhone preview</a></p>
+  <p>Loading Convooz — <a href="mockup-v5.html">mobile app</a> · <a href="mockup-v4-phone.html">iPhone preview</a> · <a href="mockup-v4.html">old UI (v4)</a></p>
 </body>
 </html>
