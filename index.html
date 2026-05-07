@@ -111,6 +111,18 @@
        so it blends seamlessly with the page. */
     .bg-gray-100 { background-color: #f5f6f8 !important; }
     .col-divider { background: #f5f6f8 !important; box-shadow: none !important; }
+    /* Tiny diagnostic badge — visible whenever the polish stylesheet is
+       loaded. If you DON'T see it, the page is still showing a cached
+       version of the file. */
+    body::after {
+      content: "Polish v0.0.99 ✓";
+      position: fixed; top: 6px; right: 6px;
+      background: #6366f1 !important; color: #fff !important;
+      padding: 2px 8px; border-radius: 999px;
+      font-size: 10px; font-family: -apple-system, system-ui, sans-serif;
+      z-index: 99999; pointer-events: none;
+      box-shadow: 0 1px 3px rgba(0,0,0,0.15);
+    }
     /* Soften column borders — let whitespace and the column-divider strip
        carry the separation. */
     .border-r { border-right-color: transparent !important; }
@@ -149,7 +161,7 @@ const { useState, useMemo, useRef, useEffect, useCallback } = React;
 
 // ─── Constants ───────────────────────────────────────────────────────────────
 
-const APP_VERSION = "0.0.98"; // bumped on every deploy — keep in sync with version.json
+const APP_VERSION = "0.0.99"; // bumped on every deploy — keep in sync with version.json
 
 // ─── Backend + Supabase config ───────────────────────────────────────────────
 const SUPABASE_URL = "https://oyrlzqbjcsliesvunbwj.supabase.co";
