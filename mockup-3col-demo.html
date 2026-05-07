@@ -1,0 +1,354 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Convooz — UI mockup (3-column mail browser)</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <style>
+    body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif; }
+    .col-divider { width: 5px; flex-shrink: 0; background: #e5e7eb; }
+    .tag-chip { display: inline-flex; align-items: center; gap: 4px; padding: 1px 7px; border-radius: 999px; font-size: 0.65rem; font-weight: 600; background: #f1f5f9; color: #64748b; }
+
+    /* ─── Polish overlays — same as the production preview ─── */
+    body[data-style] .rounded-xl { border-radius: 6px; }
+    body[data-style] .rounded-lg { border-radius: 6px; }
+    body[data-style] .rounded-md { border-radius: 4px; }
+
+    /* APPLE */
+    body[data-style="apple"] { background: #f5f6f8; }
+    body[data-style="apple"] .col-divider { background: #f5f6f8; }
+    body[data-style="apple"] .border-r { border-right-color: transparent; }
+    body[data-style="apple"] .row { background: #fff; border-bottom-color: transparent !important; transition: background-color .15s ease; }
+    body[data-style="apple"] .row:hover { background-color: rgba(99,102,241,0.06); }
+    body[data-style="apple"] .row.selected { background: rgba(99,102,241,0.10); border-left: none !important; padding-left: 12px; }
+    body[data-style="apple"] .section-divider { border-bottom-color: rgba(15,23,42,0.06); box-shadow: none; }
+    body[data-style="apple"] input { border-color: rgba(15,23,42,0.08); border-radius: 8px; }
+    body[data-style="apple"] .tag-chip { border-radius: 999px; padding: 2px 10px; }
+
+    /* FLUENT */
+    body[data-style="fluent"] { background: #f1f3f6; }
+    body[data-style="fluent"] .col-divider { background: transparent; }
+    body[data-style="fluent"] .row {
+      background: #ffffff;
+      border-bottom-color: transparent !important;
+      border-radius: 8px;
+      margin: 4px 8px;
+      box-shadow: 0 1px 2px rgba(15,23,42,0.05), 0 1px 1px rgba(15,23,42,0.03);
+      padding-top: 8px; padding-bottom: 8px;
+      transition: box-shadow .15s ease, transform .15s ease;
+    }
+    body[data-style="fluent"] .row:hover {
+      box-shadow: 0 4px 10px rgba(15,23,42,0.10);
+      transform: translateY(-1px);
+    }
+    body[data-style="fluent"] .row.selected {
+      background: linear-gradient(180deg, #eef2ff, #e0e7ff);
+      border-left: 3px solid #6366f1 !important;
+    }
+    body[data-style="fluent"] .section-divider {
+      border-bottom-color: transparent !important;
+      box-shadow: 0 2px 6px rgba(15,23,42,0.07);
+    }
+    body[data-style="fluent"] .sidebar-bg { background: #e7eaf0; }
+    body[data-style="fluent"] .tag-chip { background: #e0e7ff; color: #4f46e5; border-radius: 9999px; padding: 2px 10px; }
+
+    /* MINIMAL */
+    body[data-style="minimal"] { background: #ffffff; }
+    body[data-style="minimal"] .col-divider { background: rgba(15,23,42,0.06); width: 1px; }
+    body[data-style="minimal"] .sidebar-bg { background: #ffffff; }
+    body[data-style="minimal"] .row { border-bottom-color: rgba(15,23,42,0.06); transition: background-color .12s ease; }
+    body[data-style="minimal"] .row:hover { background-color: rgba(15,23,42,0.03); }
+    body[data-style="minimal"] .row.selected { background: transparent !important; border-left: 2px solid #4f46e5 !important; }
+    body[data-style="minimal"] .section-divider { border-bottom-color: rgba(15,23,42,0.06); box-shadow: none; }
+    body[data-style="minimal"] .tag-chip {
+      background: transparent; border: 1px solid rgba(15,23,42,0.10);
+      color: #475569; padding: 1px 6px; border-radius: 3px;
+    }
+
+    /* Style picker banner */
+    body[data-style]::before {
+      content: "Mailbrowser preview — style: " attr(data-style) " · try ?style=apple, ?style=fluent or ?style=minimal";
+      position: fixed; top: 0; left: 0; right: 0; z-index: 9999;
+      background: #fef3c7; color: #92400e; font-size: 11px; text-align: center; padding: 4px 8px;
+      font-family: ui-sans-serif, system-ui, sans-serif;
+    }
+    body[data-style] { padding-top: 22px; }
+
+    /* Style picker links in banner */
+    .style-pick { color: inherit; text-decoration: underline; }
+  </style>
+  <script>
+    (function () {
+      var p = new URLSearchParams(location.search).get("style");
+      if (!["apple","fluent","minimal"].includes(p)) p = "apple";
+      document.addEventListener("DOMContentLoaded", function () {
+        document.body.setAttribute("data-style", p);
+      });
+    })();
+  </script>
+</head>
+<body class="text-gray-700">
+  <div class="flex flex-col h-screen overflow-hidden">
+
+    <!-- TOPBAR -->
+    <div class="h-12 bg-white border-b border-gray-200 flex items-center px-4 gap-3 flex-shrink-0">
+      <div class="w-8 h-8 rounded-lg bg-indigo-600 flex items-center justify-center">
+        <svg width="16" height="16" viewBox="0 0 20 20" fill="none"><path d="M3 5h14M3 10h14M3 15h8" stroke="white" stroke-width="2" stroke-linecap="round"/></svg>
+      </div>
+      <span class="font-bold text-indigo-700 tracking-tight">Convooz</span>
+      <div class="flex-1"></div>
+      <input type="text" placeholder="Search…" class="border border-gray-200 rounded-lg px-3 py-1 text-sm w-64 outline-none focus:border-indigo-400"/>
+      <button class="px-3 py-1 text-sm rounded-lg bg-indigo-600 text-white">New message</button>
+      <div class="w-7 h-7 rounded-full bg-gray-100 flex items-center justify-center text-xs font-semibold text-gray-600">RT</div>
+    </div>
+
+    <!-- THREE COLUMNS -->
+    <div class="flex flex-1 min-h-0">
+
+      <!-- COL 1 — Contacts -->
+      <div class="w-64 sidebar-bg bg-gray-50 flex flex-col">
+        <div class="px-3 pt-2 pb-1 text-xs font-semibold text-gray-400 flex items-center justify-between border-b border-gray-100 section-divider">
+          <span>All accounts</span>
+          <svg width="10" height="10" viewBox="0 0 10 10" fill="none"><path d="M2 3.5L5 6.5L8 3.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        </div>
+        <div class="px-3 pt-2 pb-1 text-xs font-semibold text-gray-400 uppercase tracking-wider">Contacts</div>
+        <div class="flex gap-0.5 px-2 pb-1.5">
+          <button class="flex-1 text-xs py-1 rounded bg-indigo-50 text-indigo-700 font-semibold">Convo</button>
+          <button class="flex-1 text-xs py-1 rounded text-gray-400">News</button>
+          <button class="flex-1 text-xs py-1 rounded text-gray-400">Muted</button>
+        </div>
+        <div class="flex-1 overflow-y-auto">
+          <!-- Selected -->
+          <div class="row selected px-3 py-2 border-b border-gray-100 bg-indigo-50 border-l-2 border-l-indigo-500 cursor-pointer">
+            <div class="flex items-center gap-2.5">
+              <div class="w-7 h-7 rounded-full bg-indigo-100 flex items-center justify-center text-xs font-bold text-indigo-700">FL</div>
+              <div class="flex-1 min-w-0">
+                <div class="flex items-center justify-between gap-1">
+                  <span class="text-sm font-semibold text-gray-900 truncate">Fedor Limperg</span>
+                  <span class="bg-indigo-600 text-white rounded-full font-bold" style="min-width:22px;height:16px;font-size:0.55rem;padding:0 6px;display:flex;align-items:center;justify-content:center;">2</span>
+                </div>
+                <span class="text-xs text-gray-400 truncate block">fedorprojects@gmail.com</span>
+              </div>
+            </div>
+          </div>
+          <!-- Other contacts -->
+          <div class="row px-3 py-2 border-b border-gray-100 cursor-pointer hover:bg-gray-50">
+            <div class="flex items-center gap-2.5">
+              <div class="w-7 h-7 rounded-full bg-amber-100 flex items-center justify-center text-xs font-bold text-amber-700">MM</div>
+              <div class="flex-1 min-w-0">
+                <div class="flex items-center justify-between gap-1">
+                  <span class="text-sm text-gray-700 truncate">Myriam Mahi</span>
+                  <span class="bg-amber-500 text-white rounded-full font-bold" style="min-width:22px;height:16px;font-size:0.55rem;padding:0 6px;display:flex;align-items:center;justify-content:center;">1</span>
+                </div>
+                <span class="text-xs text-gray-400 truncate block">myriamahi@gmail.com</span>
+              </div>
+            </div>
+          </div>
+          <div class="row px-3 py-2 border-b border-gray-100 cursor-pointer hover:bg-gray-50">
+            <div class="flex items-center gap-2.5">
+              <div class="w-7 h-7 rounded-full bg-emerald-100 flex items-center justify-center text-xs font-bold text-emerald-700">JD</div>
+              <div class="flex-1 min-w-0">
+                <span class="text-sm text-gray-700 truncate block">Jasper Dekker</span>
+                <span class="text-xs text-gray-400 truncate block">Studio Dekker</span>
+              </div>
+            </div>
+          </div>
+          <div class="row px-3 py-2 border-b border-gray-100 cursor-pointer hover:bg-gray-50">
+            <div class="flex items-center gap-2.5">
+              <div class="w-7 h-7 rounded-full bg-rose-100 flex items-center justify-center text-xs font-bold text-rose-700">SH</div>
+              <div class="flex-1 min-w-0">
+                <span class="text-sm text-gray-700 truncate block">Sophie Hartman</span>
+                <span class="text-xs text-gray-400 truncate block">sophie@hartman.nl</span>
+              </div>
+            </div>
+          </div>
+          <div class="row px-3 py-2 border-b border-gray-100 cursor-pointer hover:bg-gray-50">
+            <div class="flex items-center gap-2.5">
+              <div class="w-7 h-7 rounded-full bg-sky-100 flex items-center justify-center text-xs font-bold text-sky-700">PJ</div>
+              <div class="flex-1 min-w-0">
+                <span class="text-sm text-gray-700 truncate block">Pieter Janssen</span>
+                <span class="text-xs text-gray-400 truncate block">Janssen &amp; Zn</span>
+              </div>
+            </div>
+          </div>
+          <div class="row px-3 py-2 border-b border-gray-100 cursor-pointer hover:bg-gray-50">
+            <div class="flex items-center gap-2.5">
+              <div class="w-7 h-7 rounded-full bg-violet-100 flex items-center justify-center text-xs font-bold text-violet-700">AK</div>
+              <div class="flex-1 min-w-0">
+                <span class="text-sm text-gray-700 truncate block">Anna Kuipers</span>
+                <span class="text-xs text-gray-400 truncate block">Bureau Kuipers</span>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="col-divider"></div>
+
+      <!-- COL 2 — Mail list -->
+      <div class="w-96 bg-white flex flex-col">
+        <!-- Contact card header -->
+        <div class="px-5 pt-4 pb-3 border-b border-gray-200 section-divider">
+          <div class="flex items-center gap-3">
+            <div class="w-12 h-12 rounded-full bg-indigo-100 flex items-center justify-center text-base font-bold text-indigo-700">FL</div>
+            <div class="flex-1 min-w-0">
+              <div class="font-semibold text-gray-900">Fedor Limperg</div>
+              <div class="text-xs text-gray-400">Limperg Studios · fedorprojects@gmail.com</div>
+            </div>
+            <button class="w-7 h-7 rounded-full bg-indigo-600 hover:bg-indigo-700 text-white flex items-center justify-center" title="New message">
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 5v14M5 12h14"/></svg>
+            </button>
+          </div>
+          <div class="flex gap-0.5 mt-2">
+            <button class="px-2.5 py-0.5 text-xs rounded-full bg-indigo-100 text-indigo-700 font-semibold">Now</button>
+            <button class="px-2.5 py-0.5 text-xs rounded-full text-gray-400">All</button>
+            <button class="px-2.5 py-0.5 text-xs rounded-full text-gray-400">In</button>
+            <button class="px-2.5 py-0.5 text-xs rounded-full text-gray-400">Out</button>
+            <button class="px-2.5 py-0.5 text-xs rounded-full text-gray-400">Draft</button>
+          </div>
+        </div>
+        <!-- Mail rows -->
+        <div class="flex-1 overflow-y-auto">
+          <div class="row px-4 py-2.5 border-b border-gray-100 cursor-pointer hover:bg-gray-50">
+            <div class="flex items-center justify-between gap-1 mb-0.5">
+              <div class="flex items-center gap-1.5 min-w-0">
+                <span class="w-1.5 h-1.5 rounded-full bg-indigo-500"></span>
+                <span class="text-xs font-semibold text-gray-900 truncate">Re: Voorstel samenwerking Q3</span>
+              </div>
+              <span class="text-xs text-gray-400">14:32</span>
+            </div>
+            <div class="flex items-center gap-1.5 pr-14">
+              <span class="text-xs px-1.5 rounded font-medium bg-sky-100 text-sky-600">In</span>
+              <span class="text-xs text-gray-400 truncate">Hoi, ik wilde even checken of jullie interesse hebben…</span>
+            </div>
+          </div>
+          <div class="row selected px-4 py-2.5 border-b border-gray-100 bg-indigo-50 border-l-2 border-l-indigo-400 cursor-pointer">
+            <div class="flex items-center justify-between gap-1 mb-0.5">
+              <div class="flex items-center gap-1.5 min-w-0">
+                <span class="w-1.5 h-1.5 rounded-full bg-amber-400"></span>
+                <span class="text-xs font-semibold text-gray-900 truncate">Bevindingen memory leak</span>
+              </div>
+              <span class="text-xs text-gray-400">gisteren</span>
+            </div>
+            <div class="flex items-center gap-1.5 pr-14">
+              <span class="text-xs px-1.5 rounded font-medium bg-emerald-100 text-emerald-600">Out</span>
+              <span class="text-xs text-gray-400 truncate">Het lek zit in de TokenRefreshHandler — sessies…</span>
+            </div>
+          </div>
+          <div class="row px-4 py-2.5 border-b border-gray-100 cursor-pointer hover:bg-gray-50">
+            <div class="flex items-center justify-between gap-1 mb-0.5">
+              <div class="flex items-center gap-1.5 min-w-0">
+                <span class="text-xs text-gray-600 truncate">Re: Re: Aanvullend testrapport</span>
+              </div>
+              <span class="text-xs text-gray-400">ma</span>
+            </div>
+            <div class="flex items-center gap-1.5 pr-14">
+              <span class="text-xs px-1.5 rounded font-medium bg-sky-100 text-sky-600">In</span>
+              <span class="text-xs text-gray-400 truncate">Goed om te horen. We wachten je bevindingen af.</span>
+            </div>
+          </div>
+          <div class="row px-4 py-2.5 border-b border-gray-100 cursor-pointer hover:bg-gray-50">
+            <div class="flex items-center justify-between gap-1 mb-0.5">
+              <div class="flex items-center gap-1.5 min-w-0">
+                <span class="text-xs text-gray-600 truncate">Specificaties module B</span>
+              </div>
+              <span class="text-xs text-gray-400">vr</span>
+            </div>
+            <div class="flex items-center gap-1.5 pr-14">
+              <span class="text-xs px-1.5 rounded font-medium bg-emerald-100 text-emerald-600">Out</span>
+              <span class="text-xs text-gray-400 truncate">In de bijlage de gevraagde specificaties — gewicht…</span>
+            </div>
+          </div>
+          <div class="row px-4 py-2.5 border-b border-gray-100 cursor-pointer hover:bg-gray-50">
+            <div class="flex items-center justify-between gap-1 mb-0.5">
+              <div class="flex items-center gap-1.5 min-w-0">
+                <span class="text-xs text-gray-600 truncate">Update project planning</span>
+              </div>
+              <span class="text-xs text-gray-400">3 mei</span>
+            </div>
+            <div class="flex items-center gap-1.5 pr-14">
+              <span class="text-xs px-1.5 rounded font-medium bg-emerald-100 text-emerald-600">Out</span>
+              <span class="text-xs text-gray-400 truncate">Hierbij de bijgewerkte planning. De deadline is…</span>
+            </div>
+          </div>
+          <div class="row px-4 py-2.5 border-b border-gray-100 cursor-pointer hover:bg-gray-50">
+            <div class="flex items-center justify-between gap-1 mb-0.5">
+              <div class="flex items-center gap-1.5 min-w-0">
+                <span class="text-xs text-gray-600 truncate">Re: Vraag specificaties</span>
+              </div>
+              <span class="text-xs text-gray-400">28 apr</span>
+            </div>
+            <div class="flex items-center gap-1.5 pr-14">
+              <span class="text-xs px-1.5 rounded font-medium bg-sky-100 text-sky-600">In</span>
+              <span class="text-xs text-gray-400 truncate">Lorem ipsum, kun je de technische specificaties…</span>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="col-divider"></div>
+
+      <!-- COL 3 — Detail -->
+      <div class="flex-1 bg-white flex flex-col min-w-0">
+        <!-- Header -->
+        <div class="flex-shrink-0 section-divider border-b border-gray-200 px-5 pt-4 pb-3">
+          <div class="flex items-start justify-between gap-3 mb-2">
+            <h2 class="text-base font-semibold text-gray-900">Bevindingen memory leak</h2>
+            <div class="flex items-center gap-1.5">
+              <button class="px-2 py-0.5 text-xs rounded bg-gray-100 hover:bg-gray-200 text-gray-700">Reply</button>
+              <button class="px-2 py-0.5 text-xs rounded bg-gray-100 hover:bg-gray-200 text-gray-700">Snooze</button>
+              <button class="px-2 py-0.5 text-xs rounded bg-gray-100 hover:bg-gray-200 text-gray-700">Delete</button>
+            </div>
+          </div>
+          <div class="flex items-center gap-1.5">
+            <span class="tag-chip">project</span>
+            <span class="tag-chip">memory</span>
+          </div>
+          <div class="flex items-start gap-3 mt-3">
+            <div class="w-9 h-9 rounded-full bg-indigo-100 flex items-center justify-center text-sm font-bold text-indigo-700 flex-shrink-0">RT</div>
+            <div class="flex-1 min-w-0">
+              <div class="flex items-center justify-between gap-2">
+                <span class="text-sm font-medium text-gray-800">Rik Tuithof</span>
+                <span class="text-xs text-gray-400 flex-shrink-0">5 mei 2026, 22:00</span>
+              </div>
+              <div class="text-xs text-gray-400 mt-0.5">
+                <span class="text-gray-500">To:</span> fedorprojects@gmail.com
+              </div>
+            </div>
+          </div>
+        </div>
+        <!-- Amber alert -->
+        <div class="mx-4 mt-3 px-3 py-2 rounded bg-amber-50 border border-amber-200 flex items-center gap-2 text-xs text-amber-700 flex-shrink-0">
+          <span><strong>Revert2Me:</strong> no reply</span>
+          <div class="ml-auto flex gap-2">
+            <button class="px-2 py-0.5 rounded bg-amber-100 hover:bg-amber-200 font-medium">Snooze</button>
+            <button class="px-2 py-0.5 rounded bg-amber-100 hover:bg-amber-200 font-medium">Seen</button>
+          </div>
+        </div>
+        <!-- Body -->
+        <div class="flex-1 overflow-y-auto px-5 py-4 text-sm text-gray-700 leading-relaxed">
+          <p>Fedor,</p>
+          <p class="mt-3">Het lek zit in de TokenRefreshHandler — sessies worden niet gesloten na timeout. Fix is klaar en staat in PR #214.</p>
+          <p class="mt-3">Kun je reviewen?</p>
+          <p class="mt-3 text-gray-300">— —</p>
+          <p>Groeten,<br/>Rik</p>
+          <p class="mt-6 text-gray-300">— Verzonden via Convooz</p>
+        </div>
+        <!-- Footer reply quick -->
+        <div class="flex-shrink-0 section-divider border-t border-gray-200 px-4 py-3 flex items-center gap-2">
+          <input type="text" placeholder="Quick reply…" class="flex-1 border border-gray-200 rounded-lg px-3 py-1.5 text-sm outline-none focus:border-indigo-400"/>
+          <button class="px-3 py-1.5 text-sm rounded-lg bg-indigo-600 text-white">Send</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- FOOTER status bar -->
+    <div class="h-6 bg-white border-t border-gray-200 flex items-center px-4 gap-3 text-xs text-gray-400 flex-shrink-0">
+      <span>Last sync: just now</span><span>·</span>
+      <span><span class="font-bold text-indigo-600">2</span> unread</span><span>·</span>
+      <span><span class="font-bold text-amber-500">1</span> revert2me</span>
+    </div>
+  </div>
+</body>
+</html>
