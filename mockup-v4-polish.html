@@ -100,88 +100,155 @@
     input[type="number"] { -moz-appearance: textfield; }
 
     /* ─── Polish overlay ────────────────────────────────────────────────
-       Activated by the runtime script below based on ?level=A|B (default A).
-       Targets the three places that should feel separated:
-        1. Between the three columns (col-divider)
-        2. Between cards/rows in lists (contacts, messages)
-        3. Between header/body/footer of the message detail */
+       Three ambitious directions, switch via ?level=apple|fluent|minimal.
+       Each is intentionally different so it's easy to tell which feel
+       you prefer. None require backend changes. */
 
-    /* Tighter corners (cap at 4-6px) on cards, inputs, banners. Round
-       badges stay round. */
-    body[data-polish] .rounded-2xl { border-radius: 6px; }
-    body[data-polish] .rounded-xl  { border-radius: 4px; }
-    body[data-polish] .rounded-lg  { border-radius: 4px; }
-    body[data-polish] .rounded-md  { border-radius: 3px; }
-    body[data-polish] .tag-chip    { border-radius: 3px; }
-
-    /* (1) Column dividers — replace the flat grey strip with a white
-       channel that has a soft shadow on both sides. Resize handle still
-       works because it's the same element. */
-    body[data-polish] .col-divider {
-      background: #ffffff;
-      box-shadow:
-        inset 1px 0 2px rgba(15,23,42,0.07),
-        inset -1px 0 2px rgba(15,23,42,0.07);
-    }
-    body[data-polish="B"] .col-divider {
-      box-shadow:
-        inset 2px 0 3px rgba(15,23,42,0.11),
-        inset -2px 0 3px rgba(15,23,42,0.11);
-    }
-
-    /* (2) List rows: contact rows in col 1, message rows in col 2.
-       Replace the harsh bottom-border with a soft drop shadow so each row
-       reads as its own card. Hover lifts a touch. */
-    body[data-polish] .border-b.cursor-pointer {
-      background: #ffffff;
-      border-bottom-color: transparent;
-      box-shadow: 0 1px 1px rgba(15,23,42,0.04);
-      transition: box-shadow .15s ease;
-      position: relative;
-      z-index: 0;
-    }
-    body[data-polish] .border-b.cursor-pointer:hover {
-      box-shadow: 0 2px 4px rgba(15,23,42,0.08);
-      z-index: 1;
-    }
-    body[data-polish="B"] .border-b.cursor-pointer {
-      box-shadow: 0 1px 3px rgba(15,23,42,0.07);
-    }
-    body[data-polish="B"] .border-b.cursor-pointer:hover {
-      box-shadow: 0 3px 6px rgba(15,23,42,0.12);
-    }
-
-    /* (3) MessageDetail (col 3): header / alert banners / footer
-       separations get a soft drop shadow under their bottom border so
-       the body reads as a separate plane. */
-    body[data-polish] .flex-shrink-0.border-b {
-      border-bottom-color: rgba(15,23,42,0.05);
-      box-shadow: 0 1px 2px rgba(15,23,42,0.04);
-      position: relative;
-      z-index: 1;
-    }
-    body[data-polish] .flex-shrink-0.border-t {
-      border-top-color: rgba(15,23,42,0.05);
-      box-shadow: 0 -1px 2px rgba(15,23,42,0.04);
-      position: relative;
-      z-index: 1;
-    }
-    body[data-polish="B"] .flex-shrink-0.border-b { box-shadow: 0 2px 4px rgba(15,23,42,0.07); }
-    body[data-polish="B"] .flex-shrink-0.border-t { box-shadow: 0 -2px 4px rgba(15,23,42,0.07); }
-
-    /* Slight lift around the auth card on the login page so it matches. */
-    body[data-polish] .max-w-sm.bg-white {
-      box-shadow: 0 1px 3px rgba(15,23,42,0.06), 0 8px 24px rgba(15,23,42,0.04);
-    }
-
-    /* Tiny preview banner so it's obvious this isn't the production build. */
+    /* ── Shared: tighter corners + preview banner ── */
+    body[data-polish] .rounded-xl { border-radius: 6px; }
+    body[data-polish] .rounded-lg { border-radius: 6px; }
+    body[data-polish] .rounded-md { border-radius: 4px; }
+    body[data-polish] .tag-chip   { border-radius: 4px; }
     body[data-polish]::before {
-      content: "Polish preview — level " attr(data-polish) " · use ?level=A or ?level=B";
+      content: "Polish preview — level " attr(data-polish) " · try ?level=apple or ?level=fluent or ?level=minimal";
       position: fixed; top: 0; left: 0; right: 0; z-index: 9999;
       background: #fef3c7; color: #92400e; font-size: 11px; text-align: center; padding: 4px 8px;
       font-family: ui-sans-serif, system-ui, sans-serif;
     }
     body[data-polish] { padding-top: 22px; }
+
+    /* ─────────────────────────────────────────────────────────────────
+       1) APPLE — clean & airy. White cards floating on a soft grey
+          background; almost no borders, separation done with whitespace
+          and very subtle shadows. Apple Mail-vibe.
+       ───────────────────────────────────────────────────────────────── */
+    body[data-polish="apple"] { background: #f5f6f8; }
+    body[data-polish="apple"] .col-divider {
+      background: #f5f6f8;
+      box-shadow: none;
+    }
+    body[data-polish="apple"] .bg-white { background: #ffffff; }
+    /* Make col 1 and col 3 read as floating sheets via subtle shadow on
+       the "scroll" containers and section panels. */
+    body[data-polish="apple"] .border-r { border-right-color: transparent; }
+    body[data-polish="apple"] .border-b.cursor-pointer {
+      background: #ffffff;
+      border-bottom-color: transparent;
+      transition: background-color .15s ease;
+    }
+    body[data-polish="apple"] .border-b.cursor-pointer:hover {
+      background-color: rgba(99,102,241,0.06);
+    }
+    /* Selected row gets a clearer indigo-50 fill, no harsh left bar */
+    body[data-polish="apple"] .bg-indigo-50.border-l-2 {
+      border-left-color: transparent;
+      background: rgba(99,102,241,0.10);
+    }
+    /* MessageDetail header reads as separated by whitespace + faint line */
+    body[data-polish="apple"] .flex-shrink-0.border-b {
+      border-bottom-color: rgba(15,23,42,0.06);
+      box-shadow: none;
+    }
+    /* Inputs lighter borders, slightly bigger radius. */
+    body[data-polish="apple"] input, body[data-polish="apple"] select, body[data-polish="apple"] textarea {
+      border-color: rgba(15,23,42,0.08);
+      border-radius: 8px;
+    }
+    /* Tag chips become rounded pills */
+    body[data-polish="apple"] .tag-chip { border-radius: 999px; padding: 2px 10px; }
+
+    /* ─────────────────────────────────────────────────────────────────
+       2) FLUENT — Outlook-like. Each mail row is an explicit card with
+          its own shadow + 8px corners + breathing margin. Sidebar a
+          shade darker, content area on white.
+       ───────────────────────────────────────────────────────────────── */
+    body[data-polish="fluent"] { background: #f1f3f6; }
+    body[data-polish="fluent"] .col-divider { background: transparent; }
+    body[data-polish="fluent"] .bg-white { background: #ffffff; }
+    /* List rows rendered as cards: gap between, rounded, shadow, white. */
+    body[data-polish="fluent"] .border-b.cursor-pointer {
+      background: #ffffff;
+      border-bottom-color: transparent;
+      border-radius: 8px;
+      margin: 4px 8px;
+      box-shadow: 0 1px 2px rgba(15,23,42,0.05), 0 1px 1px rgba(15,23,42,0.03);
+      padding-top: 8px; padding-bottom: 8px;
+      transition: box-shadow .15s ease, transform .15s ease;
+    }
+    body[data-polish="fluent"] .border-b.cursor-pointer:hover {
+      box-shadow: 0 4px 10px rgba(15,23,42,0.10);
+      transform: translateY(-1px);
+    }
+    body[data-polish="fluent"] .bg-indigo-50.border-l-2 {
+      background: linear-gradient(180deg, #eef2ff, #e0e7ff);
+      border-left: 3px solid #6366f1;
+    }
+    /* MessageDetail header floats as a card too */
+    body[data-polish="fluent"] .flex-shrink-0.border-b {
+      border-bottom-color: transparent;
+      box-shadow: 0 2px 6px rgba(15,23,42,0.07);
+      background: #ffffff;
+      margin: 0 8px;
+      border-radius: 8px 8px 0 0;
+      position: relative;
+      z-index: 1;
+    }
+    /* Sidebar / col-1 a shade darker than content for contrast */
+    body[data-polish="fluent"] .bg-gray-50 { background: #e7eaf0; }
+    /* Buttons / pills feel slightly rounder */
+    body[data-polish="fluent"] .rounded-full { border-radius: 9999px; }
+    body[data-polish="fluent"] .tag-chip { background: #e0e7ff; color: #4f46e5; border-radius: 9999px; padding: 2px 10px; }
+
+    /* ─────────────────────────────────────────────────────────────────
+       3) MINIMAL — dense, sober, no shadows. Linear/Notion-vibe.
+          Hairline borders, hover only. Selection via a 2px accent bar
+          on the left. Tighter spacing.
+       ───────────────────────────────────────────────────────────────── */
+    body[data-polish="minimal"] { background: #ffffff; }
+    body[data-polish="minimal"] .col-divider {
+      background: rgba(15,23,42,0.06);
+      width: 1px;
+      box-shadow: none;
+    }
+    body[data-polish="minimal"] .bg-gray-50 { background: #ffffff; }
+    body[data-polish="minimal"] .border-b { border-bottom-color: rgba(15,23,42,0.06); }
+    body[data-polish="minimal"] .border-r { border-right-color: rgba(15,23,42,0.06); }
+    body[data-polish="minimal"] .border-b.cursor-pointer {
+      transition: background-color .12s ease;
+    }
+    body[data-polish="minimal"] .border-b.cursor-pointer:hover {
+      background-color: rgba(15,23,42,0.03);
+    }
+    body[data-polish="minimal"] .bg-indigo-50.border-l-2 {
+      background: transparent;
+      border-left: 2px solid #4f46e5;
+    }
+    body[data-polish="minimal"] .flex-shrink-0.border-b {
+      border-bottom-color: rgba(15,23,42,0.06);
+      box-shadow: none;
+    }
+    /* Tag chips shrink */
+    body[data-polish="minimal"] .tag-chip {
+      background: transparent; border: 1px solid rgba(15,23,42,0.10);
+      color: #475569; padding: 1px 6px; border-radius: 3px;
+    }
+    body[data-polish="minimal"] .rounded-full {
+      /* Keep pills round; just shrink. */
+    }
+    /* Inputs only a bottom border for that minimal look */
+    body[data-polish="minimal"] input[type="text"],
+    body[data-polish="minimal"] input[type="email"],
+    body[data-polish="minimal"] input[type="password"] {
+      border-radius: 0;
+      border-left: none; border-right: none; border-top: none;
+      border-bottom: 1px solid rgba(15,23,42,0.15);
+      padding-left: 0; padding-right: 0;
+      background: transparent;
+    }
+    /* Slight lift around the auth card on the login page in any mode */
+    body[data-polish="apple"]   .max-w-sm.bg-white { box-shadow: 0 1px 3px rgba(15,23,42,0.04), 0 12px 32px rgba(15,23,42,0.05); border-radius: 16px; }
+    body[data-polish="fluent"]  .max-w-sm.bg-white { box-shadow: 0 4px 16px rgba(15,23,42,0.10); border-radius: 8px; }
+    body[data-polish="minimal"] .max-w-sm.bg-white { box-shadow: none; border: 1px solid rgba(15,23,42,0.08); border-radius: 0; }
   </style>
   <script>
     // Runtime: pick polish level from ?level=A or ?level=B, default A.
