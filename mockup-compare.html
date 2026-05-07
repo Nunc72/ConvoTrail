@@ -1,0 +1,60 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Convooz — UI variants side-by-side</title>
+  <style>
+    html, body { margin: 0; padding: 0; background: #1a1d23; color: #e5e7eb; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif; }
+    .header {
+      padding: 14px 20px; background: #0f1116; border-bottom: 1px solid #2a2e36;
+      display: flex; align-items: baseline; gap: 16px;
+    }
+    .header h1 { margin: 0; font-size: 16px; font-weight: 600; color: #fff; }
+    .header p  { margin: 0; font-size: 12px; color: #9ca3af; }
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 14px;
+      padding: 14px;
+    }
+    .panel {
+      display: flex; flex-direction: column;
+      background: #fff; border-radius: 6px; overflow: hidden;
+      box-shadow: 0 2px 8px rgba(0,0,0,0.35);
+    }
+    .panel-title {
+      padding: 8px 12px; font-size: 12px; font-weight: 600; color: #fff;
+      background: #2a2e36; border-bottom: 1px solid #1a1d23;
+    }
+    .panel-title small { font-weight: 400; color: #9ca3af; margin-left: 6px; }
+    .panel iframe {
+      flex: 1; border: 0; width: 100%; height: 720px; background: #fff;
+    }
+    @media (max-width: 1100px) {
+      .grid { grid-template-columns: 1fr; }
+      .panel iframe { height: 600px; }
+    }
+  </style>
+</head>
+<body>
+  <div class="header">
+    <h1>Convooz — UI mockup, three directions</h1>
+    <p>Each panel is a fully-rendered preview of the same 3-column mailbrowser, with a different visual style.</p>
+  </div>
+  <div class="grid">
+    <div class="panel">
+      <div class="panel-title">Apple <small>— clean &amp; airy, white sheets on soft grey</small></div>
+      <iframe src="mockup-3col-demo.html?style=apple" loading="lazy"></iframe>
+    </div>
+    <div class="panel">
+      <div class="panel-title">Fluent <small>— Outlook-vibe, mail rows as floating cards</small></div>
+      <iframe src="mockup-3col-demo.html?style=fluent" loading="lazy"></iframe>
+    </div>
+    <div class="panel">
+      <div class="panel-title">Minimal <small>— Linear/Notion-vibe, hairline borders, no shadows</small></div>
+      <iframe src="mockup-3col-demo.html?style=minimal" loading="lazy"></iframe>
+    </div>
+  </div>
+</body>
+</html>
