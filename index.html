@@ -110,12 +110,16 @@
        that one too. Same Apple-grey applied to the column-divider strip
        so it blends seamlessly with the page. */
     .bg-gray-100 { background-color: #f5f6f8 !important; }
+    /* Contact card header in col 2, sticky filter bars, sidebar bg —
+       Tailwind's bg-gray-50 makes them feel dated; flip to white so the
+       column reads as a clean sheet. */
+    .bg-gray-50 { background-color: #ffffff !important; }
     .col-divider { background: #f5f6f8 !important; box-shadow: none !important; }
     /* Tiny diagnostic badge — visible whenever the polish stylesheet is
        loaded. If you DON'T see it, the page is still showing a cached
        version of the file. */
     body::after {
-      content: "Polish v0.0.99 ✓";
+      content: "Polish v0.0.100 ✓";
       position: fixed; top: 6px; right: 6px;
       background: #6366f1 !important; color: #fff !important;
       padding: 2px 8px; border-radius: 999px;
@@ -161,7 +165,7 @@ const { useState, useMemo, useRef, useEffect, useCallback } = React;
 
 // ─── Constants ───────────────────────────────────────────────────────────────
 
-const APP_VERSION = "0.0.99"; // bumped on every deploy — keep in sync with version.json
+const APP_VERSION = "0.0.100"; // bumped on every deploy — keep in sync with version.json
 
 // ─── Backend + Supabase config ───────────────────────────────────────────────
 const SUPABASE_URL = "https://oyrlzqbjcsliesvunbwj.supabase.co";
