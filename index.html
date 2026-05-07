@@ -102,37 +102,39 @@
     /* ─── Apple-style polish ────────────────────────────────────────────
        Soft grey background, white sheets, almost no borders. Separation
        through whitespace + barely-there shadow. Same data and behaviour
-       as mockup-v4.html — purely a visual treatment. */
-    body { background: #f5f6f8; }
-    .col-divider { background: #f5f6f8; box-shadow: none; }
+       as mockup-v4.html — purely a visual treatment.
+       !important is needed because Tailwind CDN injects its stylesheet
+       after this inline <style>, which would otherwise win on cascade. */
+    body { background: #f5f6f8 !important; }
+    .col-divider { background: #f5f6f8 !important; box-shadow: none !important; }
     /* Soften column borders — let whitespace and the column-divider strip
        carry the separation. */
-    .border-r { border-right-color: transparent; }
+    .border-r { border-right-color: transparent !important; }
     /* List rows: drop the harsh bottom-border, hover gets a faint indigo wash. */
     .border-b.cursor-pointer {
-      background: #ffffff;
-      border-bottom-color: transparent;
+      background: #ffffff !important;
+      border-bottom-color: transparent !important;
       transition: background-color .15s ease;
     }
-    .border-b.cursor-pointer:hover { background-color: rgba(99,102,241,0.06); }
+    .border-b.cursor-pointer:hover { background-color: rgba(99,102,241,0.06) !important; }
     /* Selected row: solid indigo wash, no left accent bar. */
     .bg-indigo-50.border-l-2 {
-      border-left-color: transparent;
-      background: rgba(99,102,241,0.10);
+      border-left-color: transparent !important;
+      background: rgba(99,102,241,0.10) !important;
     }
     /* Section dividers in MessageDetail (header, banner, footer): faint line, no shadow. */
-    .flex-shrink-0.border-b { border-bottom-color: rgba(15,23,42,0.06); box-shadow: none; }
-    .flex-shrink-0.border-t { border-top-color: rgba(15,23,42,0.06); box-shadow: none; }
+    .flex-shrink-0.border-b { border-bottom-color: rgba(15,23,42,0.06) !important; box-shadow: none !important; }
+    .flex-shrink-0.border-t { border-top-color: rgba(15,23,42,0.06) !important; box-shadow: none !important; }
     /* Tag chips become rounded pills. */
-    .tag-chip { border-radius: 999px; padding: 2px 10px; }
+    .tag-chip { border-radius: 999px !important; padding: 2px 10px !important; }
     /* Tighter rounded corners — keep the auth card softer (16px) so the
        login screen still feels welcoming. */
-    .rounded-xl { border-radius: 8px; }
-    .rounded-lg { border-radius: 8px; }
-    .rounded-md { border-radius: 6px; }
-    .rounded-2xl { border-radius: 12px; }
+    .rounded-xl  { border-radius: 8px !important; }
+    .rounded-lg  { border-radius: 8px !important; }
+    .rounded-md  { border-radius: 6px !important; }
+    .rounded-2xl { border-radius: 12px !important; }
     /* Inputs in compose, settings, etc. — softer borders, larger radius. */
-    input, select, textarea { border-color: rgba(15,23,42,0.08); }
+    input, select, textarea { border-color: rgba(15,23,42,0.08) !important; }
   </style>
 </head>
 <body>
