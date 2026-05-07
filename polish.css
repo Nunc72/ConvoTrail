@@ -1,0 +1,73 @@
+/* ─── Apple-style polish ────────────────────────────────────────────
+   Soft grey canvas, white sheets, almost no borders. Separation
+   through whitespace + barely-there shadow. Pure visual treatment;
+   the React app keeps its v4 markup, data, and handlers.
+
+   Loaded as a separate stylesheet (polish.css?v=APP_VERSION) so a
+   change to this file reaches every browser as soon as the version
+   query is bumped — no manual cache-busters required.
+
+   !important is needed because Tailwind CDN injects its stylesheet
+   after the inline <style> in mockup-v5.html, which would otherwise
+   win on cascade. */
+
+/* Apple-grey canvas behind the columns. App root paints bg-gray-100
+   over the body; both need to be the same canvas grey so the columns
+   appear to float on a single sheet. */
+body { background: #f5f6f8 !important; }
+.bg-gray-100 { background-color: #f5f6f8 !important; }
+
+/* Column dividers — keep the canvas grey running between the columns
+   so the "floating sheets" feel is preserved. Slightly wider than the
+   stock 5px so the gap is unmistakable. */
+.col-divider {
+  background: #f5f6f8 !important;
+  width: 10px !important;
+  box-shadow: none !important;
+}
+
+/* Soften column-edge borders — whitespace and the divider strip carry
+   the separation already. */
+.border-r { border-right-color: transparent !important; }
+
+/* List rows: drop the harsh bottom-border, hover gets a faint indigo
+   wash so the row reads as a tappable card. */
+.border-b.cursor-pointer {
+  background: #ffffff !important;
+  border-bottom-color: transparent !important;
+  transition: background-color .15s ease;
+}
+.border-b.cursor-pointer:hover { background-color: rgba(99,102,241,0.06) !important; }
+
+/* Selected row: solid indigo wash, no left accent bar. */
+.bg-indigo-50.border-l-2 {
+  border-left-color: transparent !important;
+  background: rgba(99,102,241,0.10) !important;
+}
+
+/* Section dividers in MessageDetail (header, banner, footer): faint
+   line, no shadow. */
+.flex-shrink-0.border-b {
+  border-bottom-color: rgba(15,23,42,0.06) !important;
+  box-shadow: none !important;
+}
+.flex-shrink-0.border-t {
+  border-top-color: rgba(15,23,42,0.06) !important;
+  box-shadow: none !important;
+}
+
+/* Tag chips become rounded pills. */
+.tag-chip {
+  border-radius: 999px !important;
+  padding: 2px 10px !important;
+}
+
+/* Tighter rounded corners — keep the auth card a bit softer (12px)
+   so the login screen feels welcoming. */
+.rounded-xl  { border-radius: 8px !important; }
+.rounded-lg  { border-radius: 8px !important; }
+.rounded-md  { border-radius: 6px !important; }
+.rounded-2xl { border-radius: 12px !important; }
+
+/* Inputs in compose, settings, etc. — softer border colour. */
+input, select, textarea { border-color: rgba(15,23,42,0.08) !important; }

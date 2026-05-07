@@ -105,51 +105,12 @@
     input[type="number"]::-webkit-outer-spin-button { -webkit-appearance: none; margin: 0; }
     input[type="number"] { -moz-appearance: textfield; }
 
-    /* ─── Apple-style polish ────────────────────────────────────────────
-       Soft grey background, white sheets, almost no borders. Separation
-       through whitespace + barely-there shadow. Same data and behaviour
-       as mockup-v4.html — purely a visual treatment.
-       !important is needed because Tailwind CDN injects its stylesheet
-       after this inline <style>, which would otherwise win on cascade. */
-    body { background: #f5f6f8 !important; }
-    /* The App root paints bg-gray-100 over the body, so we need to repaint
-       that one too. Same Apple-grey applied to the column-divider strip
-       so it blends seamlessly with the page. */
-    .bg-gray-100 { background-color: #f5f6f8 !important; }
-    /* Contact card header in col 2, sticky filter bars, sidebar bg —
-       Tailwind's bg-gray-50 makes them feel dated; flip to white so the
-       column reads as a clean sheet. */
-    .bg-gray-50 { background-color: #ffffff !important; }
-    .col-divider { background: #f5f6f8 !important; box-shadow: none !important; }
-    /* Soften column borders — let whitespace and the column-divider strip
-       carry the separation. */
-    .border-r { border-right-color: transparent !important; }
-    /* List rows: drop the harsh bottom-border, hover gets a faint indigo wash. */
-    .border-b.cursor-pointer {
-      background: #ffffff !important;
-      border-bottom-color: transparent !important;
-      transition: background-color .15s ease;
-    }
-    .border-b.cursor-pointer:hover { background-color: rgba(99,102,241,0.06) !important; }
-    /* Selected row: solid indigo wash, no left accent bar. */
-    .bg-indigo-50.border-l-2 {
-      border-left-color: transparent !important;
-      background: rgba(99,102,241,0.10) !important;
-    }
-    /* Section dividers in MessageDetail (header, banner, footer): faint line, no shadow. */
-    .flex-shrink-0.border-b { border-bottom-color: rgba(15,23,42,0.06) !important; box-shadow: none !important; }
-    .flex-shrink-0.border-t { border-top-color: rgba(15,23,42,0.06) !important; box-shadow: none !important; }
-    /* Tag chips become rounded pills. */
-    .tag-chip { border-radius: 999px !important; padding: 2px 10px !important; }
-    /* Tighter rounded corners — keep the auth card softer (16px) so the
-       login screen still feels welcoming. */
-    .rounded-xl  { border-radius: 8px !important; }
-    .rounded-lg  { border-radius: 8px !important; }
-    .rounded-md  { border-radius: 6px !important; }
-    .rounded-2xl { border-radius: 12px !important; }
-    /* Inputs in compose, settings, etc. — softer borders, larger radius. */
-    input, select, textarea { border-color: rgba(15,23,42,0.08) !important; }
   </style>
+  <!-- Apple-style polish lives in its own file with a version query so a
+       polish change is picked up by every browser as soon as the version
+       is bumped — no manual cache-busters needed. Keep ?v= here in sync
+       with APP_VERSION below at every deploy. -->
+  <link rel="stylesheet" href="polish.css?v=0.0.102"/>
 </head>
 <body>
 <div id="root"></div>
@@ -159,7 +120,7 @@ const { useState, useMemo, useRef, useEffect, useCallback } = React;
 
 // ─── Constants ───────────────────────────────────────────────────────────────
 
-const APP_VERSION = "0.0.101"; // bumped on every deploy — keep in sync with version.json
+const APP_VERSION = "0.0.102"; // bumped on every deploy — keep in sync with version.json AND with the ?v= on polish.css above
 
 // ─── Backend + Supabase config ───────────────────────────────────────────────
 const SUPABASE_URL = "https://oyrlzqbjcsliesvunbwj.supabase.co";
