@@ -80,10 +80,15 @@
   </style>
   <script>
     (function () {
-      var p = new URLSearchParams(location.search).get("style");
-      if (!["apple","fluent","minimal"].includes(p)) p = "apple";
-      document.addEventListener("DOMContentLoaded", function () {
-        document.body.setAttribute("data-style", p);
+      var initial = new URLSearchParams(location.search).get("style");
+      if (!["apple","fluent","minimal"].includes(initial)) initial = "apple";
+      function apply(s) {
+        if (["apple","fluent","minimal"].includes(s)) document.body.setAttribute("data-style", s);
+      }
+      document.addEventListener("DOMContentLoaded", function () { apply(initial); });
+      // Allow the parent (mockup-compare.html) to swap styles without reloading.
+      window.addEventListener("message", function (e) {
+        if (e?.data?.type === "setStyle") apply(e.data.value);
       });
     })();
   </script>

@@ -48,13 +48,22 @@
     <iframe id="frame" src="mockup-3col-demo.html?style=apple"></iframe>
   </div>
   <script>
-    document.querySelectorAll('.tab').forEach(function (t) {
-      t.addEventListener('click', function () {
-        document.querySelectorAll('.tab').forEach(function (x) { x.classList.remove('active'); });
-        t.classList.add('active');
-        document.getElementById('frame').src = 'mockup-3col-demo.html?style=' + t.dataset.style;
+    // Drive the inner mockup via postMessage instead of swapping iframe src
+    // — query-param changes were unreliable on some hosts (and the iframe
+    // didn't re-run its DOMContentLoaded path on every src change). With
+    // postMessage the child applies the new style instantly, no reload.
+    function setStyle(s) {
+      document.querySelectorAll('.tab').forEach(function (t) {
+        t.classList.toggle('active', t.dataset.style === s);
       });
+      var f = document.getElementById('frame');
+      if (f && f.contentWindow) f.contentWindow.postMessage({ type: 'setStyle', value: s }, '*');
+    }
+    document.querySelectorAll('.tab').forEach(function (t) {
+      t.addEventListener('click', function () { setStyle(t.dataset.style); });
     });
+    // First style after the inner page is ready.
+    document.getElementById('frame').addEventListener('load', function () { setStyle('apple'); });
   </script>
 </body>
 </html>
