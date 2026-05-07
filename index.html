@@ -106,6 +106,10 @@
        !important is needed because Tailwind CDN injects its stylesheet
        after this inline <style>, which would otherwise win on cascade. */
     body { background: #f5f6f8 !important; }
+    /* The App root paints bg-gray-100 over the body, so we need to repaint
+       that one too. Same Apple-grey applied to the column-divider strip
+       so it blends seamlessly with the page. */
+    .bg-gray-100 { background-color: #f5f6f8 !important; }
     .col-divider { background: #f5f6f8 !important; box-shadow: none !important; }
     /* Soften column borders — let whitespace and the column-divider strip
        carry the separation. */
@@ -145,7 +149,7 @@ const { useState, useMemo, useRef, useEffect, useCallback } = React;
 
 // ─── Constants ───────────────────────────────────────────────────────────────
 
-const APP_VERSION = "0.0.97"; // bumped on every deploy — keep in sync with version.json
+const APP_VERSION = "0.0.98"; // bumped on every deploy — keep in sync with version.json
 
 // ─── Backend + Supabase config ───────────────────────────────────────────────
 const SUPABASE_URL = "https://oyrlzqbjcsliesvunbwj.supabase.co";
