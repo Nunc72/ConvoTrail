@@ -21,17 +21,10 @@
   <link rel="icon" type="image/png" sizes="192x192" href="icon-192.png"/>
   <link rel="icon" type="image/png" sizes="512x512" href="icon-512.png"/>
   <script>
-    // Auto-route: phones → direct mobile app, desktops → phone-frame preview.
-    // mockup-v5 carries the Apple-style polish; v4 stays in the repo for
-    // history and is reachable directly via /mockup-v4.html.
-    (function(){
-      var w = Math.min(window.innerWidth, window.screen.width);
-      if (w < 768) {
-        window.location.replace('mockup-v5.html');
-      } else {
-        window.location.replace('mockup-v4-phone.html');
-      }
-    })();
+    // Belt-and-suspenders alongside the meta-refresh above: send everyone
+    // straight to the mockup so a stale index.html cache can't strand a
+    // user on the "Loading…" page.
+    window.location.replace('mockup-v5.html');
   </script>
   <style>
     body { margin: 0; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background: #f3f4f6; color: #64748b; display: flex; align-items: center; justify-content: center; min-height: 100vh; }
