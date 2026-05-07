@@ -40,12 +40,15 @@
     <p>Click a tab to switch. Each tab loads the same 3-column mailbrowser with a different visual style.</p>
   </div>
   <div class="tabs">
-    <div class="tab active" data-style="apple">Apple <small>— clean &amp; airy</small></div>
+    <div class="tab active" data-style="dark">Dark <small>— Cron / Linear vibe</small></div>
+    <div class="tab" data-style="warm">Warm <small>— Substack / Notion serif</small></div>
+    <div class="tab" data-style="bold">Bold <small>— magazine, hot magenta</small></div>
+    <div class="tab" data-style="apple">Apple <small>— clean &amp; airy</small></div>
     <div class="tab" data-style="fluent">Fluent <small>— floating cards</small></div>
     <div class="tab" data-style="minimal">Minimal <small>— hairline borders</small></div>
   </div>
   <div class="frame-wrap">
-    <iframe id="frame" src="mockup-3col-demo.html?style=apple"></iframe>
+    <iframe id="frame" src="mockup-3col-demo.html?style=dark"></iframe>
   </div>
   <script>
     // Drive the inner mockup via postMessage instead of swapping iframe src
@@ -63,7 +66,7 @@
       t.addEventListener('click', function () { setStyle(t.dataset.style); });
     });
     // First style after the inner page is ready.
-    document.getElementById('frame').addEventListener('load', function () { setStyle('apple'); });
+    document.getElementById('frame').addEventListener('load', function () { setStyle('dark'); });
   </script>
 </body>
 </html>

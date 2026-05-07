@@ -10,6 +10,12 @@
        on all inputs below 768px (see the media query in the stylesheet). -->
   <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
   <title>Convooz</title>
+  <!-- No-cache so a polish change is visible on the next refresh without
+       manual cache-busters. Inline CSS lives in this file, so HTML
+       freshness is what we need. -->
+  <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate"/>
+  <meta http-equiv="Pragma" content="no-cache"/>
+  <meta http-equiv="Expires" content="0"/>
   <!-- PWA -->
   <link rel="manifest" href="manifest.json"/>
   <meta name="theme-color" content="#6366f1"/>
@@ -115,18 +121,6 @@
        column reads as a clean sheet. */
     .bg-gray-50 { background-color: #ffffff !important; }
     .col-divider { background: #f5f6f8 !important; box-shadow: none !important; }
-    /* Tiny diagnostic badge — visible whenever the polish stylesheet is
-       loaded. If you DON'T see it, the page is still showing a cached
-       version of the file. */
-    body::after {
-      content: "Polish v0.0.100 ✓";
-      position: fixed; top: 6px; right: 6px;
-      background: #6366f1 !important; color: #fff !important;
-      padding: 2px 8px; border-radius: 999px;
-      font-size: 10px; font-family: -apple-system, system-ui, sans-serif;
-      z-index: 99999; pointer-events: none;
-      box-shadow: 0 1px 3px rgba(0,0,0,0.15);
-    }
     /* Soften column borders — let whitespace and the column-divider strip
        carry the separation. */
     .border-r { border-right-color: transparent !important; }
@@ -165,7 +159,7 @@ const { useState, useMemo, useRef, useEffect, useCallback } = React;
 
 // ─── Constants ───────────────────────────────────────────────────────────────
 
-const APP_VERSION = "0.0.100"; // bumped on every deploy — keep in sync with version.json
+const APP_VERSION = "0.0.101"; // bumped on every deploy — keep in sync with version.json
 
 // ─── Backend + Supabase config ───────────────────────────────────────────────
 const SUPABASE_URL = "https://oyrlzqbjcsliesvunbwj.supabase.co";
