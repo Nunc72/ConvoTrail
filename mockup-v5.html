@@ -110,7 +110,7 @@
        polish change is picked up by every browser as soon as the version
        is bumped — no manual cache-busters needed. Keep ?v= here in sync
        with APP_VERSION below at every deploy. -->
-  <link rel="stylesheet" href="polish.css?v=0.0.103"/>
+  <link rel="stylesheet" href="polish.css?v=0.0.104"/>
 </head>
 <body>
 <div id="root"></div>
@@ -120,7 +120,7 @@ const { useState, useMemo, useRef, useEffect, useCallback } = React;
 
 // ─── Constants ───────────────────────────────────────────────────────────────
 
-const APP_VERSION = "0.0.103"; // bumped on every deploy — keep in sync with version.json AND with the ?v= on polish.css above
+const APP_VERSION = "0.0.104"; // bumped on every deploy — keep in sync with version.json AND with the ?v= on polish.css above
 
 // ─── Backend + Supabase config ───────────────────────────────────────────────
 const SUPABASE_URL = "https://oyrlzqbjcsliesvunbwj.supabase.co";
@@ -4608,7 +4608,7 @@ function App({onSignOut}) {
   // Supabase session user: display name + username come from user_metadata,
   // email from the auth record itself. Falls back to the email local-part so
   // we never render the string "undefined".
-  const [currentUser,      setCurrentUser]      = useState({ name: '', username: '', email: '' });
+  const [currentUser,      setCurrentUser]      = useState({ name: '', username: '', email: '', isTest: false });
   useEffect(() => {
     let cancelled = false;
     async function loadUser() {
@@ -4618,6 +4618,7 @@ function App({onSignOut}) {
         name:     data.user.user_metadata?.display_name || '',
         username: data.user.user_metadata?.username     || '',
         email:    data.user.email || '',
+        isTest:   !!data.user.user_metadata?.is_test_account,
       });
     }
     loadUser();
@@ -5537,6 +5538,12 @@ function App({onSignOut}) {
 
   return (
     <div className={`flex flex-col bg-gray-100 ${activeColDiv!==null||activeRowDiv?"no-select":""}`} style={{height:'100%'}}>
+      {currentUser.isTest && (
+        <div className="flex-shrink-0 text-center text-xs font-semibold py-1 px-3"
+          style={{background:'#fef3c7',color:'#92400e',letterSpacing:'0.04em'}}>
+          TEST ACCOUNT — fake data, no real mail
+        </div>
+      )}
       {/* Topbar */}
       {isMobile ? (
         /* Mobile topbar: logo | search (center) | user + compose (+ rightmost) */
