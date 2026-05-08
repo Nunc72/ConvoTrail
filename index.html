@@ -105,22 +105,59 @@
     input[type="number"]::-webkit-outer-spin-button { -webkit-appearance: none; margin: 0; }
     input[type="number"] { -moz-appearance: textfield; }
 
+    /* Bootloader: inline progress-bar shown inside #root before the React
+       bundle has loaded. ReactDOM.render replaces #root's children on mount,
+       so this disappears automatically without any cleanup code. Uses only
+       inline CSS so it paints on the very first frame, before any external
+       stylesheet (Tailwind CDN, polish.css) finishes loading. */
+    .bootloader {
+      position: absolute; inset: 0;
+      display: flex; flex-direction: column; align-items: center; justify-content: center;
+      gap: 18px;
+      background: #ffffff;
+      color: #6366f1;
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+    }
+    .bootloader-logo { font-weight: 700; font-size: 22px; letter-spacing: -0.02em; }
+    .bootloader-bar {
+      width: 200px; height: 4px;
+      background: #f1f5f9;
+      border-radius: 999px;
+      overflow: hidden;
+      position: relative;
+    }
+    .bootloader-fill {
+      position: absolute; top: 0; bottom: 0;
+      width: 40%;
+      background: #6366f1;
+      border-radius: 999px;
+      animation: bootloader-slide 1.1s infinite cubic-bezier(.4,0,.2,1);
+    }
+    @keyframes bootloader-slide {
+      0%   { left: -40%; }
+      100% { left: 100%; }
+    }
   </style>
   <!-- Apple-style polish lives in its own file with a version query so a
        polish change is picked up by every browser as soon as the version
        is bumped — no manual cache-busters needed. Keep ?v= here in sync
        with APP_VERSION below at every deploy. -->
-  <link rel="stylesheet" href="polish.css?v=0.0.115"/>
+  <link rel="stylesheet" href="polish.css?v=0.0.116"/>
 </head>
 <body>
-<div id="root"></div>
+<div id="root">
+  <div class="bootloader">
+    <div class="bootloader-logo">Convooz</div>
+    <div class="bootloader-bar"><div class="bootloader-fill"></div></div>
+  </div>
+</div>
 <script type="text/babel">
 
 const { useState, useMemo, useRef, useEffect, useCallback } = React;
 
 // ─── Constants ───────────────────────────────────────────────────────────────
 
-const APP_VERSION = "0.0.115"; // bumped on every deploy — keep in sync with version.json AND with the ?v= on polish.css above
+const APP_VERSION = "0.0.116"; // bumped on every deploy — keep in sync with version.json AND with the ?v= on polish.css above
 
 // ─── Backend + Supabase config ───────────────────────────────────────────────
 const SUPABASE_URL = "https://oyrlzqbjcsliesvunbwj.supabase.co";
