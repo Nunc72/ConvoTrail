@@ -2,7 +2,7 @@
   "name": "Convooz",
   "short_name": "Convooz",
   "description": "Conversation-centric email client",
-  "start_url": "./mockup-v4.html",
+  "start_url": "./",
   "scope": "./",
   "display": "standalone",
   "orientation": "portrait",
