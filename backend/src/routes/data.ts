@@ -64,12 +64,15 @@ export async function registerDataRoutes(app: FastifyInstance) {
     // mail and active revert-to-me — so those open instantly when the user
     // taps them. RLS already constrains both queries to the user's own
     // rows, so we can scope the IN-list by id without extra checks.
+    type R2mRow = { message_id: string; dismissed_at: string | null };
+    type MsgMeta = { id: string; direction: string; flags: Record<string, unknown> | null; mail_account_id: string };
+    type BodyRow = { id: string; body_text: string | null; body_html: string | null };
+    const r2mRows = (r2mRes.data ?? []) as unknown as R2mRow[];
+    const messagesRows = (messagesRes.data ?? []) as unknown as MsgMeta[];
     const r2mActiveIds = new Set(
-      (r2mRes.data ?? [])
-        .filter(r => r.dismissed_at === null)
-        .map(r => r.message_id),
+      r2mRows.filter(r => r.dismissed_at === null).map(r => r.message_id),
     );
-    const actionableIds = (messagesRes.data ?? [])
+    const actionableIds = messagesRows
       .filter(m => {
         if (r2mActiveIds.has(m.id)) return true;
         if (m.direction !== 'in') return false;
@@ -83,22 +86,18 @@ export async function registerDataRoutes(app: FastifyInstance) {
         .select("id, body_text, body_html")
         .in("id", actionableIds);
       if (bodiesRes.error) return reply.internalServerError(bodiesRes.error.message);
-      for (const row of (bodiesRes.data ?? [])) {
-        bodiesById.set(row.id as string, {
-          body_text: (row.body_text as string | null) ?? null,
-          body_html: (row.body_html as string | null) ?? null,
-        });
+      for (const row of ((bodiesRes.data ?? []) as unknown as BodyRow[])) {
+        bodiesById.set(row.id, { body_text: row.body_text, body_html: row.body_html });
       }
     }
     // Aggregate per-account counts. The Supabase head:false count returns
     // the rows themselves; we just tally them by mail_account_id.
     const messageCountByAccount: Record<string, number> = {};
-    for (const row of (msgCountsRes.data ?? [])) {
-      const aid = (row as { mail_account_id: string }).mail_account_id;
-      messageCountByAccount[aid] = (messageCountByAccount[aid] ?? 0) + 1;
+    for (const row of ((msgCountsRes.data ?? []) as unknown as { mail_account_id: string }[])) {
+      messageCountByAccount[row.mail_account_id] = (messageCountByAccount[row.mail_account_id] ?? 0) + 1;
     }
-    const messagesWithBodies = (messagesRes.data ?? []).map(m => {
-      const body = bodiesById.get(m.id as string);
+    const messagesWithBodies = messagesRows.map(m => {
+      const body = bodiesById.get(m.id);
       return body ? { ...m, body_text: body.body_text, body_html: body.body_html } : m;
     });
     return {
