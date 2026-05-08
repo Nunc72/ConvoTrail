@@ -110,7 +110,7 @@
        polish change is picked up by every browser as soon as the version
        is bumped — no manual cache-busters needed. Keep ?v= here in sync
        with APP_VERSION below at every deploy. -->
-  <link rel="stylesheet" href="polish.css?v=0.0.104"/>
+  <link rel="stylesheet" href="polish.css?v=0.0.105"/>
 </head>
 <body>
 <div id="root"></div>
@@ -120,7 +120,7 @@ const { useState, useMemo, useRef, useEffect, useCallback } = React;
 
 // ─── Constants ───────────────────────────────────────────────────────────────
 
-const APP_VERSION = "0.0.104"; // bumped on every deploy — keep in sync with version.json AND with the ?v= on polish.css above
+const APP_VERSION = "0.0.105"; // bumped on every deploy — keep in sync with version.json AND with the ?v= on polish.css above
 
 // ─── Backend + Supabase config ───────────────────────────────────────────────
 const SUPABASE_URL = "https://oyrlzqbjcsliesvunbwj.supabase.co";
@@ -5746,7 +5746,7 @@ function App({onSignOut}) {
           /* ── Mobile: sliding 3-panel layout (inner wrapper fixes flex positioning) ── */
           <div style={{position:'absolute',inset:0,overflow:'hidden'}}><div style={{position:'absolute',top:0,left:`${-mobileCol*100}vw`,display:'flex',width:'300vw',height:'100%',transition:'left 0.3s ease',willChange:'left'}}>
             {/* Mobile Col 1 */}
-            <div style={{width:'100vw',height:'100%',overflow:'hidden',flexShrink:0}}>
+            <div data-col="1" style={{width:'100vw',height:'100%',overflow:'hidden',flexShrink:0}}>
               <LeftColumn contactMeta={contactMeta} selectedId={selContact} mergeId={mergeContact}
                 onSelect={handleSelectContact} usedTags={usedTags} selectedTag={selTag} onSelectTag={id=>{handleSelectTag(id);if(isMobile)setMobileCol(1);}}
                 tagsHeight={tagsHeight} onTagsDividerDrag={onTagsDivDown}
@@ -5759,11 +5759,11 @@ function App({onSignOut}) {
                 dataLoading={dataLoading}/>
             </div>
             {/* Mobile Col 2 */}
-            <div style={{width:'100vw',height:'100%',overflow:'hidden',flexShrink:0}} className="flex flex-col">
+            <div data-col="2" style={{width:'100vw',height:'100%',overflow:'hidden',flexShrink:0}} className="flex flex-col">
               <div className="flex-1 min-h-0 overflow-hidden">{col2}</div>
             </div>
             {/* Mobile Col 3 */}
-            <div style={{width:'100vw',height:'100%',overflow:'hidden',flexShrink:0,position:'relative'}}>
+            <div data-col="3" style={{width:'100vw',height:'100%',overflow:'hidden',flexShrink:0,position:'relative'}}>
               <div style={{height:'100%', overflow:'hidden', position:'relative'}}>
                 {showCompose?(
                   <ComposePane key={`${replyTo?.id??"x"}-${composeContact?.id??"x"}-${composeDraft?.id??"x"}-${tagComposeInit?.to??"x"}`}
@@ -5806,7 +5806,7 @@ function App({onSignOut}) {
           /* ── Desktop: existing 3-column resizable layout ── */
           <>
             {/* Col 1 */}
-            <div ref={leftColRef} style={{width:colWidths[0]+"%",minWidth:"10%",overflow:"hidden"}}>
+            <div ref={leftColRef} data-col="1" style={{width:colWidths[0]+"%",minWidth:"10%",overflow:"hidden"}}>
               <LeftColumn contactMeta={contactMeta} selectedId={selContact} mergeId={mergeContact}
                 onSelect={handleSelectContact} usedTags={usedTags} selectedTag={selTag} onSelectTag={handleSelectTag}
                 tagsHeight={tagsHeight} onTagsDividerDrag={onTagsDivDown}
@@ -5822,14 +5822,14 @@ function App({onSignOut}) {
             <div onMouseDown={e=>onColDivDown(e,0)} className={`col-divider${activeColDiv===0?" active":""}`}/>
 
             {/* Col 2 */}
-            <div style={{width:colWidths[1]+"%",minWidth:"10%",overflow:"hidden"}} className="flex flex-col">
+            <div data-col="2" style={{width:colWidths[1]+"%",minWidth:"10%",overflow:"hidden"}} className="flex flex-col">
               <div className="flex-1 min-h-0 overflow-hidden">{col2}</div>
             </div>
 
             <div onMouseDown={e=>onColDivDown(e,1)} className={`col-divider${activeColDiv===1?" active":""}`}/>
 
             {/* Col 3 */}
-            <div style={{width:colWidths[2]+"%",minWidth:"10%",overflow:"hidden"}} className="relative">
+            <div data-col="3" style={{width:colWidths[2]+"%",minWidth:"10%",overflow:"hidden"}} className="relative">
               {showCompose?(
                 <ComposePane key={`${replyTo?.id??"x"}-${composeContact?.id??"x"}-${composeDraft?.id??"x"}-${tagComposeInit?.to??"x"}`}
                   replyTo={replyTo} replyKind={replyKind} toContact={composeContact} draft={composeDraft}

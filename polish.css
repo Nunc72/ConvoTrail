@@ -17,6 +17,24 @@
 body { background: #f5f6f8 !important; }
 .bg-gray-100 { background-color: #f5f6f8 !important; }
 
+/* ── Col 1 (contacts/tags sidebar): apple-grey canvas, contact rows
+   slightly lighter (white) so they read as cards on the grey. ── */
+[data-col="1"] .bg-white,
+[data-col="1"] .bg-gray-50 {
+  background-color: #f5f6f8 !important;
+}
+[data-col="1"] .border-b.cursor-pointer {
+  background-color: #ffffff !important;
+}
+[data-col="1"] .border-b.cursor-pointer:hover {
+  background-color: rgba(99,102,241,0.06) !important;
+}
+
+/* ── Col 2 (contact card / mail rows / tag view): all white. ── */
+[data-col="2"] .bg-gray-50 {
+  background-color: #ffffff !important;
+}
+
 /* Column dividers — keep the canvas grey running between the columns
    so the "floating sheets" feel is preserved. */
 .col-divider {
