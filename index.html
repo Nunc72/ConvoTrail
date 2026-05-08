@@ -174,7 +174,7 @@
        polish change is picked up by every browser as soon as the version
        is bumped — no manual cache-busters needed. Keep ?v= here in sync
        with APP_VERSION below at every deploy. -->
-  <link rel="stylesheet" href="polish.css?v=0.0.122"/>
+  <link rel="stylesheet" href="polish.css?v=0.0.123"/>
 </head>
 <body>
 <div id="root">
@@ -189,7 +189,7 @@ const { useState, useMemo, useRef, useEffect, useCallback } = React;
 
 // ─── Constants ───────────────────────────────────────────────────────────────
 
-const APP_VERSION = "0.0.122"; // bumped on every deploy — keep in sync with version.json AND with the ?v= on polish.css above
+const APP_VERSION = "0.0.123"; // bumped on every deploy — keep in sync with version.json AND with the ?v= on polish.css above
 
 // ─── Backend + Supabase config ───────────────────────────────────────────────
 const SUPABASE_URL = "https://oyrlzqbjcsliesvunbwj.supabase.co";
@@ -4552,12 +4552,15 @@ function App({userId, onSignOut}) {
         const __dbgOut = messages.filter(m => m.direction === 'out').length;
         console.log('[Convooz bootstrap] messages from API — in:', __dbgIn, 'out:', __dbgOut, 'drafts:', (drafts||[]).length, 'contacts:', contacts.length);
         const __dbgDroppedOut = [];
-        // Self-mails (between two of the user's own accounts) always group
-        // under the *recipient* contact, regardless of direction:
-        //   prive@ → werk@   →  both copies land under "Rik Werk"
-        //   werk@ → prive@   →  both copies land under "Prive"
-        // So under "Rik Werk" you only see mail addressed TO werk@, never
-        // mail SENT FROM werk@ to your other accounts.
+        // Self-mails (between two of the user's own accounts) anchor under
+        // the contact for the mail-account this copy lives in, so each
+        // mailbox sees its own perspective:
+        //   werk@ → prive@   →  INBOX copy in prive@'s inbox lands under
+        //                       contact "prive@" as direction=in;
+        //                       SENT copy in werk@'s sent lands under
+        //                       contact "werk@" as direction=out.
+        // For non-self-mails: in-mails anchor on the sender, out-mails on
+        // the recipient — the "other party" of the conversation.
         const myAccountEmails = new Set((mail_accounts || [])
           .map(a => (a.email || '').toLowerCase())
           .filter(Boolean));
@@ -4567,7 +4570,7 @@ function App({userId, onSignOut}) {
           const firstTo = (m.to_emails?.[0]?.email || '').toLowerCase();
           const isSelfMail = myAccountEmails.has(fromEmail) && myAccountEmails.has(firstTo);
           const otherEmail = isSelfMail
-            ? firstTo
+            ? accountEmail
             : (m.direction === 'in' ? fromEmail : firstTo);
           const contactId = emailToContactId.get(otherEmail) ?? null;
           if (m.direction === 'out' && contactId === null) {
@@ -5075,17 +5078,23 @@ function App({userId, onSignOut}) {
         // from another client that didn't auto-set \Seen on Sent) shows no
         // bullet anywhere, so it shouldn't inflate the badge either.
         const unread=active.filter(m=>!m.read&&m.dir==='in').length;
-        const oldestUnread=unread>0?active.filter(m=>!m.read&&m.dir==='in').reduce((a,b)=>a.date<b.date?a:b).date:null;
+        const newestUnread=unread>0?active.filter(m=>!m.read&&m.dir==='in').reduce((a,b)=>a.date>b.date?a:b).date:'';
         const lastDate=active.length>0?active.reduce((a,b)=>a.date>b.date?a:b).date:(all.length>0?all.reduce((a,b)=>a.date>b.date?a:b).date:"");
         const r2mMsgs=active.filter(m=>m.revert2me&&m.dir==="out");
         const hasR2m=r2mMsgs.length>0;
         const r2mCount=r2mMsgs.length;
-        return{contact,unread,oldestUnread,lastDate,hasR2m,r2mCount};
+        const newestR2m=hasR2m?r2mMsgs.reduce((a,b)=>a.date>b.date?a:b).date:'';
+        // Surface "actionable" contacts (anything new for the user to deal
+        // with: an unread incoming or an outgoing without a reply yet) to
+        // the top of the list, sorted by the freshest of those two signals
+        // so the most-recent thing-needing-attention is right at the top.
+        const newestActionable=newestUnread>newestR2m?newestUnread:newestR2m;
+        return{contact,unread,newestUnread,lastDate,hasR2m,r2mCount,newestActionable};
       })
       .sort((a,b)=>{
-        const au=a.unread>0,bu=b.unread>0;
-        if(au&&!bu)return-1;if(!au&&bu)return 1;
-        if(au&&bu)return a.oldestUnread.localeCompare(b.oldestUnread);
+        const aa=a.unread>0||a.hasR2m, ba=b.unread>0||b.hasR2m;
+        if(aa&&!ba)return-1;if(!aa&&ba)return 1;
+        if(aa&&ba)return b.newestActionable.localeCompare(a.newestActionable);
         return b.lastDate.localeCompare(a.lastDate);
       });
   },[contactList,messageList,deletedIds,selAccounts]);
