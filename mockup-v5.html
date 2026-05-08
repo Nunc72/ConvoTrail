@@ -110,7 +110,7 @@
        polish change is picked up by every browser as soon as the version
        is bumped — no manual cache-busters needed. Keep ?v= here in sync
        with APP_VERSION below at every deploy. -->
-  <link rel="stylesheet" href="polish.css?v=0.0.107"/>
+  <link rel="stylesheet" href="polish.css?v=0.0.108"/>
 </head>
 <body>
 <div id="root"></div>
@@ -120,7 +120,7 @@ const { useState, useMemo, useRef, useEffect, useCallback } = React;
 
 // ─── Constants ───────────────────────────────────────────────────────────────
 
-const APP_VERSION = "0.0.107"; // bumped on every deploy — keep in sync with version.json AND with the ?v= on polish.css above
+const APP_VERSION = "0.0.108"; // bumped on every deploy — keep in sync with version.json AND with the ?v= on polish.css above
 
 // ─── Backend + Supabase config ───────────────────────────────────────────────
 const SUPABASE_URL = "https://oyrlzqbjcsliesvunbwj.supabase.co";
@@ -3413,12 +3413,10 @@ function LeftColumn({contactMeta, archivedContacts, selectedId, mergeId, onSelec
       <div className="flex-1 min-h-0 overflow-y-auto scroll bg-gray-50"
         style={{WebkitOverflowScrolling:'touch'}}>
         <div style={{minHeight:'calc(100% + 1px)'}}>
-          {dataLoading && contactMeta.length===0 ? (
-            <div className="flex flex-col items-center justify-center gap-2 py-16 text-gray-400">
-              <Spinner size={24}/>
-              <span className="text-xs">Loading contacts…</span>
-            </div>
-          ) : (<>
+          {/* No inline "Loading contacts…" — sync feedback is the topbar spinner.
+             On a true cold load (no cache, contactMeta empty) the panel just
+             stays blank for the half-second the bootstrap fetch takes. */}
+          {!(dataLoading && contactMeta.length===0) && (<>
             {activeContacts.length===0 && (
               <div className="px-3 py-3 text-xs text-gray-300 italic">
                 {contactTab==='News'?'No newsletter contacts':contactTab==='Muted'?'No muted contacts':contactTab==='Archive'?'No archived contacts':'No contacts'}
@@ -3546,12 +3544,7 @@ function LeftColumn({contactMeta, archivedContacts, selectedId, mergeId, onSelec
           transition: 'min-height 0.15s ease, max-height 0.15s ease, flex-grow 0.2s ease'
         }}>
           <div className="flex-1 overflow-y-auto scroll">
-            {dataLoading && contactMeta.length===0 ? (
-              <div className="flex flex-col items-center justify-center gap-2 py-16 text-gray-400">
-                <Spinner size={24}/>
-                <span className="text-xs">Loading contacts…</span>
-              </div>
-            ) : (<>
+            {!(dataLoading && contactMeta.length===0) && (<>
               {activeContacts.length===0&&<div className="px-3 py-3 text-xs text-gray-300 italic">
                 {contactTab==='News'?'No newsletter contacts':contactTab==='Muted'?'No muted contacts':contactTab==='Archive'?'No archived contacts':'No contacts'}
               </div>}
@@ -4232,7 +4225,65 @@ const RETENTION_OPTIONS = [
   { value: 365,  label: 'After 1 year' },
 ];
 
-function App({onSignOut}) {
+// Bootstrap cache: stash the shaped /bootstrap result in localStorage so a
+// returning user (especially on mobile, where the PWA is killed often) sees
+// the contact list and messages instantly while the network refresh runs in
+// the background. Keyed per user + APP_VERSION so a sign-out/sign-in or app
+// upgrade can't leak stale state across users or shapes.
+function bootstrapCacheKey(uid) { return `convooz:bootstrap:${uid}:${APP_VERSION}`; }
+function readBootstrapCache(uid) {
+  if (!uid) return null;
+  try {
+    const raw = localStorage.getItem(bootstrapCacheKey(uid));
+    if (!raw) return null;
+    const obj = JSON.parse(raw);
+    if (!obj || obj.v !== APP_VERSION) return null;
+    return {
+      mailAccounts:     obj.mailAccounts     || [],
+      contactList:      obj.contactList      || [],
+      messageList:      obj.messageList      || [],
+      tagList:          obj.tagList          || [],
+      tagIdByName:      new Map(obj.tagIdByName || []),
+      msgTags:          obj.msgTags          || {},
+      archivedContacts: new Set(obj.archivedContacts || []),
+      tagRoles:         obj.tagRoles         || {},
+      deletedIds:       obj.deletedIds       || [],
+      msgSnoozeCounts:  obj.msgSnoozeCounts  || {},
+      signatures:       obj.signatures       || [],
+      accountSigs:      obj.accountSigs      || {},
+    };
+  } catch { return null; }
+}
+function writeBootstrapCache(uid, snap) {
+  if (!uid) return;
+  try {
+    localStorage.setItem(bootstrapCacheKey(uid), JSON.stringify({
+      v: APP_VERSION,
+      mailAccounts:     snap.mailAccounts,
+      contactList:      snap.contactList,
+      messageList:      snap.messageList,
+      tagList:          snap.tagList,
+      tagIdByName:      [...snap.tagIdByName.entries()],
+      msgTags:          snap.msgTags,
+      archivedContacts: [...snap.archivedContacts],
+      tagRoles:         snap.tagRoles,
+      deletedIds:       snap.deletedIds,
+      msgSnoozeCounts:  snap.msgSnoozeCounts,
+      signatures:       snap.signatures,
+      accountSigs:      snap.accountSigs,
+    }));
+  } catch {}
+}
+
+function App({userId, onSignOut}) {
+  // Read the bootstrap cache exactly once per mount: useRef captures the
+  // value across re-renders so the localStorage parse only happens on first
+  // render. Used to lazy-init every state slice that /bootstrap fills.
+  const bootstrapCacheRef = useRef();
+  if (bootstrapCacheRef.current === undefined) {
+    bootstrapCacheRef.current = readBootstrapCache(userId);
+  }
+  const bootstrapCache = bootstrapCacheRef.current;
   // Mobile
   const [isMobile,    setIsMobile]    = useState(()=>window.innerWidth < 768);
   const [mobileCol,   setMobileCol]   = useState(0); // 0=contacts 1=thread 2=detail
@@ -4245,18 +4296,28 @@ function App({onSignOut}) {
   const [colWidths,    setColWidths]    = useState([20,40,40]);
   const [tagsHeight,   setTagsHeight]   = useState(180);
   const [archiveHeight,setArchiveHeight]= useState(120);
-  // Data
-  const [mailAccounts, setMailAccounts] = useState([]);   // [{id, email, display_name, ...}]
-  const [contactList,  setContactList]  = useState([]);
-  const [messageList,  setMessageList]  = useState([]);
-  const [dataLoading,  setDataLoading]  = useState(true);
+  // Data — lazy-init from localStorage bootstrap cache so the UI paints with
+  // last-seen content instantly. The /bootstrap fetch runs in the background
+  // and overwrites these once it completes.
+  const [mailAccounts, setMailAccounts] = useState(()=>bootstrapCache?.mailAccounts ?? []);
+  const [contactList,  setContactList]  = useState(()=>bootstrapCache?.contactList ?? []);
+  const [messageList,  setMessageList]  = useState(()=>bootstrapCache?.messageList ?? []);
+  // dataLoading is only "true" on the very first cold load (no cache). On a
+  // background refresh the contact list is already populated from cache, so
+  // we skip the loading state — the spinner in the Sync button is the only
+  // signal the user gets that something is in flight.
+  const [dataLoading,  setDataLoading]  = useState(()=>!bootstrapCache);
   const [dataError,    setDataError]    = useState('');
   const [dataRefreshTick, setDataRefreshTick] = useState(0);
 
   useEffect(() => {
     let cancelled = false;
     (async () => {
-      setDataLoading(true); setDataError('');
+      // Don't toggle dataLoading on a background refresh — the cache-hydrated
+      // UI is already showing, and the user gets feedback from the spinning
+      // icon in the Sync button. dataLoading was already initialised to
+      // !cache, so a cold first-load shows the empty state correctly.
+      setDataError('');
       try {
         const { mail_accounts, contacts, messages, drafts, tags, message_tags, r2m_state, signatures: sigs, account_signatures: accSigs, draft_attachments: draftAtts } = await apiFetch('/bootstrap?limit=500');
         if (cancelled) return;
@@ -4512,36 +4573,21 @@ function App({onSignOut}) {
           mt[row.message_id].push(t.name);
         }
 
-        setMailAccounts(mail_accounts);
-        setContactList(shapedContacts);
-        setMessageList([...shapedMessages, ...shapedDrafts]);
-        setTagList(tagList);
-        setTagIdByName(idByName);
-        setMsgTags(mt);
-        // Hydrate archived contacts set from server state
-        setArchivedContacts(new Set(shapedContacts.filter(c => c.archivedAt).map(c => c.id)));
-        // Hydrate per-tag email roles ({ tagName: { email: role } }) from JSONB
-        {
-          const roles = {};
-          for (const t of tagList) {
-            if (t.email_roles && typeof t.email_roles === 'object' && Object.keys(t.email_roles).length > 0) {
-              roles[t.name] = t.email_roles;
-            }
+        const combinedMessages = [...shapedMessages, ...shapedDrafts];
+        const archivedSet = new Set(shapedContacts.filter(c => c.archivedAt).map(c => c.id));
+        const roles = {};
+        for (const t of tagList) {
+          if (t.email_roles && typeof t.email_roles === 'object' && Object.keys(t.email_roles).length > 0) {
+            roles[t.name] = t.email_roles;
           }
-          setTagRoles(roles);
         }
-        // Initialize deletedIds from server state (soft-delete column)
-        setDeletedIds(messages.filter(m => m.deleted_at != null).map(m => m.id));
-        // Hydrate snooze-counts from r2m_state so the next snooze continues
-        // the Fibonacci series from where it left off.
-        setMsgSnoozeCounts(Object.fromEntries(
+        const deletedIdsArr = messages.filter(m => m.deleted_at != null).map(m => m.id);
+        const snoozeCountsObj = Object.fromEntries(
           (r2m_state || []).map(r => [r.message_id, r.snooze_count || 0]),
-        ));
-        // Hydrate signatures + per-account linkage. accountSigs is keyed by
-        // mail-account email to match the existing SettingsModal rendering.
-        setSignatures((sigs || []).map(s => ({ id: s.id, title: s.title, body: s.body })));
+        );
+        const shapedSigs = (sigs || []).map(s => ({ id: s.id, title: s.title, body: s.body }));
+        const byEmail = {};
         {
-          const byEmail = {};
           const emailByAccId = new Map(mail_accounts.map(a => [a.id, (a.email || '').toLowerCase()]));
           for (const row of (accSigs || [])) {
             const email = emailByAccId.get(row.mail_account_id);
@@ -4550,8 +4596,38 @@ function App({onSignOut}) {
             byEmail[email].linked.push(row.signature_id);
             if (row.is_auto) byEmail[email].autoId = row.signature_id;
           }
-          setAccountSigs(byEmail);
         }
+
+        setMailAccounts(mail_accounts);
+        setContactList(shapedContacts);
+        setMessageList(combinedMessages);
+        setTagList(tagList);
+        setTagIdByName(idByName);
+        setMsgTags(mt);
+        setArchivedContacts(archivedSet);
+        setTagRoles(roles);
+        setDeletedIds(deletedIdsArr);
+        setMsgSnoozeCounts(snoozeCountsObj);
+        setSignatures(shapedSigs);
+        setAccountSigs(byEmail);
+
+        // Persist the shaped state so the next mount can hydrate from cache
+        // before the network call finishes. Done after the setters so a parse
+        // throw in writeBootstrapCache can't block the UI from updating.
+        writeBootstrapCache(userId, {
+          mailAccounts: mail_accounts,
+          contactList: shapedContacts,
+          messageList: combinedMessages,
+          tagList,
+          tagIdByName: idByName,
+          msgTags: mt,
+          archivedContacts: archivedSet,
+          tagRoles: roles,
+          deletedIds: deletedIdsArr,
+          msgSnoozeCounts: snoozeCountsObj,
+          signatures: shapedSigs,
+          accountSigs: byEmail,
+        });
       } catch (e) {
         if (!cancelled) setDataError(e.message);
       } finally {
@@ -4562,12 +4638,12 @@ function App({onSignOut}) {
   }, [dataRefreshTick]);
 
   const refreshData = useCallback(() => setDataRefreshTick(t => t + 1), []);
-  const [deletedIds,   setDeletedIds]   = useState(INIT_DELETED);
-  const [msgTags,      setMsgTags]      = useState({});            // {msgId: [tagName,...]}
-  const [tagList,      setTagList]      = useState([]);             // [{id, name, archived_at}]
-  const [tagIdByName,  setTagIdByName]  = useState(()=>new Map());  // name → id (for detach)
+  const [deletedIds,   setDeletedIds]   = useState(()=>bootstrapCache?.deletedIds ?? INIT_DELETED);
+  const [msgTags,      setMsgTags]      = useState(()=>bootstrapCache?.msgTags ?? {});            // {msgId: [tagName,...]}
+  const [tagList,      setTagList]      = useState(()=>bootstrapCache?.tagList ?? []);             // [{id, name, archived_at}]
+  const [tagIdByName,  setTagIdByName]  = useState(()=>bootstrapCache?.tagIdByName ?? new Map());  // name → id (for detach)
   const [conTags,      setConTags]      = useState(INIT_CON_TAGS);
-  const [tagRoles,     setTagRoles]     = useState(INIT_TAG_EMAIL_ROLES);
+  const [tagRoles,     setTagRoles]     = useState(()=>bootstrapCache?.tagRoles ?? INIT_TAG_EMAIL_ROLES);
   // Selection
   const [selContact,   setSelContact]   = useState(null);
   const [mergeContact, setMergeContact] = useState(null);
@@ -4582,7 +4658,7 @@ function App({onSignOut}) {
   }, [selAccounts, messageList, selMsg]);
   const [selTag,       setSelTag]       = useState(null);
   const [editingContact,setEditingContact]=useState(null);
-  const [archivedContacts, setArchivedContacts] = useState(new Set());
+  const [archivedContacts, setArchivedContacts] = useState(()=>bootstrapCache?.archivedContacts ?? new Set());
   const [archivedTags,     setArchivedTags]     = useState(new Set());
   const [emailFlags,       setEmailFlags]       = useState(INIT_EMAIL_FLAGS);
   const [editingTag,       setEditingTag]       = useState(null);
@@ -4653,11 +4729,11 @@ function App({onSignOut}) {
   const [searchScope,      setSearchScope]      = useState('all');
   const [searchActive,     setSearchActive]     = useState(false);
   const userMenuRef = useRef(null);
-  const [signatures,       setSignatures]       = useState([]);
-  const [accountSigs,      setAccountSigs]      = useState({});
+  const [signatures,       setSignatures]       = useState(()=>bootstrapCache?.signatures ?? []);
+  const [accountSigs,      setAccountSigs]      = useState(()=>bootstrapCache?.accountSigs ?? {});
   const [contactFilter,    setContactFilter]    = useState('now');
   const [tagFilter,        setTagFilter]        = useState('all');
-  const [msgSnoozeCounts,  setMsgSnoozeCounts]  = useState({});
+  const [msgSnoozeCounts,  setMsgSnoozeCounts]  = useState(()=>bootstrapCache?.msgSnoozeCounts ?? {});
   const [actionToast,      setActionToast]      = useState(null);
   useEffect(()=>{
     if(!actionToast) return;
@@ -5710,17 +5786,13 @@ function App({onSignOut}) {
         accountSigs={accountSigs} setAccountSigs={setAccountSigs}
         mailAccounts={mailAccounts} onMailAccountsChanged={refreshData}/>}
 
-      {/* Data-loading / empty-state banner */}
-      {(dataLoading || dataError || (!dataLoading && contactList.length===0)) && (
+      {/* Empty-state / error banner — no longer shows a "loading" state, only
+         dataError or post-load empty. Sync feedback now lives entirely in the
+         spinner on the Sync button. */}
+      {(dataError || (!dataLoading && contactList.length===0)) && (
         <div className={`flex items-center gap-3 px-4 py-2 text-xs flex-shrink-0 border-b ${dataError?'bg-red-50 border-red-200 text-red-700':'bg-indigo-50 border-indigo-100 text-indigo-700'}`}>
-          {dataLoading && (
-            <>
-              <Spinner size={12}/>
-              <span>Loading contacts and mail…</span>
-            </>
-          )}
           {dataError && <span>Couldn't load data: {dataError}</span>}
-          {!dataLoading && !dataError && contactList.length===0 && (
+          {!dataError && contactList.length===0 && (
             <>
               <span>No mail synced yet.</span>
               <button onClick={()=>setSettingsTab('accounts')}
@@ -5905,7 +5977,7 @@ function Root() {
 
   if (!session) return <LoginScreen/>;
 
-  return <App onSignOut={async ()=>{ await sb.auth.signOut(); }}/>;
+  return <App userId={session.user?.id || null} onSignOut={async ()=>{ await sb.auth.signOut(); }}/>;
 }
 
 function RecoveryScreen({onDone}) {
