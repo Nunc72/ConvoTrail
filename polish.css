@@ -8,7 +8,7 @@
    query is bumped — no manual cache-busters required.
 
    !important is needed because Tailwind CDN injects its stylesheet
-   after the inline <style> in mockup-v5.html, which would otherwise
+   after the inline <style> in index.html, which would otherwise
    win on cascade. */
 
 /* Apple-grey canvas behind the columns. App root paints bg-gray-100

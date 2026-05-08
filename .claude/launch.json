@@ -2,7 +2,7 @@
   "version": "0.0.1",
   "configurations": [
     {
-      "name": "mockup",
+      "name": "convooz",
       "runtimeExecutable": "npx",
       "runtimeArgs": ["--yes", "serve", "-p", "4321", "-n", "."],
       "port": 4321
