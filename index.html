@@ -185,7 +185,7 @@
        polish change is picked up by every browser as soon as the version
        is bumped — no manual cache-busters needed. Keep ?v= here in sync
        with APP_VERSION below at every deploy. -->
-  <link rel="stylesheet" href="polish.css?v=0.0.120"/>
+  <link rel="stylesheet" href="polish.css?v=0.0.121"/>
 </head>
 <body>
 <div id="root">
@@ -200,7 +200,7 @@ const { useState, useMemo, useRef, useEffect, useCallback } = React;
 
 // ─── Constants ───────────────────────────────────────────────────────────────
 
-const APP_VERSION = "0.0.120"; // bumped on every deploy — keep in sync with version.json AND with the ?v= on polish.css above
+const APP_VERSION = "0.0.121"; // bumped on every deploy — keep in sync with version.json AND with the ?v= on polish.css above
 
 // ─── Backend + Supabase config ───────────────────────────────────────────────
 const SUPABASE_URL = "https://oyrlzqbjcsliesvunbwj.supabase.co";
@@ -4832,7 +4832,18 @@ function App({userId, onSignOut}) {
   const [editingTag,       setEditingTag]       = useState(null);
   const [leftCollapsed,    setLeftCollapsed]    = useState({contacts:false,tags:true,archive:true});
   const [settingsTab,      setSettingsTab]      = useState(null); // null | 'profile' | 'accounts' | 'signatures'
-  const [selAccounts,      setSelAccounts]      = useState([]);
+  // Lazy-init from the bootstrap cache: contactMeta filters contacts on
+  // (c.accountEmails ∩ selAccounts), so a default empty selAccounts on
+  // the first render hides EVERY contact even when the cache hydrated
+  // mailAccounts and contactList already. The useEffect below would set
+  // it on the next render, but on mobile that one-frame gap was visible
+  // as "blank UI" before contacts appeared. Init from cache so the very
+  // first paint already has the right account selection.
+  const [selAccounts,      setSelAccounts]      = useState(() => {
+    const accs = bootstrapCache?.mailAccounts;
+    if (!accs?.length) return [];
+    return accs.map(a => (a.email || '').toLowerCase()).filter(Boolean);
+  });
   // Once real accounts are loaded, select them all by default. If the user
   // had a subset selected and one of those accounts has been renamed (its
   // email changed) since the last load, the prune step below could leave
