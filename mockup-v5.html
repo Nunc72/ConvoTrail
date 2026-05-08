@@ -110,7 +110,7 @@
        polish change is picked up by every browser as soon as the version
        is bumped — no manual cache-busters needed. Keep ?v= here in sync
        with APP_VERSION below at every deploy. -->
-  <link rel="stylesheet" href="polish.css?v=0.0.106"/>
+  <link rel="stylesheet" href="polish.css?v=0.0.107"/>
 </head>
 <body>
 <div id="root"></div>
@@ -120,7 +120,7 @@ const { useState, useMemo, useRef, useEffect, useCallback } = React;
 
 // ─── Constants ───────────────────────────────────────────────────────────────
 
-const APP_VERSION = "0.0.106"; // bumped on every deploy — keep in sync with version.json AND with the ?v= on polish.css above
+const APP_VERSION = "0.0.107"; // bumped on every deploy — keep in sync with version.json AND with the ?v= on polish.css above
 
 // ─── Backend + Supabase config ───────────────────────────────────────────────
 const SUPABASE_URL = "https://oyrlzqbjcsliesvunbwj.supabase.co";
@@ -2508,7 +2508,8 @@ function MessageDetail({message,contact,isDeleted,msgTags,allTags,onReply,onRepl
             <div className="text-xs text-gray-400 mt-0.5">
               {message.dir==="in"
                 ? <><span className="text-gray-500">From:</span> {message.from}
-                    {selAccounts.length > 1 && <><br/><span className="text-gray-500">To:</span> {message.to}</>}
+                    <br/><span className="text-gray-500">To:</span> {message.toList?.length ? message.toList.join(', ') : message.to}
+                    {message.ccList?.length > 0 && <><br/><span className="text-gray-500">Cc:</span> {message.ccList.join(', ')}</>}
                   </>
                 : <><span className="text-gray-500">To:</span> {message.to}
                     {selAccounts.length > 1 && <><br/><span className="text-gray-500">From:</span> {message.from}</>}
