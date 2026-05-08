@@ -110,7 +110,7 @@
        polish change is picked up by every browser as soon as the version
        is bumped — no manual cache-busters needed. Keep ?v= here in sync
        with APP_VERSION below at every deploy. -->
-  <link rel="stylesheet" href="polish.css?v=0.0.102"/>
+  <link rel="stylesheet" href="polish.css?v=0.0.103"/>
 </head>
 <body>
 <div id="root"></div>
@@ -120,7 +120,7 @@ const { useState, useMemo, useRef, useEffect, useCallback } = React;
 
 // ─── Constants ───────────────────────────────────────────────────────────────
 
-const APP_VERSION = "0.0.102"; // bumped on every deploy — keep in sync with version.json AND with the ?v= on polish.css above
+const APP_VERSION = "0.0.103"; // bumped on every deploy — keep in sync with version.json AND with the ?v= on polish.css above
 
 // ─── Backend + Supabase config ───────────────────────────────────────────────
 const SUPABASE_URL = "https://oyrlzqbjcsliesvunbwj.supabase.co";
@@ -3528,7 +3528,7 @@ function LeftColumn({contactMeta, archivedContacts, selectedId, mergeId, onSelec
       </div>
 
       {/* CONTACTS + TAGS wrapper — fills all remaining space in left column */}
-      <div style={{flex:'1 1 0',minHeight:0,display:'flex',flexDirection:'column',overflow:'hidden',background:'#f9fafb'}}>
+      <div style={{flex:'1 1 0',minHeight:0,display:'flex',flexDirection:'column',overflow:'hidden',background:'#f5f6f8'}}>
 
         {/* CONTACTS content
             Tags open:   contacts min 43%, max 60% of wrapper; tags content fills rest.

@@ -18,11 +18,9 @@ body { background: #f5f6f8 !important; }
 .bg-gray-100 { background-color: #f5f6f8 !important; }
 
 /* Column dividers — keep the canvas grey running between the columns
-   so the "floating sheets" feel is preserved. Slightly wider than the
-   stock 5px so the gap is unmistakable. */
+   so the "floating sheets" feel is preserved. */
 .col-divider {
   background: #f5f6f8 !important;
-  width: 10px !important;
   box-shadow: none !important;
 }
 
