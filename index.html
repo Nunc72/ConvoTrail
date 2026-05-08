@@ -174,7 +174,7 @@
        polish change is picked up by every browser as soon as the version
        is bumped — no manual cache-busters needed. Keep ?v= here in sync
        with APP_VERSION below at every deploy. -->
-  <link rel="stylesheet" href="polish.css?v=0.0.123"/>
+  <link rel="stylesheet" href="polish.css?v=0.0.124"/>
 </head>
 <body>
 <div id="root">
@@ -189,7 +189,7 @@ const { useState, useMemo, useRef, useEffect, useCallback } = React;
 
 // ─── Constants ───────────────────────────────────────────────────────────────
 
-const APP_VERSION = "0.0.123"; // bumped on every deploy — keep in sync with version.json AND with the ?v= on polish.css above
+const APP_VERSION = "0.0.124"; // bumped on every deploy — keep in sync with version.json AND with the ?v= on polish.css above
 
 // ─── Backend + Supabase config ───────────────────────────────────────────────
 const SUPABASE_URL = "https://oyrlzqbjcsliesvunbwj.supabase.co";
@@ -4552,26 +4552,23 @@ function App({userId, onSignOut}) {
         const __dbgOut = messages.filter(m => m.direction === 'out').length;
         console.log('[Convooz bootstrap] messages from API — in:', __dbgIn, 'out:', __dbgOut, 'drafts:', (drafts||[]).length, 'contacts:', contacts.length);
         const __dbgDroppedOut = [];
-        // Self-mails (between two of the user's own accounts) anchor under
-        // the contact for the mail-account this copy lives in, so each
-        // mailbox sees its own perspective:
-        //   werk@ → prive@   →  INBOX copy in prive@'s inbox lands under
-        //                       contact "prive@" as direction=in;
-        //                       SENT copy in werk@'s sent lands under
-        //                       contact "werk@" as direction=out.
-        // For non-self-mails: in-mails anchor on the sender, out-mails on
-        // the recipient — the "other party" of the conversation.
-        const myAccountEmails = new Set((mail_accounts || [])
-          .map(a => (a.email || '').toLowerCase())
-          .filter(Boolean));
+        // Standard anchoring works for self-mails too: each copy goes
+        // under the "other party" of the conversation, regardless of
+        // whether that other party happens to be one of the user's own
+        // accounts. Concretely for werk@ → prive@:
+        //   INBOX copy in prive@'s inbox  (dir=in)  → contact werk@ (sender)
+        //   SENT copy in werk@'s sent     (dir=out) → contact prive@ (recipient)
+        // The same self-mail therefore appears twice across two contact
+        // threads, mirroring how the user thinks about it: the werk@
+        // contact thread shows it as "incoming on werk@", the prive@
+        // thread shows it as "outgoing from prive@". (Earlier code added
+        // a special-case that anchored both copies to one side, hiding
+        // half the picture.)
         const shapedMessages = messages.map(m => {
           const accountEmail = accountEmailById.get(m.mail_account_id) ?? '';
           const fromEmail = (m.from_email || '').toLowerCase();
           const firstTo = (m.to_emails?.[0]?.email || '').toLowerCase();
-          const isSelfMail = myAccountEmails.has(fromEmail) && myAccountEmails.has(firstTo);
-          const otherEmail = isSelfMail
-            ? accountEmail
-            : (m.direction === 'in' ? fromEmail : firstTo);
+          const otherEmail = m.direction === 'in' ? fromEmail : firstTo;
           const contactId = emailToContactId.get(otherEmail) ?? null;
           if (m.direction === 'out' && contactId === null) {
             __dbgDroppedOut.push({ id: m.id, to: otherEmail, subject: m.subject });
