@@ -169,18 +169,22 @@
       width: 40%;
       background: #6366f1;
       border-radius: 999px;
-      animation: bootloader-slide 1.1s infinite cubic-bezier(.4,0,.2,1);
+      /* alternate-direction + linear easing: the bar slides from the left
+         edge to the right edge, then reverses, forever. No ease-out at
+         the endpoints means it never visibly "stalls" — it just keeps
+         going back and forth as long as the bootloader is on screen. */
+      animation: bootloader-slide 1.6s infinite alternate linear;
     }
     @keyframes bootloader-slide {
-      0%   { left: -40%; }
-      100% { left: 100%; }
+      0%   { left: 0%;  }
+      100% { left: 60%; }
     }
   </style>
   <!-- Apple-style polish lives in its own file with a version query so a
        polish change is picked up by every browser as soon as the version
        is bumped — no manual cache-busters needed. Keep ?v= here in sync
        with APP_VERSION below at every deploy. -->
-  <link rel="stylesheet" href="polish.css?v=0.0.118"/>
+  <link rel="stylesheet" href="polish.css?v=0.0.119"/>
 </head>
 <body>
 <div id="root">
@@ -195,7 +199,7 @@ const { useState, useMemo, useRef, useEffect, useCallback } = React;
 
 // ─── Constants ───────────────────────────────────────────────────────────────
 
-const APP_VERSION = "0.0.118"; // bumped on every deploy — keep in sync with version.json AND with the ?v= on polish.css above
+const APP_VERSION = "0.0.119"; // bumped on every deploy — keep in sync with version.json AND with the ?v= on polish.css above
 
 // ─── Backend + Supabase config ───────────────────────────────────────────────
 const SUPABASE_URL = "https://oyrlzqbjcsliesvunbwj.supabase.co";
@@ -2458,8 +2462,16 @@ function MessageDetail({message,contact,isDeleted,msgTags,allTags,onReply,onRepl
   useEffect(()=>{
     setEnriched(null); setEnrichedErr(''); setPreviewIdx(null);
     if (!message || message.draft) return;
-    const needs = message.hasAttachments || (typeof message.bodyHtml === 'string' && /cid:/i.test(message.bodyHtml));
-    if (!needs) return;
+    // Three reasons to hit /body in parallel with the page-level bootstrap:
+    //  - the message has attachments (need the public attachment list)
+    //  - inline cid: refs in bodyHtml that need server-side rewriting to data URIs
+    //  - the message came out of the bootstrap cache with body+bodyHtml stripped,
+    //    so we have nothing to show until either /body or /bootstrap returns.
+    //    Fetching /body directly is much faster than waiting for the full
+    //    bootstrap to land, so the user sees the message body sooner.
+    const needsAttachmentEnrichment = message.hasAttachments || (typeof message.bodyHtml === 'string' && /cid:/i.test(message.bodyHtml));
+    const needsBodyFetch = message.body === undefined && message.bodyHtml === undefined;
+    if (!needsAttachmentEnrichment && !needsBodyFetch) return;
     let cancelled = false;
     setEnrichedLoading(true);
     apiFetch(`/messages/${message.id}/body`)
@@ -2630,11 +2642,14 @@ function MessageDetail({message,contact,isDeleted,msgTags,allTags,onReply,onRepl
       <div className="px-5 py-4 text-sm text-gray-700 leading-relaxed" style={{wordBreak:'break-word', overflowWrap:'anywhere'}}>
         {(() => {
           // Cache-hydrated messages have body and bodyHtml stripped (cache
-          // would otherwise blow the localStorage quota). undefined on both
-          // means "not loaded yet"; '' / null means "genuinely empty body".
-          // Show a spinner only in the not-loaded case so attachment-only
-          // mails don't get a permanent spinner.
-          if (message.body === undefined && message.bodyHtml === undefined) return (
+          // would otherwise blow the localStorage quota). The /body fetch
+          // above runs in parallel and fills `enriched`; once it lands we
+          // can render from there. Spinner only when we genuinely have
+          // nothing to show yet — neither the message prop nor enriched.
+          const noBodyAtAll =
+            message.body === undefined && message.bodyHtml === undefined &&
+            !enriched && !enrichedErr;
+          if (noBodyAtAll) return (
             <div className="flex items-center gap-2 text-sm text-gray-400 italic">
               <Spinner size={14}/>
               <span>Loading full message…</span>
@@ -2642,11 +2657,15 @@ function MessageDetail({message,contact,isDeleted,msgTags,allTags,onReply,onRepl
           );
           const htmlToRender = enriched?.html || message.bodyHtml;
           if (htmlToRender) return <HtmlMessageBody html={htmlToRender}/>;
-          // Plain-text body: each newline becomes its own <p>.
+          // Plain-text body: each newline becomes its own <p>. Fall back to
+          // enriched.text when the cache-stripped message has no body of
+          // its own (the parallel /body fetch fills enriched.text when the
+          // mail is plain-text only).
           // `overflow-wrap: anywhere` on the parent wraps long unbroken runs
           // like signature dividers (————————…) and URL-ish tokens so the
           // column never has to scroll horizontally on narrow screens.
-          if (message.body?.trim()) return message.body.split("\n").map((line,i)=>(
+          const textBody = (message.body && message.body.trim()) ? message.body : (enriched?.text || '');
+          if (textBody.trim()) return textBody.split("\n").map((line,i)=>(
             <p key={i} className={line.startsWith("—")||line.startsWith("——")?"text-gray-300 mt-3":"min-h-[1em]"}>{line}</p>
           ));
           // Spinner only when we expect inline HTML images to be rewritten
