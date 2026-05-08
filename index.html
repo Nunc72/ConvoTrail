@@ -110,7 +110,7 @@
        polish change is picked up by every browser as soon as the version
        is bumped — no manual cache-busters needed. Keep ?v= here in sync
        with APP_VERSION below at every deploy. -->
-  <link rel="stylesheet" href="polish.css?v=0.0.114"/>
+  <link rel="stylesheet" href="polish.css?v=0.0.115"/>
 </head>
 <body>
 <div id="root"></div>
@@ -120,7 +120,7 @@ const { useState, useMemo, useRef, useEffect, useCallback } = React;
 
 // ─── Constants ───────────────────────────────────────────────────────────────
 
-const APP_VERSION = "0.0.114"; // bumped on every deploy — keep in sync with version.json AND with the ?v= on polish.css above
+const APP_VERSION = "0.0.115"; // bumped on every deploy — keep in sync with version.json AND with the ?v= on polish.css above
 
 // ─── Backend + Supabase config ───────────────────────────────────────────────
 const SUPABASE_URL = "https://oyrlzqbjcsliesvunbwj.supabase.co";
@@ -6037,6 +6037,25 @@ function Root() {
       if (event === 'USER_UPDATED' && recoveryMode) setRecoveryMode(false);
     });
     return () => sub.subscription.unsubscribe();
+  }, []);
+
+  // Auto-update on every cold start. iOS PWA standalone-mode keeps the
+  // HTML in its own cache and ignores the no-cache meta tags, so a
+  // returning user often opens the previous build's HTML and stays on
+  // it until they manually click the version row. Fetching version.json
+  // with cache:'no-store' and redirecting to ?v=<new> on a mismatch
+  // forces a fresh HTML download exactly once per upgrade.
+  useEffect(() => {
+    let cancelled = false;
+    fetch('version.json?t=' + Date.now(), { cache: 'no-store' })
+      .then(r => r.ok ? r.json() : null)
+      .then(j => {
+        if (cancelled || !j?.version || j.version === APP_VERSION) return;
+        console.log('[auto-update] version.json says', j.version, '— reloading');
+        window.location.replace(window.location.pathname + '?v=' + j.version);
+      })
+      .catch(() => {});
+    return () => { cancelled = true; };
   }, []);
 
   if (session === undefined) {
