@@ -24,7 +24,9 @@ body { background: #f5f6f8 !important; }
   background-color: #f5f6f8 !important;
 }
 [data-col="1"] .border-b.cursor-pointer {
-  background-color: #ffffff !important;
+  /* Subtly lighter than the column canvas (#f5f6f8) so the rows read
+     as slightly raised, not as pure-white slabs. */
+  background-color: #fafbfc !important;
 }
 [data-col="1"] .border-b.cursor-pointer:hover {
   background-color: rgba(99,102,241,0.06) !important;
