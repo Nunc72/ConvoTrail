@@ -30,6 +30,39 @@
   <link rel="apple-touch-icon-precomposed" href="apple-touch-icon-180.png"/>
   <link rel="icon" type="image/png" sizes="192x192" href="icon-192.png"/>
   <link rel="icon" type="image/png" sizes="512x512" href="icon-512.png"/>
+  <!-- Pre-redirect: runs before the React bundles even start downloading,
+       so an iOS PWA that opens a cached older HTML jumps to ?v=<latest>
+       within ~200 ms instead of after the 5 s React boot. The redirect URL
+       is a different cache key, so iOS fetches a fresh copy from the
+       server. Once the user is on a build with the service worker
+       installed, the SW handles freshness and this is just a safety net
+       for the very first migration. -->
+  <script>
+    (async () => {
+      try {
+        const r = await fetch('version.json?t=' + Date.now(), { cache: 'no-store' });
+        if (!r.ok) return;
+        const { version } = await r.json();
+        if (!version) return;
+        const url = new URL(location.href);
+        if (url.searchParams.get('v') !== version) {
+          url.searchParams.set('v', version);
+          location.replace(url.pathname + url.search);
+        }
+      } catch {}
+    })();
+  </script>
+  <!-- Service worker: network-first for HTML and same-origin static
+       assets. iOS Safari ignores Cache-Control on the PWA shell, so
+       without this every kill+reopen lands on the install-time HTML.
+       The SW lets a deploy reach the running PWA on the next navigation. -->
+  <script>
+    if ('serviceWorker' in navigator) {
+      window.addEventListener('load', () => {
+        navigator.serviceWorker.register('service-worker.js').catch(() => {});
+      });
+    }
+  </script>
   <!-- defer on every external script: download in parallel with HTML parsing
        and execute in source order after the document is parsed. Without
        defer the browser blocks rendering on each tag, so the body (and the
@@ -147,7 +180,7 @@
        polish change is picked up by every browser as soon as the version
        is bumped — no manual cache-busters needed. Keep ?v= here in sync
        with APP_VERSION below at every deploy. -->
-  <link rel="stylesheet" href="polish.css?v=0.0.117"/>
+  <link rel="stylesheet" href="polish.css?v=0.0.118"/>
 </head>
 <body>
 <div id="root">
@@ -162,7 +195,7 @@ const { useState, useMemo, useRef, useEffect, useCallback } = React;
 
 // ─── Constants ───────────────────────────────────────────────────────────────
 
-const APP_VERSION = "0.0.117"; // bumped on every deploy — keep in sync with version.json AND with the ?v= on polish.css above
+const APP_VERSION = "0.0.118"; // bumped on every deploy — keep in sync with version.json AND with the ?v= on polish.css above
 
 // ─── Backend + Supabase config ───────────────────────────────────────────────
 const SUPABASE_URL = "https://oyrlzqbjcsliesvunbwj.supabase.co";
