@@ -110,7 +110,7 @@
        polish change is picked up by every browser as soon as the version
        is bumped — no manual cache-busters needed. Keep ?v= here in sync
        with APP_VERSION below at every deploy. -->
-  <link rel="stylesheet" href="polish.css?v=0.0.111"/>
+  <link rel="stylesheet" href="polish.css?v=0.0.112"/>
 </head>
 <body>
 <div id="root"></div>
@@ -120,7 +120,7 @@ const { useState, useMemo, useRef, useEffect, useCallback } = React;
 
 // ─── Constants ───────────────────────────────────────────────────────────────
 
-const APP_VERSION = "0.0.111"; // bumped on every deploy — keep in sync with version.json AND with the ?v= on polish.css above
+const APP_VERSION = "0.0.112"; // bumped on every deploy — keep in sync with version.json AND with the ?v= on polish.css above
 
 // ─── Backend + Supabase config ───────────────────────────────────────────────
 const SUPABASE_URL = "https://oyrlzqbjcsliesvunbwj.supabase.co";
@@ -4235,12 +4235,20 @@ const RETENTION_OPTIONS = [
 const BOOTSTRAP_CACHE_SCHEMA = 1;
 function bootstrapCacheKey(uid) { return `convooz:bootstrap:${uid}:s${BOOTSTRAP_CACHE_SCHEMA}`; }
 function readBootstrapCache(uid) {
-  if (!uid) return null;
+  if (!uid) { console.log('[cache] read skipped: no userId'); return null; }
   try {
     const raw = localStorage.getItem(bootstrapCacheKey(uid));
-    if (!raw) return null;
+    if (!raw) { console.log('[cache] read miss: no entry for key', bootstrapCacheKey(uid)); return null; }
     const obj = JSON.parse(raw);
-    if (!obj || obj.v !== BOOTSTRAP_CACHE_SCHEMA) return null;
+    if (!obj || obj.v !== BOOTSTRAP_CACHE_SCHEMA) {
+      console.log('[cache] read miss: schema mismatch (got', obj?.v, 'want', BOOTSTRAP_CACHE_SCHEMA, ')');
+      return null;
+    }
+    const ageSec = obj.writtenAt ? Math.round((Date.now() - obj.writtenAt) / 1000) : null;
+    console.log('[cache] read hit:',
+      (obj.contactList || []).length, 'contacts,',
+      (obj.messageList || []).length, 'messages, age',
+      ageSec === null ? 'unknown' : ageSec + 's');
     return {
       mailAccounts:     obj.mailAccounts     || [],
       contactList:      obj.contactList      || [],
@@ -4254,14 +4262,35 @@ function readBootstrapCache(uid) {
       msgSnoozeCounts:  obj.msgSnoozeCounts  || {},
       signatures:       obj.signatures       || [],
       accountSigs:      obj.accountSigs      || {},
+      writtenAt:        obj.writtenAt        || null,
     };
-  } catch { return null; }
+  } catch (e) { console.warn('[cache] read error:', e.message); return null; }
 }
-function writeBootstrapCache(uid, snap) {
-  if (!uid) return;
+// Returns a short human-readable description of the bootstrap cache for
+// the user-menu — "Cache: empty", "Cache: 87 KB · 4m ago" etc. so a tester
+// can verify on their phone whether last-seen content is being persisted.
+function readCacheStatus(uid) {
+  if (!uid) return 'Cache: (no user)';
   try {
-    localStorage.setItem(bootstrapCacheKey(uid), JSON.stringify({
+    const raw = localStorage.getItem(bootstrapCacheKey(uid));
+    if (!raw) return 'Cache: empty';
+    const obj = JSON.parse(raw);
+    const kb = Math.round(raw.length / 1024);
+    const ageS = obj.writtenAt ? Math.round((Date.now() - obj.writtenAt) / 1000) : null;
+    const ageStr = ageS == null ? 'unknown age'
+      : ageS < 60 ? `${ageS}s ago`
+      : ageS < 3600 ? `${Math.round(ageS / 60)}m ago`
+      : `${Math.round(ageS / 3600)}h ago`;
+    return `Cache: ${kb} KB · ${ageStr}`;
+  } catch { return 'Cache: read error'; }
+}
+
+function writeBootstrapCache(uid, snap) {
+  if (!uid) { console.log('[cache] write skipped: no userId'); return; }
+  try {
+    const payload = JSON.stringify({
       v: BOOTSTRAP_CACHE_SCHEMA,
+      writtenAt: Date.now(),
       mailAccounts:     snap.mailAccounts,
       contactList:      snap.contactList,
       messageList:      snap.messageList,
@@ -4274,8 +4303,13 @@ function writeBootstrapCache(uid, snap) {
       msgSnoozeCounts:  snap.msgSnoozeCounts,
       signatures:       snap.signatures,
       accountSigs:      snap.accountSigs,
-    }));
-  } catch {}
+    });
+    localStorage.setItem(bootstrapCacheKey(uid), payload);
+    console.log('[cache] write ok:',
+      snap.contactList.length, 'contacts,',
+      snap.messageList.length, 'messages,',
+      Math.round(payload.length / 1024), 'KB');
+  } catch (e) { console.warn('[cache] write error:', e.message); }
 }
 
 function App({userId, onSignOut}) {
@@ -5687,6 +5721,7 @@ function App({userId, onSignOut}) {
                      : updateStatus==='error' ? `v${APP_VERSION} · check failed`
                      : `v${APP_VERSION}`}
                   </button>
+                  <div className="px-3 pb-1.5 text-xs text-gray-400">{readCacheStatus(userId)}</div>
                 </div>
               )}
             </div>
@@ -5780,6 +5815,7 @@ function App({userId, onSignOut}) {
                      : updateStatus==='error' ? `v${APP_VERSION} · check failed`
                      : `v${APP_VERSION}`}
                   </button>
+                  <div className="px-3 pb-1.5 text-xs text-gray-400">{readCacheStatus(userId)}</div>
                 </div>
               )}
             </div>
