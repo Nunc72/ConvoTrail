@@ -77,6 +77,10 @@ export async function syncAccount(accountId: string): Promise<SyncResult> {
 
   const folderStats: FolderSyncStat[] = [];
   let contactsCreated = 0;
+  // Sum of UIDs the server has within the SINCE_DAYS window across the
+  // folders we sync. Persisted to mail_accounts.sync_known_uids so the UI
+  // can render "324 / 5000 synced" while the per-folder catch-up runs.
+  let sumKnownUids = 0;
 
   try {
     await client.connect();
@@ -99,6 +103,7 @@ export async function syncAccount(accountId: string): Promise<SyncResult> {
 
         // UIDs since SINCE_DAYS, IMAP returns them ascending (oldest → newest).
         const uids = (await client.search({ since }, { uid: true })) as number[];
+        sumKnownUids += uids.length;
         if (uids.length === 0) { folderStats.push(stat); continue; }
 
         // Find UIDs we already have. Earlier code only checked the newest N
@@ -156,9 +161,13 @@ export async function syncAccount(accountId: string): Promise<SyncResult> {
       contactsCreated = await upsertContacts(userId, allExtractedAddrs);
     }
 
-    // 4) Update last_sync_at / clear last_error
+    // 4) Update last_sync_at, sync_known_uids, clear last_error
     await supabaseAdmin.from("mail_accounts")
-      .update({ last_sync_at: new Date().toISOString(), last_error: null })
+      .update({
+        last_sync_at: new Date().toISOString(),
+        last_error: null,
+        sync_known_uids: sumKnownUids,
+      })
       .eq("id", acc.id);
 
     return { ok: true, folders: folderStats, contactsCreated, durationMs: Date.now() - started };

@@ -9,10 +9,16 @@ export async function registerDataRoutes(app: FastifyInstance) {
   app.get<{ Querystring: { limit?: string } }>("/bootstrap", auth, async (req, reply) => {
     const limit = Math.min(Number(req.query.limit) || 500, 2000);
     const sb = supabaseWithJwt(req.authJwt!);
-    const [accountsRes, contactsRes, messagesRes, draftsRes, tagsRes, msgTagsRes, r2mRes, sigsRes, accSigsRes, draftAttsRes] = await Promise.all([
+    // Phase 1: metadata only — body_text and body_html are excluded from
+    // the messages select so the bootstrap payload stays small. Bodies are
+    // fetched in phase 2 below for the messages the user is most likely
+    // to open immediately (unread incoming + active revert-to-me). The
+    // detail view falls back to GET /messages/:id/body for everything
+    // else, fetched on demand when the user opens a message.
+    const [accountsRes, contactsRes, messagesRes, draftsRes, tagsRes, msgTagsRes, r2mRes, sigsRes, accSigsRes, draftAttsRes, msgCountsRes] = await Promise.all([
       sb.from("mail_accounts").select(
         "id, email, display_name, provider, last_sync_at, auto_sync, " +
-        "retention_deleted_days, retention_spam_days",
+        "retention_deleted_days, retention_spam_days, sync_known_uids",
       ).order("created_at", { ascending: true }),
       sb.from("contacts").select(
         "id, name, org, color, portrait_url, r2m_days, primary_email, archived_at, " +
@@ -21,7 +27,7 @@ export async function registerDataRoutes(app: FastifyInstance) {
       ).order("name", { ascending: true }),
       sb.from("messages").select(
         "id, mail_account_id, folder, uid, message_id, thread_id, from_email, from_name, to_emails, " +
-        "subject, snippet, body_text, body_html, date, flags, direction, deleted_at, has_attachments",
+        "subject, snippet, date, flags, direction, deleted_at, has_attachments",
       ).order("date", { ascending: false }).limit(limit),
       sb.from("drafts").select(
         "id, mail_account_id, to_emails, cc_emails, bcc_emails, subject, body, " +
@@ -36,6 +42,11 @@ export async function registerDataRoutes(app: FastifyInstance) {
       sb.from("account_signatures").select("mail_account_id, signature_id, is_auto"),
       sb.from("draft_attachments").select("id, draft_id, filename, content_type, size, created_at")
         .order("created_at", { ascending: true }),
+      // Per-account synced count for the user-menu progress display.
+      // Excludes soft-deleted rows since those don't contribute to "X / Y
+      // synced".
+      sb.from("messages").select("mail_account_id", { count: "exact", head: false })
+        .is("deleted_at", null),
     ]);
     if (accountsRes.error) return reply.internalServerError(accountsRes.error.message);
     if (contactsRes.error) return reply.internalServerError(contactsRes.error.message);
@@ -47,10 +58,53 @@ export async function registerDataRoutes(app: FastifyInstance) {
     if (sigsRes.error)     return reply.internalServerError(sigsRes.error.message);
     if (accSigsRes.error)  return reply.internalServerError(accSigsRes.error.message);
     if (draftAttsRes.error) return reply.internalServerError(draftAttsRes.error.message);
+    if (msgCountsRes.error) return reply.internalServerError(msgCountsRes.error.message);
+
+    // Phase 2: collect bodies for the "actionable" subset — unread incoming
+    // mail and active revert-to-me — so those open instantly when the user
+    // taps them. RLS already constrains both queries to the user's own
+    // rows, so we can scope the IN-list by id without extra checks.
+    const r2mActiveIds = new Set(
+      (r2mRes.data ?? [])
+        .filter(r => r.dismissed_at === null)
+        .map(r => r.message_id),
+    );
+    const actionableIds = (messagesRes.data ?? [])
+      .filter(m => {
+        if (r2mActiveIds.has(m.id)) return true;
+        if (m.direction !== 'in') return false;
+        const seen = (m.flags as { seen?: boolean } | null)?.seen;
+        return !seen;
+      })
+      .map(m => m.id);
+    const bodiesById = new Map<string, { body_text: string | null; body_html: string | null }>();
+    if (actionableIds.length > 0) {
+      const bodiesRes = await sb.from("messages")
+        .select("id, body_text, body_html")
+        .in("id", actionableIds);
+      if (bodiesRes.error) return reply.internalServerError(bodiesRes.error.message);
+      for (const row of (bodiesRes.data ?? [])) {
+        bodiesById.set(row.id as string, {
+          body_text: (row.body_text as string | null) ?? null,
+          body_html: (row.body_html as string | null) ?? null,
+        });
+      }
+    }
+    // Aggregate per-account counts. The Supabase head:false count returns
+    // the rows themselves; we just tally them by mail_account_id.
+    const messageCountByAccount: Record<string, number> = {};
+    for (const row of (msgCountsRes.data ?? [])) {
+      const aid = (row as { mail_account_id: string }).mail_account_id;
+      messageCountByAccount[aid] = (messageCountByAccount[aid] ?? 0) + 1;
+    }
+    const messagesWithBodies = (messagesRes.data ?? []).map(m => {
+      const body = bodiesById.get(m.id as string);
+      return body ? { ...m, body_text: body.body_text, body_html: body.body_html } : m;
+    });
     return {
       mail_accounts: accountsRes.data,
       contacts: contactsRes.data,
-      messages: messagesRes.data,
+      messages: messagesWithBodies,
       drafts: draftsRes.data,
       tags: tagsRes.data,
       message_tags: msgTagsRes.data,
@@ -58,6 +112,7 @@ export async function registerDataRoutes(app: FastifyInstance) {
       signatures: sigsRes.data,
       account_signatures: accSigsRes.data,
       draft_attachments: draftAttsRes.data,
+      message_count_by_account: messageCountByAccount,
     };
   });
 

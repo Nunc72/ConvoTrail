@@ -174,7 +174,7 @@
        polish change is picked up by every browser as soon as the version
        is bumped — no manual cache-busters needed. Keep ?v= here in sync
        with APP_VERSION below at every deploy. -->
-  <link rel="stylesheet" href="polish.css?v=0.0.124"/>
+  <link rel="stylesheet" href="polish.css?v=0.0.125"/>
 </head>
 <body>
 <div id="root">
@@ -189,7 +189,7 @@ const { useState, useMemo, useRef, useEffect, useCallback } = React;
 
 // ─── Constants ───────────────────────────────────────────────────────────────
 
-const APP_VERSION = "0.0.124"; // bumped on every deploy — keep in sync with version.json AND with the ?v= on polish.css above
+const APP_VERSION = "0.0.125"; // bumped on every deploy — keep in sync with version.json AND with the ?v= on polish.css above
 
 // ─── Backend + Supabase config ───────────────────────────────────────────────
 const SUPABASE_URL = "https://oyrlzqbjcsliesvunbwj.supabase.co";
@@ -2916,7 +2916,7 @@ function ThreadColumn({contact,allMsgs,deletedIds,selectedMsgId,msgTags,onSelect
                   {isDraft?<span className="text-xs px-1.5 rounded font-medium bg-gray-100 text-gray-500 flex-shrink-0">Draft</span>
                     :<span className={`text-xs px-1.5 rounded font-medium flex-shrink-0 ${msg.dir==="in"?"bg-sky-100 text-sky-600":"bg-emerald-100 text-emerald-600"}`}>{msg.dir==="in"?"In":"Out"}</span>}
                   {isDel&&<span className="text-xs px-1.5 rounded font-medium bg-red-100 text-red-500 flex-shrink-0">Deleted</span>}
-                  <span className="text-xs text-gray-400 truncate flex-1 min-w-0">{(msg.body||'').replace(/\n/g," ")}</span>
+                  <span className="text-xs text-gray-400 truncate flex-1 min-w-0">{(msg.snippet||msg.body||'').replace(/\n/g," ")}</span>
                 </div>
               </div>
             );
@@ -3010,7 +3010,7 @@ function ThreadColumn({contact,allMsgs,deletedIds,selectedMsgId,msgTags,onSelect
                 {isDraft?<span className="text-xs px-1.5 rounded font-medium bg-gray-100 text-gray-500 flex-shrink-0">Draft</span>
                   :<span className={`text-xs px-1.5 rounded font-medium flex-shrink-0 ${msg.dir==="in"?"bg-sky-100 text-sky-600":"bg-emerald-100 text-emerald-600"}`}>{msg.dir==="in"?"In":"Out"}</span>}
                 {isDel&&<span className="text-xs px-1.5 rounded font-medium bg-red-100 text-red-500 flex-shrink-0">Deleted</span>}
-                <span className="text-xs text-gray-400 truncate flex-1 min-w-0">{(msg.body||'').replace(/\n/g," ")}</span>
+                <span className="text-xs text-gray-400 truncate flex-1 min-w-0">{(msg.snippet||msg.body||'').replace(/\n/g," ")}</span>
               </div>
             </div>
           );
@@ -3163,7 +3163,7 @@ function TagView({tag, messages, contacts, deletedIds, msgTags, emailRoles, myEm
                 <span className="text-xs text-gray-600 truncate">{msg.subject}</span>
               </div>
               <div className="pl-[38px] pr-14 mt-0.5">
-                <span className="text-xs text-gray-400 truncate block">{(msg.body||'').replace(/\n/g," ")}</span>
+                <span className="text-xs text-gray-400 truncate block">{(msg.snippet||msg.body||'').replace(/\n/g," ")}</span>
               </div>
             </div>
           );
@@ -3303,7 +3303,7 @@ function GlobalSearchResults({messages, contacts, deletedIds, msgTags, msgMatche
               </div>
               <div className="flex gap-2 pr-4 mt-0.5">
                 <div style={{width:20,flexShrink:0}}/>
-                <span className="text-xs text-gray-400 truncate flex-1">{(msg.body||'').replace(/\n/g," ")}</span>
+                <span className="text-xs text-gray-400 truncate flex-1">{(msg.snippet||msg.body||'').replace(/\n/g," ")}</span>
               </div>
             </div>
           );
@@ -4364,6 +4364,24 @@ function readBootstrapCache(uid) {
 // Returns a short human-readable description of the bootstrap cache for
 // the user-menu — "Cache: empty", "Cache: 87 KB · 4m ago" etc. so a tester
 // can verify on their phone whether last-seen content is being persisted.
+// Aggregate per-account sync progress for the user-menu line. Each account
+// row carries messages_count (rows in our DB) and sync_known_uids (UIDs the
+// IMAP server reported in scope at last sync). The catch-up loop reduces
+// (known - synced) to zero one batch at a time, so this is the user-visible
+// "X of Y mails synced" indicator. Returns null when nothing meaningful can
+// be shown yet — e.g. a fresh account that has never finished its first
+// sync, where sync_known_uids is still NULL.
+function syncProgressLine(mailAccounts) {
+  let synced = 0, known = 0, anyKnown = false;
+  for (const a of (mailAccounts || [])) {
+    synced += a.messages_count || 0;
+    if (a.sync_known_uids != null) { known += a.sync_known_uids; anyKnown = true; }
+  }
+  if (!anyKnown) return null;
+  if (synced >= known) return `Sync: all ${synced} mails synced`;
+  return `Sync: ${synced} of ${known} mails`;
+}
+
 function readCacheStatus(uid) {
   if (!uid) return 'Cache: (no user)';
   try {
@@ -4473,7 +4491,14 @@ function App({userId, onSignOut}) {
       setDataError('');
       setBootstrapFetching(true);
       try {
-        const { mail_accounts, contacts, messages, drafts, tags, message_tags, r2m_state, signatures: sigs, account_signatures: accSigs, draft_attachments: draftAtts } = await apiFetch('/bootstrap?limit=500');
+        const { mail_accounts: rawAccounts, contacts, messages, drafts, tags, message_tags, r2m_state, signatures: sigs, account_signatures: accSigs, draft_attachments: draftAtts, message_count_by_account } = await apiFetch('/bootstrap?limit=500');
+        // Pin the per-account synced count onto each mailAccount object so
+        // the user-menu progress widget can read mailAccount.messages_count
+        // / mailAccount.sync_known_uids without a separate state slice.
+        const mail_accounts = (rawAccounts || []).map(a => ({
+          ...a,
+          messages_count: (message_count_by_account || {})[a.id] || 0,
+        }));
         if (cancelled) return;
 
         // accountId → email lookup
@@ -4597,6 +4622,16 @@ function App({userId, onSignOut}) {
           const allRecipients = Array.isArray(m.to_emails) ? m.to_emails : [];
           const toList = allRecipients.filter(e => (e.role || 'to') === 'to').map(e => e.email).filter(Boolean);
           const ccList = allRecipients.filter(e => e.role === 'cc').map(e => e.email).filter(Boolean);
+          // body_text / body_html are only present on the bootstrap payload
+          // for "actionable" messages (unread incoming + active r2m); the
+          // backend strips them from the rest to keep the response small
+          // and the messageList footprint manageable. Treat undefined as
+          // "not loaded yet" — MessageDetail fires GET /messages/:id/body
+          // on demand for those, and renders a brief spinner in the
+          // meantime. The list-row preview uses `snippet` instead of body
+          // so every row still shows a one-line teaser.
+          const hasBodyText = typeof m.body_text === 'string';
+          const hasBodyHtml = typeof m.body_html === 'string';
           return {
             id: m.id,
             accountId: m.mail_account_id,
@@ -4613,8 +4648,9 @@ function App({userId, onSignOut}) {
             revert2me: r2mActive,
             r2mArmed: !!r2mRow && !r2mRow.dismissed_at,
             draft: !!m.flags?.draft,
-            body: m.body_text || m.snippet || '',
-            bodyHtml: (typeof m.body_html === 'string' && m.body_html.trim()) ? m.body_html : null,
+            body: hasBodyText ? m.body_text : undefined,
+            bodyHtml: hasBodyHtml ? (m.body_html.trim() ? m.body_html : null) : undefined,
+            snippet: m.snippet || '',
             hasAttachments: !!m.has_attachments,
             sender,
           };
@@ -5849,6 +5885,9 @@ function App({userId, onSignOut}) {
                      : `v${APP_VERSION}`}
                   </button>
                   <div className="px-3 pb-1.5 text-xs text-gray-400">{readCacheStatus(userId)}</div>
+                  {syncProgressLine(mailAccounts) && (
+                    <div className="px-3 pb-1.5 text-xs text-gray-400">{syncProgressLine(mailAccounts)}</div>
+                  )}
                 </div>
               )}
             </div>
@@ -5943,6 +5982,9 @@ function App({userId, onSignOut}) {
                      : `v${APP_VERSION}`}
                   </button>
                   <div className="px-3 pb-1.5 text-xs text-gray-400">{readCacheStatus(userId)}</div>
+                  {syncProgressLine(mailAccounts) && (
+                    <div className="px-3 pb-1.5 text-xs text-gray-400">{syncProgressLine(mailAccounts)}</div>
+                  )}
                 </div>
               )}
             </div>
