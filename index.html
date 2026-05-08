@@ -110,7 +110,7 @@
        polish change is picked up by every browser as soon as the version
        is bumped — no manual cache-busters needed. Keep ?v= here in sync
        with APP_VERSION below at every deploy. -->
-  <link rel="stylesheet" href="polish.css?v=0.0.112"/>
+  <link rel="stylesheet" href="polish.css?v=0.0.113"/>
 </head>
 <body>
 <div id="root"></div>
@@ -120,7 +120,7 @@ const { useState, useMemo, useRef, useEffect, useCallback } = React;
 
 // ─── Constants ───────────────────────────────────────────────────────────────
 
-const APP_VERSION = "0.0.112"; // bumped on every deploy — keep in sync with version.json AND with the ?v= on polish.css above
+const APP_VERSION = "0.0.113"; // bumped on every deploy — keep in sync with version.json AND with the ?v= on polish.css above
 
 // ─── Backend + Supabase config ───────────────────────────────────────────────
 const SUPABASE_URL = "https://oyrlzqbjcsliesvunbwj.supabase.co";
@@ -2554,6 +2554,17 @@ function MessageDetail({message,contact,isDeleted,msgTags,allTags,onReply,onRepl
 
       <div className="px-5 py-4 text-sm text-gray-700 leading-relaxed" style={{wordBreak:'break-word', overflowWrap:'anywhere'}}>
         {(() => {
+          // Cache-hydrated messages have body and bodyHtml stripped (cache
+          // would otherwise blow the localStorage quota). undefined on both
+          // means "not loaded yet"; '' / null means "genuinely empty body".
+          // Show a spinner only in the not-loaded case so attachment-only
+          // mails don't get a permanent spinner.
+          if (message.body === undefined && message.bodyHtml === undefined) return (
+            <div className="flex items-center gap-2 text-sm text-gray-400 italic">
+              <Spinner size={14}/>
+              <span>Loading full message…</span>
+            </div>
+          );
           const htmlToRender = enriched?.html || message.bodyHtml;
           if (htmlToRender) return <HtmlMessageBody html={htmlToRender}/>;
           // Plain-text body: each newline becomes its own <p>.
@@ -4288,12 +4299,23 @@ function readCacheStatus(uid) {
 function writeBootstrapCache(uid, snap) {
   if (!uid) { console.log('[cache] write skipped: no userId'); return; }
   try {
+    // Strip body + bodyHtml out of non-draft messages: HTML bodies (esp.
+    // newsletters) routinely run 50-100 KB each, so 100+ mails will blow
+    // through the ~5 MB localStorage quota that quota-exceeded errors
+    // showed us. The list view only needs subject/from/date/etc; when
+    // the user opens a message we either already have the body from the
+    // background fetch or MessageDetail shows a brief spinner until it
+    // arrives. Drafts keep their body so a user's in-progress text is
+    // available immediately.
+    const slimMessages = snap.messageList.map(m =>
+      m.draft ? m : { ...m, body: undefined, bodyHtml: undefined }
+    );
     const payload = JSON.stringify({
       v: BOOTSTRAP_CACHE_SCHEMA,
       writtenAt: Date.now(),
       mailAccounts:     snap.mailAccounts,
       contactList:      snap.contactList,
-      messageList:      snap.messageList,
+      messageList:      slimMessages,
       tagList:          snap.tagList,
       tagIdByName:      [...snap.tagIdByName.entries()],
       msgTags:          snap.msgTags,
