@@ -166,25 +166,26 @@
     }
     .bootloader-fill {
       position: absolute; top: 0; bottom: 0;
-      width: 40%;
+      width: 30%;
       background: #6366f1;
       border-radius: 999px;
-      /* alternate-direction + linear easing: the bar slides from the left
-         edge to the right edge, then reverses, forever. No ease-out at
-         the endpoints means it never visibly "stalls" — it just keeps
-         going back and forth as long as the bootloader is on screen. */
-      animation: bootloader-slide 1.6s infinite alternate linear;
+      /* Continuous left-to-right sweep: the bar enters from off-screen
+         left, exits off-screen right, restarts from the left without a
+         direction change. Linear easing, no alternate — there's never a
+         "stall" at an endpoint because the bar just keeps moving past
+         the visible area and the cycle restarts off-screen. */
+      animation: bootloader-sweep 1.4s linear infinite;
     }
-    @keyframes bootloader-slide {
-      0%   { left: 0%;  }
-      100% { left: 60%; }
+    @keyframes bootloader-sweep {
+      0%   { left: -30%; }
+      100% { left: 100%; }
     }
   </style>
   <!-- Apple-style polish lives in its own file with a version query so a
        polish change is picked up by every browser as soon as the version
        is bumped — no manual cache-busters needed. Keep ?v= here in sync
        with APP_VERSION below at every deploy. -->
-  <link rel="stylesheet" href="polish.css?v=0.0.119"/>
+  <link rel="stylesheet" href="polish.css?v=0.0.120"/>
 </head>
 <body>
 <div id="root">
@@ -199,7 +200,7 @@ const { useState, useMemo, useRef, useEffect, useCallback } = React;
 
 // ─── Constants ───────────────────────────────────────────────────────────────
 
-const APP_VERSION = "0.0.119"; // bumped on every deploy — keep in sync with version.json AND with the ?v= on polish.css above
+const APP_VERSION = "0.0.120"; // bumped on every deploy — keep in sync with version.json AND with the ?v= on polish.css above
 
 // ─── Backend + Supabase config ───────────────────────────────────────────────
 const SUPABASE_URL = "https://oyrlzqbjcsliesvunbwj.supabase.co";
@@ -4435,6 +4436,10 @@ function App({userId, onSignOut}) {
   const bootstrapCacheRef = useRef();
   if (bootstrapCacheRef.current === undefined) {
     bootstrapCacheRef.current = readBootstrapCache(userId);
+    console.log('[hydration] App mounted with userId=', userId,
+      '| cache=', bootstrapCacheRef.current ? 'hit' : 'miss',
+      '| contacts=', bootstrapCacheRef.current?.contactList?.length ?? 0,
+      '| messages=', bootstrapCacheRef.current?.messageList?.length ?? 0);
   }
   const bootstrapCache = bootstrapCacheRef.current;
   // Mobile
