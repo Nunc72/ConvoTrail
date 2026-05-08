@@ -110,7 +110,7 @@
        polish change is picked up by every browser as soon as the version
        is bumped — no manual cache-busters needed. Keep ?v= here in sync
        with APP_VERSION below at every deploy. -->
-  <link rel="stylesheet" href="polish.css?v=0.0.110"/>
+  <link rel="stylesheet" href="polish.css?v=0.0.111"/>
 </head>
 <body>
 <div id="root"></div>
@@ -120,7 +120,7 @@ const { useState, useMemo, useRef, useEffect, useCallback } = React;
 
 // ─── Constants ───────────────────────────────────────────────────────────────
 
-const APP_VERSION = "0.0.110"; // bumped on every deploy — keep in sync with version.json AND with the ?v= on polish.css above
+const APP_VERSION = "0.0.111"; // bumped on every deploy — keep in sync with version.json AND with the ?v= on polish.css above
 
 // ─── Backend + Supabase config ───────────────────────────────────────────────
 const SUPABASE_URL = "https://oyrlzqbjcsliesvunbwj.supabase.co";
@@ -4228,16 +4228,19 @@ const RETENTION_OPTIONS = [
 // Bootstrap cache: stash the shaped /bootstrap result in localStorage so a
 // returning user (especially on mobile, where the PWA is killed often) sees
 // the contact list and messages instantly while the network refresh runs in
-// the background. Keyed per user + APP_VERSION so a sign-out/sign-in or app
-// upgrade can't leak stale state across users or shapes.
-function bootstrapCacheKey(uid) { return `convooz:bootstrap:${uid}:${APP_VERSION}`; }
+// the background. Keyed per user + a SCHEMA constant — independent of
+// APP_VERSION so the cache survives ordinary deploys. Bump
+// BOOTSTRAP_CACHE_SCHEMA only when the shape we serialize below actually
+// changes (e.g. new fields on contacts or messages).
+const BOOTSTRAP_CACHE_SCHEMA = 1;
+function bootstrapCacheKey(uid) { return `convooz:bootstrap:${uid}:s${BOOTSTRAP_CACHE_SCHEMA}`; }
 function readBootstrapCache(uid) {
   if (!uid) return null;
   try {
     const raw = localStorage.getItem(bootstrapCacheKey(uid));
     if (!raw) return null;
     const obj = JSON.parse(raw);
-    if (!obj || obj.v !== APP_VERSION) return null;
+    if (!obj || obj.v !== BOOTSTRAP_CACHE_SCHEMA) return null;
     return {
       mailAccounts:     obj.mailAccounts     || [],
       contactList:      obj.contactList      || [],
@@ -4258,7 +4261,7 @@ function writeBootstrapCache(uid, snap) {
   if (!uid) return;
   try {
     localStorage.setItem(bootstrapCacheKey(uid), JSON.stringify({
-      v: APP_VERSION,
+      v: BOOTSTRAP_CACHE_SCHEMA,
       mailAccounts:     snap.mailAccounts,
       contactList:      snap.contactList,
       messageList:      snap.messageList,
@@ -4308,6 +4311,12 @@ function App({userId, onSignOut}) {
   // signal the user gets that something is in flight.
   const [dataLoading,  setDataLoading]  = useState(()=>!bootstrapCache);
   const [dataError,    setDataError]    = useState('');
+  // bootstrapFetching is true for the duration of every /bootstrap call —
+  // both the cold first load and any background refresh. The Sync button
+  // ORs this with syncingIds.size so the spinner runs whenever data is
+  // being pulled, which is the only signal the user gets while the cache
+  // shows last-seen content.
+  const [bootstrapFetching, setBootstrapFetching] = useState(false);
   const [dataRefreshTick, setDataRefreshTick] = useState(0);
 
   useEffect(() => {
@@ -4318,6 +4327,7 @@ function App({userId, onSignOut}) {
       // icon in the Sync button. dataLoading was already initialised to
       // !cache, so a cold first-load shows the empty state correctly.
       setDataError('');
+      setBootstrapFetching(true);
       try {
         const { mail_accounts, contacts, messages, drafts, tags, message_tags, r2m_state, signatures: sigs, account_signatures: accSigs, draft_attachments: draftAtts } = await apiFetch('/bootstrap?limit=500');
         if (cancelled) return;
@@ -4631,7 +4641,10 @@ function App({userId, onSignOut}) {
       } catch (e) {
         if (!cancelled) setDataError(e.message);
       } finally {
-        if (!cancelled) setDataLoading(false);
+        if (!cancelled) {
+          setDataLoading(false);
+          setBootstrapFetching(false);
+        }
       }
     })();
     return () => { cancelled = true; };
@@ -5678,11 +5691,13 @@ function App({userId, onSignOut}) {
               )}
             </div>
             {/* Sync button — the only way to refresh mail on mobile.
-                Spinner replaces the icon while syncing. */}
+                Spinner replaces the icon while syncing OR while the
+                /bootstrap fetch is in flight (cold start + background
+                refresh both light it up). */}
             <button onClick={handleGetMail} disabled={mailAccounts.length===0 || syncingIds.size>0}
               title={mailAccounts.length===0 ? 'Add a mail account first' : 'Sync all accounts'}
               className="flex items-center justify-center w-8 h-8 rounded-full hover:bg-gray-100 text-gray-500 disabled:opacity-40">
-              {syncingIds.size>0 ? <Spinner size={14}/> : <SyncIcon size={14}/>}
+              {(syncingIds.size>0 || bootstrapFetching) ? <Spinner size={14}/> : <SyncIcon size={14}/>}
             </button>
             <button onClick={()=>{
               // Topbar +: never prefills recipient (always empty "To:"). Origin determines back routing.
@@ -5771,7 +5786,7 @@ function App({userId, onSignOut}) {
             <button onClick={handleGetMail} disabled={mailAccounts.length===0 || syncingIds.size>0}
               title={mailAccounts.length===0 ? 'Add a mail account first' : 'Sync all accounts now'}
               className="px-3 py-1.5 text-xs rounded bg-gray-100 hover:bg-gray-200 disabled:opacity-50 text-gray-600 font-medium">
-              {syncingIds.size>0 ? '↻ Syncing…' : '↻ Get mail'}
+              {(syncingIds.size>0 || bootstrapFetching) ? '↻ Syncing…' : '↻ Get mail'}
             </button>
             <button onClick={()=>handleNewMsg(null)}
               className="flex items-center gap-1.5 px-3 py-1.5 text-xs rounded bg-indigo-600 hover:bg-indigo-700 text-white font-medium">
