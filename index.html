@@ -174,7 +174,7 @@
        polish change is picked up by every browser as soon as the version
        is bumped — no manual cache-busters needed. Keep ?v= here in sync
        with APP_VERSION below at every deploy. -->
-  <link rel="stylesheet" href="polish.css?v=0.0.128"/>
+  <link rel="stylesheet" href="polish.css?v=0.0.129"/>
 </head>
 <body>
 <div id="root">
@@ -189,7 +189,7 @@ const { useState, useMemo, useRef, useEffect, useCallback } = React;
 
 // ─── Constants ───────────────────────────────────────────────────────────────
 
-const APP_VERSION = "0.0.128"; // bumped on every deploy — keep in sync with version.json AND with the ?v= on polish.css above
+const APP_VERSION = "0.0.129"; // bumped on every deploy — keep in sync with version.json AND with the ?v= on polish.css above
 
 // ─── Backend + Supabase config ───────────────────────────────────────────────
 const SUPABASE_URL = "https://oyrlzqbjcsliesvunbwj.supabase.co";
@@ -5709,12 +5709,26 @@ function App({userId, onSignOut}) {
         const tagsOpen = !prev.tags;
         setArchiveHeight(tagsOpen ? Math.round(colH/6) : Math.round(colH/4));
       }
-      // When the user collapses the contacts section and tags is currently
-      // collapsed too, auto-open tags so column 1 never becomes an empty
-      // panel. Matches the design intent: one of {contacts,tags} is always
-      // showing its list.
+      // Col 1 design rule: exactly one of {contacts, tags} is the active
+      // panel. The other section's bar shows its header at the bottom of
+      // the column. Tags only floats up to its 2/3 split when the user
+      // opens it explicitly while contacts is also open.
+      //
+      // 1) Collapsing contacts while tags is closed → auto-open tags so
+      //    the column isn't empty.
       if (!opening && key==='contacts' && prev.tags) {
         next.tags = false;
+      }
+      // 2) Opening contacts while tags is open → auto-close tags so it
+      //    falls back to its docked-at-the-bottom state instead of
+      //    staying stuck at the 2/3 split.
+      if (opening && key==='contacts' && !prev.tags) {
+        next.tags = true;
+      }
+      // 3) Collapsing tags while contacts is also closed → auto-open
+      //    contacts (col 1 would otherwise be entirely empty).
+      if (!opening && key==='tags' && prev.contacts) {
+        next.contacts = false;
       }
       return next;
     });
