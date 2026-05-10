@@ -174,7 +174,7 @@
        polish change is picked up by every browser as soon as the version
        is bumped — no manual cache-busters needed. Keep ?v= here in sync
        with APP_VERSION below at every deploy. -->
-  <link rel="stylesheet" href="polish.css?v=0.0.129"/>
+  <link rel="stylesheet" href="polish.css?v=0.0.130"/>
 </head>
 <body>
 <div id="root">
@@ -189,7 +189,7 @@ const { useState, useMemo, useRef, useEffect, useCallback } = React;
 
 // ─── Constants ───────────────────────────────────────────────────────────────
 
-const APP_VERSION = "0.0.129"; // bumped on every deploy — keep in sync with version.json AND with the ?v= on polish.css above
+const APP_VERSION = "0.0.130"; // bumped on every deploy — keep in sync with version.json AND with the ?v= on polish.css above
 
 // ─── Backend + Supabase config ───────────────────────────────────────────────
 const SUPABASE_URL = "https://oyrlzqbjcsliesvunbwj.supabase.co";
@@ -5064,6 +5064,12 @@ function App({userId, onSignOut}) {
   const containerRef=useRef(null), leftColRef=useRef(null);
   const colDragRef=useRef(null), rowDragRef=useRef(null);
   const tagsOpenRef=useRef(true); // tracks !leftCollapsed.tags for use in drag handlers
+  // Snapshot of leftCollapsed.tags from just BEFORE contacts was last
+  // collapsed. Used by handleToggleCollapse to make the contacts toggle
+  // fully reversible: re-opening contacts restores tags to whatever it
+  // was at the moment of the close (docked at the bottom OR splitting
+  // at 2/3), instead of forcing one specific resting state.
+  const tagsBeforeContactsCollapse = useRef(null);
   const [activeColDiv,setActiveColDiv]=useState(null);
   const [activeRowDiv,setActiveRowDiv]=useState(false);
 
@@ -5709,24 +5715,25 @@ function App({userId, onSignOut}) {
         const tagsOpen = !prev.tags;
         setArchiveHeight(tagsOpen ? Math.round(colH/6) : Math.round(colH/4));
       }
-      // Col 1 design rule: exactly one of {contacts, tags} is the active
-      // panel. The other section's bar shows its header at the bottom of
-      // the column. Tags only floats up to its 2/3 split when the user
-      // opens it explicitly while contacts is also open.
+      // Reversible contacts-toggle: remember whatever tags was at the
+      // moment of the close, restore that exact state on the next open.
+      // So tags goes back to "docked at the bottom" if it was docked,
+      // or back to "split at 2/3" if it was open — matches the user's
+      // earlier intent instead of forcing one resting position.
       //
-      // 1) Collapsing contacts while tags is closed → auto-open tags so
-      //    the column isn't empty.
-      if (!opening && key==='contacts' && prev.tags) {
-        next.tags = false;
+      // Closing contacts:
+      //   - snapshot the current tags state for the upcoming open;
+      //   - if tags was also closed, auto-open it so col 1 isn't empty.
+      if (!opening && key==='contacts') {
+        tagsBeforeContactsCollapse.current = prev.tags;
+        if (prev.tags) next.tags = false;
       }
-      // 2) Opening contacts while tags is open → auto-close tags so it
-      //    falls back to its docked-at-the-bottom state instead of
-      //    staying stuck at the 2/3 split.
-      if (opening && key==='contacts' && !prev.tags) {
-        next.tags = true;
+      // Opening contacts: restore the tags state captured at close time.
+      if (opening && key==='contacts' && tagsBeforeContactsCollapse.current !== null) {
+        next.tags = tagsBeforeContactsCollapse.current;
       }
-      // 3) Collapsing tags while contacts is also closed → auto-open
-      //    contacts (col 1 would otherwise be entirely empty).
+      // Closing tags while contacts is also closed: auto-open contacts.
+      // Col 1 would otherwise be entirely empty.
       if (!opening && key==='tags' && prev.contacts) {
         next.contacts = false;
       }
