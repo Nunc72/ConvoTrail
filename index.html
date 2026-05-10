@@ -174,7 +174,7 @@
        polish change is picked up by every browser as soon as the version
        is bumped — no manual cache-busters needed. Keep ?v= here in sync
        with APP_VERSION below at every deploy. -->
-  <link rel="stylesheet" href="polish.css?v=0.0.125"/>
+  <link rel="stylesheet" href="polish.css?v=0.0.126"/>
 </head>
 <body>
 <div id="root">
@@ -189,7 +189,7 @@ const { useState, useMemo, useRef, useEffect, useCallback } = React;
 
 // ─── Constants ───────────────────────────────────────────────────────────────
 
-const APP_VERSION = "0.0.125"; // bumped on every deploy — keep in sync with version.json AND with the ?v= on polish.css above
+const APP_VERSION = "0.0.126"; // bumped on every deploy — keep in sync with version.json AND with the ?v= on polish.css above
 
 // ─── Backend + Supabase config ───────────────────────────────────────────────
 const SUPABASE_URL = "https://oyrlzqbjcsliesvunbwj.supabase.co";
@@ -2520,7 +2520,13 @@ function MessageDetail({message,contact,isDeleted,msgTags,allTags,onReply,onRepl
 
   if (!message||!contact) return (
     <div className="flex items-center justify-center h-full text-gray-300 select-none bg-white">
-      <div className="text-center"><div className="text-5xl mb-3">✉</div><div className="text-sm">Select a message</div></div>
+      <div className="flex flex-col items-center gap-2">
+        <svg width="56" height="56" viewBox="0 0 24 24" fill="none" stroke="#d1d5db" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+          <rect x="3" y="5" width="18" height="14" rx="2"/>
+          <path d="m3 7 9 6 9-6"/>
+        </svg>
+        <div className="text-sm text-gray-400">Select a message</div>
+      </div>
     </div>
   );
   const isDraft=!!message.draft;
@@ -2801,7 +2807,13 @@ function ThreadColumn({contact,allMsgs,deletedIds,selectedMsgId,msgTags,onSelect
 
   if(!contact) return (
     <div className="flex items-center justify-center h-full bg-white text-gray-300 text-sm select-none">
-      <div className="text-center"><div className="text-4xl mb-2">👤</div><div>Select a contact</div></div>
+      <div className="flex flex-col items-center gap-2">
+        <svg width="56" height="56" viewBox="0 0 24 24" fill="none" stroke="#d1d5db" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+          <circle cx="12" cy="8" r="4"/>
+          <path d="M4 21c0-4 3.5-7 8-7s8 3 8 7"/>
+        </svg>
+        <div className="text-gray-400">Select a contact</div>
+      </div>
     </div>
   );
 
@@ -2846,7 +2858,7 @@ function ThreadColumn({contact,allMsgs,deletedIds,selectedMsgId,msgTags,onSelect
               </button>
               {flagsOpen&&(
                 <div className="absolute right-0 top-full mt-1 z-20 bg-white border border-gray-200 rounded-lg shadow-lg overflow-hidden" style={{minWidth:140}}>
-                  {[['News','isNews'],['Mute','isMuted']].map(([label,key])=>{
+                  {[['News','isNews'],['Vendor','isMuted']].map(([label,key])=>{
                     const checked=!!contact[key];
                     return <button key={label} onClick={()=>onToggleFlag?.(contact.id,key)}
                       className="w-full flex items-center gap-2 px-3 py-2 text-sm text-gray-700 hover:bg-gray-50">
@@ -2945,7 +2957,7 @@ function ThreadColumn({contact,allMsgs,deletedIds,selectedMsgId,msgTags,onSelect
                   <PencilIcon size={11}/>
                 </span>
               </div>
-              {[['News','isNews'],['Mute','isMuted']].map(([label,key])=>{
+              {[['News','isNews'],['Vendor','isMuted']].map(([label,key])=>{
                 const on=!!contact[key];
                 const cls=on?'bg-indigo-50 border-indigo-300 text-indigo-600'
                   :'border-gray-200 text-gray-300 hover:border-gray-300 hover:text-gray-500';
@@ -3322,6 +3334,7 @@ function LeftColumn({contactMeta, archivedContacts, selectedId, mergeId, onSelec
                      emailFlags,
                      selAccounts, onToggleAccount,
                      mailAccounts=[],
+                     actionableCounts={total:0, inSel:0},
                      dataLoading=false}) {
   const [accDropOpen, setAccDropOpen] = useState(false);
   const [contactTab,  setContactTab]  = useState('Convo');
@@ -3341,7 +3354,7 @@ function LeftColumn({contactMeta, archivedContacts, selectedId, mergeId, onSelec
     const c = contactMeta.find(m => m.contact.id === id)?.contact;
     if (!c) return 'Convo';
     if (archivedContacts.has(id)) return 'Archive';
-    if (c.isMuted) return 'Muted';
+    if (c.isMuted) return 'Vendors';
     if (c.isNews)  return 'News';
     return 'Convo';
   }
@@ -3366,12 +3379,23 @@ function LeftColumn({contactMeta, archivedContacts, selectedId, mergeId, onSelec
     const a = mailAccounts.find(a => (a.email||'').toLowerCase() === email);
     return a ? (a.display_name || a.email) : email;
   };
-  const accountLabel = mailAccounts.length === 0
+  const baseAccountLabel = mailAccounts.length === 0
     ? 'No accounts'
     : selAccounts.length === mailAccounts.length ? 'All accounts'
     : selAccounts.length === 1 ? labelForEmail(selAccounts[0])
     : selAccounts.length === 0 ? '(none)'
     : `${selAccounts.length} accounts`;
+  // Actionable badge after the account name. When all accounts are
+  // selected it's just "(32)" — a single-number summary. With a subset
+  // selected the user wants both the in-scope count and the grand total
+  // so the trade-off is visible: "(14/32)". Hide it altogether when the
+  // user has no accounts yet.
+  const allSelected = mailAccounts.length > 0 && selAccounts.length === mailAccounts.length;
+  const actionableSuffix = mailAccounts.length === 0
+    ? ''
+    : allSelected ? ` (${actionableCounts.total})`
+    : ` (${actionableCounts.inSel}/${actionableCounts.total})`;
+  const accountLabel = baseAccountLabel + actionableSuffix;
 
   function CollapseIcon({open}) {
     return <svg width="10" height="10" viewBox="0 0 10 10" fill="none">
@@ -3483,9 +3507,9 @@ function LeftColumn({contactMeta, archivedContacts, selectedId, mergeId, onSelec
         </div>
         {!collapsed.contacts&&(
           <div className="flex px-2 pt-[3px] pb-1.5 gap-0.5">
-            {['Convo','News','Muted','Archive'].map(tab=>{
+            {['Convo','News','Vendors','Archive'].map(tab=>{
               const active=contactTab===tab;
-              const badge=(!active&&(tab==='Convo'||tab==='News'))?tabBadge(tab):0;
+              const badge=(!active&&(tab==='Convo'||tab==='News'||tab==='Vendors'))?tabBadge(tab):0;
               return <button key={tab} onClick={()=>setContactTab(tab)}
                 className={`flex-1 text-xs py-1 rounded transition-colors ${active?'bg-indigo-50 text-indigo-700 font-semibold':'text-gray-400 hover:text-gray-600'}`}>
                 {tab}{badge>0&&<span className="ml-0.5 opacity-70">({badge})</span>}
@@ -3514,7 +3538,7 @@ function LeftColumn({contactMeta, archivedContacts, selectedId, mergeId, onSelec
           {!(dataLoading && contactMeta.length===0) && (<>
             {activeContacts.length===0 && (
               <div className="px-3 py-3 text-xs text-gray-300 italic">
-                {contactTab==='News'?'No newsletter contacts':contactTab==='Muted'?'No muted contacts':contactTab==='Archive'?'No archived contacts':'No contacts'}
+                {contactTab==='News'?'No newsletter contacts':contactTab==='Vendors'?'No vendors':contactTab==='Archive'?'No archived contacts':'No contacts'}
               </div>
             )}
             {activeContacts.map(({contact,unread,hasR2m,r2mCount})=><ContactRow key={contact.id} contact={contact} unread={unread} hasR2m={hasR2m} r2mCount={r2mCount}/>)}
@@ -3610,7 +3634,7 @@ function LeftColumn({contactMeta, archivedContacts, selectedId, mergeId, onSelec
           </button>
         </div>
         {!collapsed.contacts&&<div className="flex px-2 pt-[3px] pb-1.5 gap-0.5">
-          {['Convo','News','Muted','Archive'].map(tab=>{
+          {['Convo','News','Vendors','Archive'].map(tab=>{
             const active=contactTab===tab;
             const badge=(!active&&(tab==='Convo'||tab==='News'))?tabBadge(tab):0;
             return <button key={tab} onClick={()=>setContactTab(tab)}
@@ -3641,7 +3665,7 @@ function LeftColumn({contactMeta, archivedContacts, selectedId, mergeId, onSelec
           <div className="flex-1 overflow-y-auto scroll">
             {!(dataLoading && contactMeta.length===0) && (<>
               {activeContacts.length===0&&<div className="px-3 py-3 text-xs text-gray-300 italic">
-                {contactTab==='News'?'No newsletter contacts':contactTab==='Muted'?'No muted contacts':contactTab==='Archive'?'No archived contacts':'No contacts'}
+                {contactTab==='News'?'No newsletter contacts':contactTab==='Vendors'?'No vendors':contactTab==='Archive'?'No archived contacts':'No contacts'}
               </div>}
               {activeContacts.map(({contact,unread,hasR2m,r2mCount})=><ContactRow key={contact.id} contact={contact} unread={unread} hasR2m={hasR2m} r2mCount={r2mCount}/>)}
             </>)}
@@ -4849,6 +4873,17 @@ function App({userId, onSignOut}) {
     if (!m) { setSelMsg(null); return; }
     if (m.accountEmail && !selAccounts.includes(m.accountEmail)) setSelMsg(null);
   }, [selAccounts, messageList, selMsg]);
+  // Same idea for selContact: when the user switches the account selector
+  // away from any account this contact has activity in, col 2 (thread)
+  // and col 3 (detail) should both empty out together. Without this the
+  // contact card and message list keep showing data filtered to nothing.
+  useEffect(() => {
+    if (selContact === null) return;
+    const c = contactList.find(x => x.id === selContact);
+    if (!c) { setSelContact(null); setSelMsg(null); return; }
+    const hasActivity = (c.accountEmails || []).some(ae => selAccounts.includes(ae));
+    if (!hasActivity) { setSelContact(null); setSelMsg(null); }
+  }, [selAccounts, contactList, selContact]);
   const [selTag,       setSelTag]       = useState(null);
   const [editingContact,setEditingContact]=useState(null);
   const [archivedContacts, setArchivedContacts] = useState(()=>bootstrapCache?.archivedContacts ?? new Set());
@@ -5131,6 +5166,24 @@ function App({userId, onSignOut}) {
         return b.lastDate.localeCompare(a.lastDate);
       });
   },[contactList,messageList,deletedIds,selAccounts]);
+
+  // Actionable-count badge for the account selector: how many "things to
+  // deal with" exist across the user's accounts (unread incoming + active
+  // r2m), broken down by what's currently in selAccounts vs everything.
+  // Drafts and deleted rows don't count — they're not actionable.
+  const actionableCounts = useMemo(() => {
+    const selSet = new Set(selAccounts);
+    const deletedSet = new Set(deletedIds);
+    let total = 0, inSel = 0;
+    for (const m of messageList) {
+      if (m.draft || deletedSet.has(m.id)) continue;
+      const isActionable = (!m.read && m.dir === 'in') || m.revert2me;
+      if (!isActionable) continue;
+      total++;
+      if (m.accountEmail && selSet.has(m.accountEmail)) inSel++;
+    }
+    return { total, inSel };
+  }, [messageList, deletedIds, selAccounts]);
 
   // ── Helpers ──
   function captureAlert(id) {
@@ -5629,7 +5682,7 @@ function App({userId, onSignOut}) {
     apiFetch(`/contacts/${id}`, { method:'PATCH', body: JSON.stringify({ [bodyKey]: newVal }) })
       .catch(e => {
         setContactList(prev => prev.map(c => c.id===id ? {...c, [flag]: wasOn} : c));
-        setActionToast((flag==='isNews'?'News':'Mute') + ' toggle failed: ' + e.message);
+        setActionToast((flag==='isNews'?'News':'Vendor') + ' toggle failed: ' + e.message);
       });
   }
   function handleToggleEmailFlag(id, email, flag){
@@ -6049,6 +6102,7 @@ function App({userId, onSignOut}) {
                 emailFlags={emailFlags}
                 selAccounts={selAccounts} onToggleAccount={handleToggleAccount}
                 mailAccounts={mailAccounts}
+                actionableCounts={actionableCounts}
                 dataLoading={dataLoading}/>
             </div>
             {/* Mobile Col 2 */}
@@ -6109,6 +6163,7 @@ function App({userId, onSignOut}) {
                 emailFlags={emailFlags}
                 selAccounts={selAccounts} onToggleAccount={handleToggleAccount}
                 mailAccounts={mailAccounts}
+                actionableCounts={actionableCounts}
                 dataLoading={dataLoading}/>
             </div>
 
