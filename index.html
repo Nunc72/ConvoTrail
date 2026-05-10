@@ -174,7 +174,7 @@
        polish change is picked up by every browser as soon as the version
        is bumped — no manual cache-busters needed. Keep ?v= here in sync
        with APP_VERSION below at every deploy. -->
-  <link rel="stylesheet" href="polish.css?v=0.0.131"/>
+  <link rel="stylesheet" href="polish.css?v=0.0.132"/>
 </head>
 <body>
 <div id="root">
@@ -189,7 +189,7 @@ const { useState, useMemo, useRef, useEffect, useCallback } = React;
 
 // ─── Constants ───────────────────────────────────────────────────────────────
 
-const APP_VERSION = "0.0.131"; // bumped on every deploy — keep in sync with version.json AND with the ?v= on polish.css above
+const APP_VERSION = "0.0.132"; // bumped on every deploy — keep in sync with version.json AND with the ?v= on polish.css above
 
 // ─── Backend + Supabase config ───────────────────────────────────────────────
 const SUPABASE_URL = "https://oyrlzqbjcsliesvunbwj.supabase.co";
@@ -6022,7 +6022,7 @@ function App({userId, onSignOut}) {
         /* Mobile topbar: logo | search (center) | user + compose (+ rightmost) */
         <div className="flex items-center bg-white border-b border-gray-200 h-12 px-3 flex-shrink-0 gap-2">
           {/* Left: logo */}
-          <button onClick={()=>{setSelContact(null);setMergeContact(null);setSelMsg(null);setSelTag(null);setShowCompose(false);setReplyTo(null);setReplyKind(null);setComposeContact(null);setComposeDraft(null);setEditingContact(null);setMobileCol(0);}}
+          <button onClick={()=>{setSelContact(null);setMergeContact(null);setSelMsg(null);setSelTag(null);setShowCompose(false);setReplyTo(null);setReplyKind(null);setComposeContact(null);setComposeDraft(null);setEditingContact(null);setSearchQuery('');setSearchActive(false);setMobileCol(0);}}
             className="font-bold text-indigo-600 text-base tracking-tight flex-shrink-0">
             Convooz
           </button>
@@ -6104,7 +6104,7 @@ function App({userId, onSignOut}) {
         <div className="flex items-stretch bg-white border-b border-gray-200 h-12 flex-shrink-0">
           {/* Col-1 zone: logo */}
           <div style={{width:colWidths[0]+"%",minWidth:"10%",flexShrink:0}} className="flex items-center px-4">
-            <button onClick={()=>{setSelContact(null);setMergeContact(null);setSelMsg(null);setSelTag(null);setShowCompose(false);setReplyTo(null);setReplyKind(null);setComposeContact(null);setComposeDraft(null);setEditingContact(null);}}
+            <button onClick={()=>{setSelContact(null);setMergeContact(null);setSelMsg(null);setSelTag(null);setShowCompose(false);setReplyTo(null);setReplyKind(null);setComposeContact(null);setComposeDraft(null);setEditingContact(null);setSearchQuery('');setSearchActive(false);}}
               className="font-bold text-indigo-600 text-lg tracking-tight hover:text-indigo-800 transition-colors">
               Convooz
             </button>
