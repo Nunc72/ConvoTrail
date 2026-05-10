@@ -174,7 +174,7 @@
        polish change is picked up by every browser as soon as the version
        is bumped — no manual cache-busters needed. Keep ?v= here in sync
        with APP_VERSION below at every deploy. -->
-  <link rel="stylesheet" href="polish.css?v=0.0.127"/>
+  <link rel="stylesheet" href="polish.css?v=0.0.128"/>
 </head>
 <body>
 <div id="root">
@@ -189,7 +189,7 @@ const { useState, useMemo, useRef, useEffect, useCallback } = React;
 
 // ─── Constants ───────────────────────────────────────────────────────────────
 
-const APP_VERSION = "0.0.127"; // bumped on every deploy — keep in sync with version.json AND with the ?v= on polish.css above
+const APP_VERSION = "0.0.128"; // bumped on every deploy — keep in sync with version.json AND with the ?v= on polish.css above
 
 // ─── Backend + Supabase config ───────────────────────────────────────────────
 const SUPABASE_URL = "https://oyrlzqbjcsliesvunbwj.supabase.co";
@@ -5786,9 +5786,27 @@ function App({userId, onSignOut}) {
     if(isMobile) setMobileCol(2);
   }
 
-  const selectedContact=contactList.find(c=>c.id===selContact)||null;
+  // selectedContact + selectedMsg are filtered against the active account
+  // selector at render time, so col 2 and col 3 fall back to their empty
+  // state the instant the user switches the account selector to one that
+  // doesn't contain this contact / message. Same rule as col 1 uses, just
+  // applied to the open detail panes too.
+  const selectedContact = (() => {
+    const c = contactList.find(x => x.id === selContact);
+    if (!c) return null;
+    const hasMailInScope = messageList.some(m =>
+      m.contactId === selContact &&
+      (!m.accountEmail || selAccounts.includes(m.accountEmail))
+    );
+    return hasMailInScope ? c : null;
+  })();
   const mergeContactObj=contactList.find(c=>c.id===mergeContact)||null;
-  const selectedMsg=messageList.find(m=>m.id===selMsg)||null;
+  const selectedMsg = (() => {
+    const m = messageList.find(x => x.id === selMsg);
+    if (!m) return null;
+    if (m.accountEmail && !selAccounts.includes(m.accountEmail)) return null;
+    return m;
+  })();
   // When in tag view, derive the detail contact from the message itself
   const detailContact = selectedContact || (selectedMsg?contactList.find(c=>c.id===selectedMsg.contactId)||null:null);
   const allContactMsgs=selContact?messageList
