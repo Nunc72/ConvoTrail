@@ -60,10 +60,14 @@ export async function registerDataRoutes(app: FastifyInstance) {
     if (draftAttsRes.error) return reply.internalServerError(draftAttsRes.error.message);
     if (msgCountsRes.error) return reply.internalServerError(msgCountsRes.error.message);
 
-    // Phase 2: collect bodies for the "actionable" subset — unread incoming
-    // mail and active revert-to-me — so those open instantly when the user
-    // taps them. RLS already constrains both queries to the user's own
-    // rows, so we can scope the IN-list by id without extra checks.
+    // Phase 2: collect bodies for two sets so the client has them ready:
+    //   (a) the "actionable" subset — unread incoming + active r2m, so
+    //       the mails the user is most likely to open are instant;
+    //   (b) the 300 newest messages by date, so client-side search
+    //       covers ~3-4 weeks of recent mail without a network round
+    //       trip. Anything older still searches via /search.
+    // RLS constrains the query to the user's own rows.
+    const RECENT_BODY_LIMIT = 300;
     type R2mRow = { message_id: string; dismissed_at: string | null };
     type MsgMeta = { id: string; direction: string; flags: Record<string, unknown> | null; mail_account_id: string };
     type BodyRow = { id: string; body_text: string | null; body_html: string | null };
@@ -80,11 +84,14 @@ export async function registerDataRoutes(app: FastifyInstance) {
         return !seen;
       })
       .map(m => m.id);
+    // messagesRows is already ordered by date desc, so slice the head.
+    const recentIds = messagesRows.slice(0, RECENT_BODY_LIMIT).map(m => m.id);
+    const bodyTargetIds = Array.from(new Set([...actionableIds, ...recentIds]));
     const bodiesById = new Map<string, { body_text: string | null; body_html: string | null }>();
-    if (actionableIds.length > 0) {
+    if (bodyTargetIds.length > 0) {
       const bodiesRes = await sb.from("messages")
         .select("id, body_text, body_html")
-        .in("id", actionableIds);
+        .in("id", bodyTargetIds);
       if (bodiesRes.error) return reply.internalServerError(bodiesRes.error.message);
       for (const row of ((bodiesRes.data ?? []) as unknown as BodyRow[])) {
         bodiesById.set(row.id, { body_text: row.body_text, body_html: row.body_html });
@@ -113,6 +120,41 @@ export async function registerDataRoutes(app: FastifyInstance) {
       draft_attachments: draftAttsRes.data,
       message_count_by_account: messageCountByAccount,
     };
+  });
+
+  // ─── Search across the user's mail ──────────────────────────────────────
+  // Used by the global search box to extend the client-side filter (which
+  // only sees the cached subset) with hits from older mail. Three parallel
+  // ILIKE queries on subject / body_text / from_email, deduped and sorted
+  // by date desc. Limit caps how many rows we ship back; the client merges
+  // them after its own list.
+  app.get<{ Querystring: { q?: string; limit?: string } }>("/search", auth, async (req, reply) => {
+    const q = (req.query.q || '').trim();
+    if (q.length < 2) return { messages: [] };
+    const limit = Math.min(Number(req.query.limit) || 50, 200);
+    const sb = supabaseWithJwt(req.authJwt!);
+    const cols =
+      "id, mail_account_id, folder, uid, message_id, thread_id, from_email, from_name, to_emails, " +
+      "subject, snippet, body_text, body_html, date, flags, direction, deleted_at, has_attachments";
+    const pattern = `%${q}%`;
+    const [subjectRes, bodyRes, fromRes] = await Promise.all([
+      sb.from("messages").select(cols).ilike("subject", pattern).order("date", { ascending: false }).limit(limit),
+      sb.from("messages").select(cols).ilike("body_text", pattern).order("date", { ascending: false }).limit(limit),
+      sb.from("messages").select(cols).ilike("from_email", pattern).order("date", { ascending: false }).limit(limit),
+    ]);
+    if (subjectRes.error) return reply.internalServerError(subjectRes.error.message);
+    if (bodyRes.error)    return reply.internalServerError(bodyRes.error.message);
+    if (fromRes.error)    return reply.internalServerError(fromRes.error.message);
+    type Row = { id: string; date: string | null };
+    const seen = new Set<string>();
+    const merged: Row[] = [];
+    for (const row of ([...((subjectRes.data ?? []) as unknown as Row[]), ...((bodyRes.data ?? []) as unknown as Row[]), ...((fromRes.data ?? []) as unknown as Row[])])) {
+      if (seen.has(row.id)) continue;
+      seen.add(row.id);
+      merged.push(row);
+    }
+    merged.sort((a, b) => (b.date || '').localeCompare(a.date || ''));
+    return { messages: merged.slice(0, limit) };
   });
 
   // ─── Contacts (with all emails) ─────────────────────────────────────────
