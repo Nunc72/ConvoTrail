@@ -174,7 +174,7 @@
        polish change is picked up by every browser as soon as the version
        is bumped — no manual cache-busters needed. Keep ?v= here in sync
        with APP_VERSION below at every deploy. -->
-  <link rel="stylesheet" href="polish.css?v=0.0.126"/>
+  <link rel="stylesheet" href="polish.css?v=0.0.127"/>
 </head>
 <body>
 <div id="root">
@@ -189,7 +189,7 @@ const { useState, useMemo, useRef, useEffect, useCallback } = React;
 
 // ─── Constants ───────────────────────────────────────────────────────────────
 
-const APP_VERSION = "0.0.126"; // bumped on every deploy — keep in sync with version.json AND with the ?v= on polish.css above
+const APP_VERSION = "0.0.127"; // bumped on every deploy — keep in sync with version.json AND with the ?v= on polish.css above
 
 // ─── Backend + Supabase config ───────────────────────────────────────────────
 const SUPABASE_URL = "https://oyrlzqbjcsliesvunbwj.supabase.co";
@@ -3636,7 +3636,7 @@ function LeftColumn({contactMeta, archivedContacts, selectedId, mergeId, onSelec
         {!collapsed.contacts&&<div className="flex px-2 pt-[3px] pb-1.5 gap-0.5">
           {['Convo','News','Vendors','Archive'].map(tab=>{
             const active=contactTab===tab;
-            const badge=(!active&&(tab==='Convo'||tab==='News'))?tabBadge(tab):0;
+            const badge=(!active&&(tab==='Convo'||tab==='News'||tab==='Vendors'))?tabBadge(tab):0;
             return <button key={tab} onClick={()=>setContactTab(tab)}
               className={`flex-1 text-xs py-1 rounded transition-colors ${active?'bg-indigo-50 text-indigo-700 font-semibold':'text-gray-400 hover:text-gray-600'}`}>
               {tab}{badge>0&&<span className="ml-0.5 opacity-70">({badge})</span>}
@@ -4874,16 +4874,21 @@ function App({userId, onSignOut}) {
     if (m.accountEmail && !selAccounts.includes(m.accountEmail)) setSelMsg(null);
   }, [selAccounts, messageList, selMsg]);
   // Same idea for selContact: when the user switches the account selector
-  // away from any account this contact has activity in, col 2 (thread)
-  // and col 3 (detail) should both empty out together. Without this the
-  // contact card and message list keep showing data filtered to nothing.
+  // away from any account this contact has mail in, col 2 (thread) and
+  // col 3 (detail) should both empty out together. Earlier code looked
+  // at contact.accountEmails, which is computed at bootstrap time and
+  // can drift (e.g. after deletes, or because the v0.0.124 self-mail
+  // anchoring populates it from the OTHER mailbox). Check messageList
+  // directly instead — that's the same source the thread list reads
+  // from, so "no rows visible in col 2" exactly means "should reset".
   useEffect(() => {
     if (selContact === null) return;
-    const c = contactList.find(x => x.id === selContact);
-    if (!c) { setSelContact(null); setSelMsg(null); return; }
-    const hasActivity = (c.accountEmails || []).some(ae => selAccounts.includes(ae));
-    if (!hasActivity) { setSelContact(null); setSelMsg(null); }
-  }, [selAccounts, contactList, selContact]);
+    const hasMailInSelection = messageList.some(m =>
+      m.contactId === selContact &&
+      (!m.accountEmail || selAccounts.includes(m.accountEmail))
+    );
+    if (!hasMailInSelection) { setSelContact(null); setSelMsg(null); }
+  }, [selAccounts, messageList, selContact]);
   const [selTag,       setSelTag]       = useState(null);
   const [editingContact,setEditingContact]=useState(null);
   const [archivedContacts, setArchivedContacts] = useState(()=>bootstrapCache?.archivedContacts ?? new Set());
