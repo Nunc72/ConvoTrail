@@ -174,7 +174,7 @@
        polish change is picked up by every browser as soon as the version
        is bumped — no manual cache-busters needed. Keep ?v= here in sync
        with APP_VERSION below at every deploy. -->
-  <link rel="stylesheet" href="polish.css?v=0.0.133"/>
+  <link rel="stylesheet" href="polish.css?v=0.0.134"/>
 </head>
 <body>
 <div id="root">
@@ -189,7 +189,7 @@ const { useState, useMemo, useRef, useEffect, useCallback } = React;
 
 // ─── Constants ───────────────────────────────────────────────────────────────
 
-const APP_VERSION = "0.0.133"; // bumped on every deploy — keep in sync with version.json AND with the ?v= on polish.css above
+const APP_VERSION = "0.0.134"; // bumped on every deploy — keep in sync with version.json AND with the ?v= on polish.css above
 
 // ─── Backend + Supabase config ───────────────────────────────────────────────
 const SUPABASE_URL = "https://oyrlzqbjcsliesvunbwj.supabase.co";
@@ -390,13 +390,30 @@ const INIT_TAG_EMAIL_ROLES = {
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
-const NOW = new Date("2026-04-09T18:00:00");
+// NOW was a hard-coded literal left over from the mock-data era. Use
+// Date.now() at call-time so the "older than 7 days → full date" rule
+// stays correct as the calendar advances.
 const DAYS = ["Sun","Mon","Tue","Wed","Thu","Fri","Sat"];
 const pad = n => String(n).padStart(2,"0");
 
+// Whether a message would show up in the ThreadColumn list under a
+// given filter tab (Now / All / In / Out / Draft / Deleted). Used by
+// the parent App so handleSelectContact picks a mail that's actually
+// visible, and selectedMsg falls back to null when the chosen mail is
+// no longer in scope under the active filter.
+function msgMatchesThreadFilter(msg, filter, deletedIds) {
+  const del = deletedIds.includes(msg.id);
+  if (filter === 'now')     return !del && !msg.draft && ((msg.dir==='in' && !msg.read) || (msg.dir==='out' && msg.revert2me));
+  if (filter === 'in')      return msg.dir==='in' && !msg.draft && !del;
+  if (filter === 'out')     return msg.dir==='out' && !msg.draft && !del;
+  if (filter === 'draft')   return !!msg.draft && !del;
+  if (filter === 'deleted') return del;
+  return !del; // 'all'
+}
+
 function formatTime(s) {
   if (!s) return "";
-  const d = new Date(s), diff = Math.floor((NOW-d)/86400000);
+  const d = new Date(s), diff = Math.floor((Date.now()-d)/86400000);
   if (diff===0) return d.toLocaleTimeString("nl-NL",{hour:"2-digit",minute:"2-digit"});
   if (diff===1) return "gisteren";
   if (diff<7)   return d.toLocaleDateString("nl-NL",{weekday:"short"});
@@ -2570,9 +2587,39 @@ function MessageDetail({message,contact,isDeleted,msgTags,allTags,onReply,onRepl
     </div>
   ) : null;
 
+  // Desktop sticky alert: when the in-scroll banner scrolls out of view,
+  // pop a thin bar with the same Snooze/Seen actions at the very top of
+  // the column so the user can still act without scrolling back up.
+  const DesktopStickyAlert = !isMobile && alertOutOfView && (showAmberBanner || showBlueBanner) ? (
+    <div className="border-b border-gray-200 flex-shrink-0 px-5 py-2 flex items-center gap-2"
+      style={{
+        background: showAmberBanner ? '#fffbeb' : '#eef2ff',
+        color: showAmberBanner ? '#b45309' : '#4338ca',
+        zIndex: 20,
+      }}>
+      <span className="text-xs font-medium flex-1 truncate">
+        {showAmberBanner ? 'Revert-to-me: no reply yet.' : 'New message: not read.'}
+      </span>
+      <div className="flex gap-1.5 flex-shrink-0">
+        {showAmberBanner ? (<>
+          <button onClick={()=>onR2mSnooze?.(message.id)}
+            className="px-2 py-0.5 rounded bg-amber-100 hover:bg-amber-200 text-amber-700 text-xs font-medium">Snooze</button>
+          <button onClick={()=>onR2mSeen?.(message.id)}
+            className="px-2 py-0.5 rounded bg-amber-100 hover:bg-amber-200 text-amber-700 text-xs font-medium">Seen</button>
+        </>) : (<>
+          <button onClick={()=>onSnooze?.(message.id)}
+            className="px-2 py-0.5 rounded bg-indigo-100 hover:bg-indigo-200 text-indigo-700 text-xs font-medium">Snooze</button>
+          <button onClick={()=>onMarkRead?.(message.id)}
+            className="px-2 py-0.5 rounded bg-indigo-100 hover:bg-indigo-200 text-indigo-700 text-xs font-medium">Seen</button>
+        </>)}
+      </div>
+    </div>
+  ) : null;
+
   return (
     <div className={`flex flex-col h-full bg-white${!isMobile?((fadeOut?' msg-fade-out':'')+(fadeOutFast?' msg-fade-out-fast':'')+(slideOut?' msg-slide-out':'')+(slideIn?' msg-slide-in':'')):''}`}>
       {MobileFixedSubheader}
+      {DesktopStickyAlert}
       <div ref={scrollRootRef}
         className={`flex-1 min-h-0 overflow-y-auto scroll${isMobile?((fadeOut?' msg-fade-out':'')+(fadeOutFast?' msg-fade-out-fast':'')+(slideOut?' msg-slide-out':'')+(slideIn?' msg-slide-in':'')):''}`}
         style={isMobile?{WebkitOverflowScrolling:'touch'}:{}}>
@@ -2651,7 +2698,7 @@ function MessageDetail({message,contact,isDeleted,msgTags,allTags,onReply,onRepl
           </div>
         )}
         {/* Sentinel used to detect when the alert banner scrolls out of view */}
-        {isMobile&&(showAmberBanner||showBlueBanner)&&<div ref={alertSentinelRef} style={{height:1}}/>}
+        {(showAmberBanner||showBlueBanner)&&<div ref={alertSentinelRef} style={{height:1}}/>}
       </div>
 
       <div className="px-5 py-4 text-sm text-gray-700 leading-relaxed" style={{wordBreak:'break-word', overflowWrap:'anywhere'}}>
@@ -5426,18 +5473,23 @@ function App({userId, onSignOut}) {
     setShowCompose(false);setReplyTo(null);setReplyKind(null);setComposeContact(null);setComposeDraft(null);setEditingContact(null);
     setSearchQuery('');setSearchScope('all');
     if(isMobile) { setMobileCol(1); setSelMsg(null); return; }
-    // 1. If we remember a previously-opened message for this contact, prefer that
-    //    (as long as it still exists and is visible under the current account filter).
+    // We only pick a message that's actually visible in the current
+    // ThreadColumn filter tab — otherwise col 3 would show a mail that
+    // doesn't appear in col 2, which Rik (rightly) found confusing.
+    const visible = m =>
+      m.contactId === id &&
+      (!m.accountEmail || selAccounts.includes(m.accountEmail)) &&
+      msgMatchesThreadFilter(m, contactFilter, deletedIds);
+    // 1. If we remember a previously-opened message for this contact, prefer that.
     const remembered = lastMsgByContact.get(id);
     if (remembered != null) {
-      const rem = messageList.find(m=>m.id===remembered && !deletedIds.includes(m.id)
-        && (!m.accountEmail || selAccounts.includes(m.accountEmail)));
+      const rem = messageList.find(m => m.id === remembered && visible(m));
       if (rem) { setSelMsg(remembered); return; }
     }
-    // 2. Fallback: auto-select oldest actionable (unread-in or r2m-out), else newest.
-    const contactMsgs = messageList.filter(m=>m.contactId===id&&!deletedIds.includes(m.id)&&!m.draft)
-      .sort((a,b)=>a.date.localeCompare(b.date));
-    const actionable = contactMsgs.filter(m=>(m.dir==='in'&&!m.read)||(m.dir==='out'&&m.revert2me));
+    // 2. Fallback: oldest actionable, else newest message that matches.
+    //    Drafts are excluded from "actionable" by definition.
+    const contactMsgs = messageList.filter(visible).sort((a,b)=>a.date.localeCompare(b.date));
+    const actionable = contactMsgs.filter(m => !m.draft && ((m.dir==='in' && !m.read) || (m.dir==='out' && m.revert2me)));
     const pick = actionable.length>0 ? actionable[0] : contactMsgs[contactMsgs.length-1];
     setSelMsg(pick?pick.id:null);
   }
@@ -5976,6 +6028,11 @@ function App({userId, onSignOut}) {
     const m = messageList.find(x => x.id === selMsg);
     if (!m) return null;
     if (m.accountEmail && !selAccounts.includes(m.accountEmail)) return null;
+    // When viewing a contact thread, the message must also match the
+    // active filter tab — otherwise col 3 shows a mail that's invisible
+    // in col 2. Tag view and global search don't have a thread filter,
+    // so leave them alone (selContact will be null there).
+    if (selContact != null && !msgMatchesThreadFilter(m, contactFilter, deletedIds)) return null;
     return m;
   })();
   // When in tag view, derive the detail contact from the message itself

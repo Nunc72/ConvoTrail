@@ -163,6 +163,50 @@ export async function syncAccount(accountId: string): Promise<SyncResult> {
           if (insErr) throw new Error(`messages insert: ${insErr.message}`);
           stat.inserted = rows.length;
         }
+
+        // Backfill pass: messages that were synced BEFORE the
+        // List-Unsubscribe code shipped have unsubscribe_url = NULL.
+        // Walk up to BACKFILL_PER_FOLDER of them per sync, re-fetch
+        // the IMAP source so we can parse the header, and write the
+        // result (real URL or empty string). Spread over syncs so a
+        // single click doesn't tie up the connection for minutes.
+        const BACKFILL_PER_FOLDER = 100;
+        const { data: bfRows } = await supabaseAdmin
+          .from("messages")
+          .select("uid")
+          .eq("mail_account_id", acc.id)
+          .eq("folder", box.path)
+          .eq("uidvalidity", uidvalidity.toString())
+          .is("unsubscribe_url", null)
+          .order("date", { ascending: false })
+          .limit(BACKFILL_PER_FOLDER);
+        const bfUids = (bfRows ?? []).map(r => Number((r as { uid: number }).uid));
+        if (bfUids.length > 0) {
+          for await (const bfMsg of client.fetch(bfUids, { source: true, uid: true }, { uid: true })) {
+            try {
+              const parsed = bfMsg.source ? await simpleParser(bfMsg.source) : null;
+              const { url, oneClick } = parsed
+                ? parseUnsubscribeHeaders(parsed.headers)
+                : { url: null, oneClick: false };
+              await supabaseAdmin
+                .from("messages")
+                .update({
+                  unsubscribe_url: url ?? '',
+                  unsubscribe_one_click: oneClick,
+                })
+                .eq("mail_account_id", acc.id)
+                .eq("folder", box.path)
+                .eq("uidvalidity", uidvalidity.toString())
+                .eq("uid", bfMsg.uid);
+              // Feed the auto-news pass that runs after the folder
+              // loop, so back-filled newsletters tag their contact too.
+              if (url && parsed?.from) {
+                const fromAddrs = addrList(parsed.from);
+                if (fromAddrs[0]?.email) newsletterSenders.add(fromAddrs[0].email);
+              }
+            } catch {/* skip unparseable, try next */}
+          }
+        }
       } finally {
         lock.release();
       }
@@ -269,7 +313,10 @@ async function buildMessageRow(
     flags,
     direction,
     has_attachments: (parsed?.attachments?.length ?? 0) > 0,
-    unsubscribe_url: unsubscribeUrl,
+    // Empty string means "we checked, no List-Unsubscribe header". Stays
+    // distinct from NULL ("not checked yet") so the backfill pass below
+    // can target only the unchecked rows.
+    unsubscribe_url: unsubscribeUrl ?? '',
     unsubscribe_one_click: unsubscribeOneClick,
   };
 }
