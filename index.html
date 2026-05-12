@@ -174,7 +174,7 @@
        polish change is picked up by every browser as soon as the version
        is bumped — no manual cache-busters needed. Keep ?v= here in sync
        with APP_VERSION below at every deploy. -->
-  <link rel="stylesheet" href="polish.css?v=0.0.142"/>
+  <link rel="stylesheet" href="polish.css?v=0.0.143"/>
 </head>
 <body>
 <div id="root">
@@ -189,7 +189,7 @@ const { useState, useMemo, useRef, useEffect, useCallback } = React;
 
 // ─── Constants ───────────────────────────────────────────────────────────────
 
-const APP_VERSION = "0.0.142"; // bumped on every deploy — keep in sync with version.json AND with the ?v= on polish.css above
+const APP_VERSION = "0.0.143"; // bumped on every deploy — keep in sync with version.json AND with the ?v= on polish.css above
 
 // ─── Backend + Supabase config ───────────────────────────────────────────────
 const SUPABASE_URL = "https://oyrlzqbjcsliesvunbwj.supabase.co";
@@ -4559,19 +4559,17 @@ function msgBelongsToActiveAccount(m, validIds, validEmails) {
 
 function writeBootstrapCache(uid, snap) {
   if (!uid) { console.log('[cache] write skipped: no userId'); return; }
-  try {
-    // The backend now decides which messages get a body in /bootstrap
-    // (actionable + top-300 newest) and strips the rest server-side, so
-    // the cache mirrors that shape automatically — no extra strip pass
-    // needed here. messageList items either carry body+bodyHtml (top
-    // ~300 + actionable) or have undefined for both (older), and the
-    // detail view falls back to GET /messages/:id/body on demand.
-    const payload = JSON.stringify({
+  // Try-then-fallback so a large mailbox doesn't end up with NO cache
+  // because we wanted the search-friendly version. First attempt keeps
+  // every message body (search hits everything). If localStorage refuses
+  // for quota reasons, retry with bodies stripped from non-drafts.
+  function buildPayload(messages) {
+    return JSON.stringify({
       v: BOOTSTRAP_CACHE_SCHEMA,
       writtenAt: Date.now(),
       mailAccounts:     snap.mailAccounts,
       contactList:      snap.contactList,
-      messageList:      snap.messageList,
+      messageList:      messages,
       tagList:          snap.tagList,
       tagIdByName:      [...snap.tagIdByName.entries()],
       msgTags:          snap.msgTags,
@@ -4582,12 +4580,38 @@ function writeBootstrapCache(uid, snap) {
       signatures:       snap.signatures,
       accountSigs:      snap.accountSigs,
     });
-    localStorage.setItem(bootstrapCacheKey(uid), payload);
+  }
+  const key = bootstrapCacheKey(uid);
+  const isQuota = e => e?.name === 'QuotaExceededError'
+    || e?.code === 22 || e?.code === 1014  // legacy Safari / Firefox codes
+    || /quota/i.test(e?.message || '')
+    || /exceeded the quota/i.test(e?.message || '');
+  try {
+    const full = buildPayload(snap.messageList);
+    localStorage.setItem(key, full);
     console.log('[cache] write ok:',
       snap.contactList.length, 'contacts,',
       snap.messageList.length, 'messages,',
-      Math.round(payload.length / 1024), 'KB');
-  } catch (e) { console.warn('[cache] write error:', e.message); }
+      Math.round(full.length / 1024), 'KB');
+    return;
+  } catch (e) {
+    if (!isQuota(e)) { console.warn('[cache] write error:', e.message); return; }
+    // Quota hit: retry without the bulky bodies. Drafts keep their body
+    // because the user's in-progress text shouldn't be discarded.
+    try {
+      const slimMessages = snap.messageList.map(m =>
+        m.draft ? m : { ...m, body: undefined, bodyHtml: undefined }
+      );
+      const slim = buildPayload(slimMessages);
+      localStorage.setItem(key, slim);
+      console.log('[cache] write ok (slim — bodies stripped due to quota):',
+        snap.contactList.length, 'contacts,',
+        snap.messageList.length, 'messages,',
+        Math.round(slim.length / 1024), 'KB');
+    } catch (e2) {
+      console.warn('[cache] write error (slim retry also failed):', e2.message);
+    }
+  }
 }
 
 function App({userId, onSignOut}) {
