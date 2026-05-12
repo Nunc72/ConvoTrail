@@ -185,9 +185,18 @@ export async function syncAccount(accountId: string): Promise<SyncResult> {
           for await (const bfMsg of client.fetch(bfUids, { source: true, uid: true }, { uid: true })) {
             try {
               const parsed = bfMsg.source ? await simpleParser(bfMsg.source) : null;
-              const { url, oneClick } = parsed
-                ? parseUnsubscribeHeaders(parsed.headers)
-                : { url: null, oneClick: false };
+              let url: string | null = null;
+              let oneClick = false;
+              if (parsed) {
+                const h = parseUnsubscribeHeaders(parsed.headers);
+                url = h.url;
+                oneClick = h.oneClick;
+                if (!url) {
+                  // Body-html fallback (same logic as the live ingestion).
+                  const fromBody = findBodyUnsubscribeLink(parsed.html);
+                  if (fromBody) { url = fromBody; oneClick = false; }
+                }
+              }
               await supabaseAdmin
                 .from("messages")
                 .update({
@@ -285,14 +294,22 @@ async function buildMessageRow(
     draft: flagsArr.includes("\\Draft"),
   };
 
-  // List-Unsubscribe (RFC 2369): newsletter senders include a header like
-  //   List-Unsubscribe: <https://example.com/unsub?id=abc>, <mailto:u@x.io>
-  // Modern senders pair it with
-  //   List-Unsubscribe-Post: List-Unsubscribe=One-Click
-  // which says the URL accepts a one-click POST (RFC 8058) and we can
-  // unsubscribe without opening a browser.
-  const { url: unsubscribeUrl, oneClick: unsubscribeOneClick } =
+  // Newsletter detection has two stages:
+  //   1. List-Unsubscribe header (RFC 2369), optionally with
+  //      List-Unsubscribe-Post: List-Unsubscribe=One-Click (RFC 8058)
+  //      for the no-browser-roundtrip flow.
+  //   2. As a fallback for senders that don't ship the header (still
+  //      common in real life, e.g. Technische Unie), scan body_html
+  //      for an "unsubscribe"-style link. Apple Mail does the same.
+  let { url: unsubscribeUrl, oneClick: unsubscribeOneClick } =
     parseUnsubscribeHeaders(parsed?.headers);
+  if (!unsubscribeUrl) {
+    const fromBody = findBodyUnsubscribeLink(parsed?.html);
+    if (fromBody) {
+      unsubscribeUrl = fromBody;
+      unsubscribeOneClick = false; // body-link is never one-click
+    }
+  }
 
   return {
     user_id: userId,
@@ -325,6 +342,26 @@ async function buildMessageRow(
 // mailparser ParsedMail.headers map. Returns the http(s) URL when
 // present (preferred over mailto: since the one-click flow is HTTP),
 // otherwise falls back to mailto:, otherwise null.
+// Fallback for senders that don't ship a List-Unsubscribe header but
+// embed an "unsubscribe" link in the HTML body — common with commercial
+// newsletters. Apple Mail does the same fallback. We accept a link
+// whose visible text or URL path mentions an opt-out word in Dutch or
+// English (uitschrijven / afmelden / unsubscribe / unsub / opt-out).
+// Returns the first matching http(s) URL, or null.
+function findBodyUnsubscribeLink(html: string | boolean | null | undefined): string | null {
+  if (typeof html !== "string" || !html) return null;
+  const re = /<a\s+[^>]*href\s*=\s*["']([^"']+)["'][^>]*>([\s\S]*?)<\/a>/gi;
+  const OPT_OUT = /unsubscribe|unsub\b|opt[-_]?out|afmelden|uitschrijven/i;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(html)) !== null) {
+    const url = m[1].trim();
+    if (!/^https?:\/\//i.test(url)) continue;
+    const innerText = m[2].replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim();
+    if (OPT_OUT.test(innerText) || OPT_OUT.test(url)) return url;
+  }
+  return null;
+}
+
 function parseUnsubscribeHeaders(headers: Map<string, unknown> | undefined): { url: string | null; oneClick: boolean } {
   if (!headers) return { url: null, oneClick: false };
   // mailparser lowercases header names.
