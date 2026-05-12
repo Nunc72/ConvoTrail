@@ -174,7 +174,7 @@
        polish change is picked up by every browser as soon as the version
        is bumped — no manual cache-busters needed. Keep ?v= here in sync
        with APP_VERSION below at every deploy. -->
-  <link rel="stylesheet" href="polish.css?v=0.0.138"/>
+  <link rel="stylesheet" href="polish.css?v=0.0.139"/>
 </head>
 <body>
 <div id="root">
@@ -189,7 +189,7 @@ const { useState, useMemo, useRef, useEffect, useCallback } = React;
 
 // ─── Constants ───────────────────────────────────────────────────────────────
 
-const APP_VERSION = "0.0.138"; // bumped on every deploy — keep in sync with version.json AND with the ?v= on polish.css above
+const APP_VERSION = "0.0.139"; // bumped on every deploy — keep in sync with version.json AND with the ?v= on polish.css above
 
 // ─── Backend + Supabase config ───────────────────────────────────────────────
 const SUPABASE_URL = "https://oyrlzqbjcsliesvunbwj.supabase.co";
@@ -4983,6 +4983,22 @@ function App({userId, onSignOut}) {
     clearBootstrapCache(userId);
     setDataRefreshTick(t => t + 1);
   }, [userId]);
+  // Belt-and-braces ghost-account fix: keep the cached mailAccounts list
+  // in sync with the live state on every change. The /bootstrap success
+  // path already writes the full cache, but if a write ever races or
+  // misses, stale ghost accounts kept reappearing on the next mount.
+  // This effect overrides ONLY the mailAccounts slice of the existing
+  // cache — every other slice stays whatever the bootstrap success last
+  // wrote. No-op when the IDs match or the cache hasn't been seeded yet.
+  useEffect(() => {
+    if (!userId || mailAccounts.length === 0) return;
+    const cached = readBootstrapCache(userId);
+    if (!cached) return;
+    const liveIds = mailAccounts.map(a => a.id).sort().join(',');
+    const cachedIds = (cached.mailAccounts || []).map(a => a.id).sort().join(',');
+    if (liveIds === cachedIds) return;
+    writeBootstrapCache(userId, { ...cached, mailAccounts });
+  }, [userId, mailAccounts]);
   const [deletedIds,   setDeletedIds]   = useState(()=>bootstrapCache?.deletedIds ?? INIT_DELETED);
   const [msgTags,      setMsgTags]      = useState(()=>bootstrapCache?.msgTags ?? {});            // {msgId: [tagName,...]}
   const [tagList,      setTagList]      = useState(()=>bootstrapCache?.tagList ?? []);             // [{id, name, archived_at}]
