@@ -174,7 +174,7 @@
        polish change is picked up by every browser as soon as the version
        is bumped — no manual cache-busters needed. Keep ?v= here in sync
        with APP_VERSION below at every deploy. -->
-  <link rel="stylesheet" href="polish.css?v=0.0.136"/>
+  <link rel="stylesheet" href="polish.css?v=0.0.137"/>
 </head>
 <body>
 <div id="root">
@@ -189,7 +189,7 @@ const { useState, useMemo, useRef, useEffect, useCallback } = React;
 
 // ─── Constants ───────────────────────────────────────────────────────────────
 
-const APP_VERSION = "0.0.136"; // bumped on every deploy — keep in sync with version.json AND with the ?v= on polish.css above
+const APP_VERSION = "0.0.137"; // bumped on every deploy — keep in sync with version.json AND with the ?v= on polish.css above
 
 // ─── Backend + Supabase config ───────────────────────────────────────────────
 const SUPABASE_URL = "https://oyrlzqbjcsliesvunbwj.supabase.co";
@@ -5889,6 +5889,32 @@ function App({userId, onSignOut}) {
     setEditingContact(null);
     setMergeContact(null);
   }
+  // Pick a message under the given filter the same way handleSelectContact
+  // does: oldest actionable (unread-in or revert2me-out) first, fall back
+  // to the newest visible message. Returns the picked id or null.
+  function pickMsgInScope(scopePredicate, filter) {
+    const visible = m =>
+      scopePredicate(m) &&
+      (!m.accountEmail || selAccounts.includes(m.accountEmail)) &&
+      msgMatchesThreadFilter(m, filter, deletedIds);
+    const msgs = messageList.filter(visible).sort((a,b)=>a.date.localeCompare(b.date));
+    const actionable = msgs.filter(m => !m.draft && ((m.dir==='in' && !m.read) || (m.dir==='out' && m.revert2me)));
+    const pick = actionable.length>0 ? actionable[0] : msgs[msgs.length-1];
+    return pick ? pick.id : null;
+  }
+  // Filter-tab switch under a contact card: keep col 3 in sync — open
+  // the oldest actionable msg under the new filter, else the newest.
+  function handleContactFilterChange(newFilter) {
+    setContactFilter(newFilter);
+    if (selContact == null) return;
+    setSelMsg(pickMsgInScope(m => m.contactId === selContact, newFilter));
+  }
+  // Same idea for the tag card's filter tabs (In / Out / Draft / All).
+  function handleTagFilterChange(newFilter) {
+    setTagFilter(newFilter);
+    if (selTag == null) return;
+    setSelMsg(pickMsgInScope(m => (msgTags[m.id]||[]).includes(selTag), newFilter));
+  }
   function handleToggleAccount(acc){
     if(acc.startsWith('__exclusive__')){
       setSelAccounts([acc.slice('__exclusive__'.length)]);
@@ -6135,7 +6161,7 @@ function App({userId, onSignOut}) {
       onUpdateRoles={handleUpdateTagRoles}
       onNewTagMsg={handleNewTagMsg}
       savedFilter={tagFilter}
-      onFilterChange={setTagFilter}
+      onFilterChange={handleTagFilterChange}
       onSelectContact={id=>handleSelectContact(id)}
       mobileBack={()=>{setSelTag(null);setMobileCol(0);}}/>;
   } else {
@@ -6148,7 +6174,7 @@ function App({userId, onSignOut}) {
       emailFlags={emailFlags} archivedContacts={archivedContacts}
       onToggleFlag={handleToggleContactFlag}
       savedFilter={contactFilter}
-      onFilterChange={setContactFilter}
+      onFilterChange={handleContactFilterChange}
       mobileBack={()=>setMobileCol(0)}/>;
   }
 
