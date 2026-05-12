@@ -174,7 +174,7 @@
        polish change is picked up by every browser as soon as the version
        is bumped — no manual cache-busters needed. Keep ?v= here in sync
        with APP_VERSION below at every deploy. -->
-  <link rel="stylesheet" href="polish.css?v=0.0.137"/>
+  <link rel="stylesheet" href="polish.css?v=0.0.138"/>
 </head>
 <body>
 <div id="root">
@@ -189,7 +189,7 @@ const { useState, useMemo, useRef, useEffect, useCallback } = React;
 
 // ─── Constants ───────────────────────────────────────────────────────────────
 
-const APP_VERSION = "0.0.137"; // bumped on every deploy — keep in sync with version.json AND with the ?v= on polish.css above
+const APP_VERSION = "0.0.138"; // bumped on every deploy — keep in sync with version.json AND with the ?v= on polish.css above
 
 // ─── Backend + Supabase config ───────────────────────────────────────────────
 const SUPABASE_URL = "https://oyrlzqbjcsliesvunbwj.supabase.co";
@@ -4457,11 +4457,14 @@ const RETENTION_OPTIONS = [
 // APP_VERSION so the cache survives ordinary deploys. Bump
 // BOOTSTRAP_CACHE_SCHEMA only when the shape we serialize below actually
 // changes (e.g. new fields on contacts or messages).
-// Bumped to 2 in v0.0.136 to force a one-time cache miss on every
-// device: deleted mail accounts that were still ghost-present in some
-// users' caches from before clearBootstrapCache() shipped get blown
-// away on the next mount, then rewritten clean from /bootstrap.
-const BOOTSTRAP_CACHE_SCHEMA = 2;
+// Back at 1 in v0.0.138. The 0.0.136 bump to 2 was meant to flush
+// ghost-account caches one-time but had a much bigger side effect:
+// every user lost their cache on the upgrade and the next mount had
+// to wait the full /bootstrap fetch with an empty screen. Going back
+// to 1 makes existing caches readable again. The clearBootstrapCache
+// hook in refreshData below catches future account deletes; that's
+// the real fix, the schema bump never should have shipped.
+const BOOTSTRAP_CACHE_SCHEMA = 1;
 function bootstrapCacheKey(uid) { return `convooz:bootstrap:${uid}:s${BOOTSTRAP_CACHE_SCHEMA}`; }
 function readBootstrapCache(uid) {
   if (!uid) { console.log('[cache] read skipped: no userId'); return null; }
