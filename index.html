@@ -174,7 +174,7 @@
        polish change is picked up by every browser as soon as the version
        is bumped — no manual cache-busters needed. Keep ?v= here in sync
        with APP_VERSION below at every deploy. -->
-  <link rel="stylesheet" href="polish.css?v=0.0.134"/>
+  <link rel="stylesheet" href="polish.css?v=0.0.135"/>
 </head>
 <body>
 <div id="root">
@@ -189,7 +189,7 @@ const { useState, useMemo, useRef, useEffect, useCallback } = React;
 
 // ─── Constants ───────────────────────────────────────────────────────────────
 
-const APP_VERSION = "0.0.134"; // bumped on every deploy — keep in sync with version.json AND with the ?v= on polish.css above
+const APP_VERSION = "0.0.135"; // bumped on every deploy — keep in sync with version.json AND with the ?v= on polish.css above
 
 // ─── Backend + Supabase config ───────────────────────────────────────────────
 const SUPABASE_URL = "https://oyrlzqbjcsliesvunbwj.supabase.co";
@@ -2523,17 +2523,19 @@ function MessageDetail({message,contact,isDeleted,msgTags,allTags,onReply,onRepl
     setAlertOutOfView(false);
   },[message?.id]);
   useEffect(()=>{
-    if(!isMobile) { setAlertOutOfView(false); return; }
     const root = scrollRootRef.current;
     if(!root) return;
+    // Mobile reserves ~40px at the top of the scroll root for the
+    // back-link subheader, so the sentinel has to clear that height
+    // before we count it as "out of view". Desktop has no subheader —
+    // sentinel just needs to leave the visible top edge.
+    const threshold = isMobile ? 40 : 0;
     function check(){
       const sentinel = alertSentinelRef.current;
       if(!sentinel){ setAlertOutOfView(false); return; }
-      // Subheader back bar is ~40px tall at top of scrollable root.
-      // Show sticky Snooze/Seen once sentinel (after alert banner) goes above that.
       const rootRect = root.getBoundingClientRect();
       const sentRect = sentinel.getBoundingClientRect();
-      setAlertOutOfView((sentRect.top - rootRect.top) < 40);
+      setAlertOutOfView((sentRect.top - rootRect.top) < threshold);
     }
     check();
     root.addEventListener('scroll', check, {passive:true});
@@ -4526,6 +4528,15 @@ function readCacheStatus(uid) {
   } catch { return 'Cache: read error'; }
 }
 
+// Drop the cached snapshot — used after a state change we don't want to
+// linger in localStorage (account delete, etc.). The next mount then
+// shows whatever /bootstrap returns, with no ghosts from the previous
+// snapshot if the user kills the app before the fetch lands.
+function clearBootstrapCache(uid) {
+  if (!uid) return;
+  try { localStorage.removeItem(bootstrapCacheKey(uid)); } catch {}
+}
+
 function writeBootstrapCache(uid, snap) {
   if (!uid) { console.log('[cache] write skipped: no userId'); return; }
   try {
@@ -4955,7 +4966,16 @@ function App({userId, onSignOut}) {
     return () => { cancelled = true; };
   }, [dataRefreshTick]);
 
-  const refreshData = useCallback(() => setDataRefreshTick(t => t + 1), []);
+  // refreshData also clears the bootstrap cache: callers use it after a
+  // mutation that needs a server round-trip (account delete, profile
+  // save, settings sync). Clearing protects against a kill+reopen
+  // landing on a stale snapshot — e.g. seeing a just-deleted account
+  // ghost back into the selector for the brief window before the
+  // /bootstrap response overwrites the cache.
+  const refreshData = useCallback(() => {
+    clearBootstrapCache(userId);
+    setDataRefreshTick(t => t + 1);
+  }, [userId]);
   const [deletedIds,   setDeletedIds]   = useState(()=>bootstrapCache?.deletedIds ?? INIT_DELETED);
   const [msgTags,      setMsgTags]      = useState(()=>bootstrapCache?.msgTags ?? {});            // {msgId: [tagName,...]}
   const [tagList,      setTagList]      = useState(()=>bootstrapCache?.tagList ?? []);             // [{id, name, archived_at}]

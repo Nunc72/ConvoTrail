@@ -332,11 +332,20 @@ function parseUnsubscribeHeaders(headers: Map<string, unknown> | undefined): { u
   if (!raw || typeof raw !== "string") return { url: null, oneClick: false };
   const post = headers.get("list-unsubscribe-post");
   const oneClick = typeof post === "string" && /one-click/i.test(post);
-  // The header value is a comma-separated list of <url>-bracketed entries.
+  // RFC 2369 spec is comma-separated <url> entries, but real-world
+  // senders sometimes ship bare URLs without angle brackets, or use
+  // surrounding quotes. Try angle-bracket entries first; if there are
+  // none, comma-split and accept any http(s)/mailto bare URL.
   const entries: string[] = [];
   const re = /<([^>]+)>/g;
   let m: RegExpExecArray | null;
   while ((m = re.exec(raw)) !== null) entries.push(m[1].trim());
+  if (entries.length === 0) {
+    for (const part of raw.split(',')) {
+      const cleaned = part.trim().replace(/^["'<\s]+|["'>\s]+$/g, '');
+      if (/^(https?:\/\/|mailto:)/i.test(cleaned)) entries.push(cleaned);
+    }
+  }
   if (entries.length === 0) return { url: null, oneClick: false };
   const http = entries.find(e => /^https?:\/\//i.test(e));
   if (http) return { url: http, oneClick };
