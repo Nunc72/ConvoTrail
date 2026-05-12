@@ -174,7 +174,7 @@
        polish change is picked up by every browser as soon as the version
        is bumped — no manual cache-busters needed. Keep ?v= here in sync
        with APP_VERSION below at every deploy. -->
-  <link rel="stylesheet" href="polish.css?v=0.0.141"/>
+  <link rel="stylesheet" href="polish.css?v=0.0.142"/>
 </head>
 <body>
 <div id="root">
@@ -189,7 +189,7 @@ const { useState, useMemo, useRef, useEffect, useCallback } = React;
 
 // ─── Constants ───────────────────────────────────────────────────────────────
 
-const APP_VERSION = "0.0.141"; // bumped on every deploy — keep in sync with version.json AND with the ?v= on polish.css above
+const APP_VERSION = "0.0.142"; // bumped on every deploy — keep in sync with version.json AND with the ?v= on polish.css above
 
 // ─── Backend + Supabase config ───────────────────────────────────────────────
 const SUPABASE_URL = "https://oyrlzqbjcsliesvunbwj.supabase.co";
@@ -4544,6 +4544,19 @@ function clearBootstrapCache(uid) {
   try { localStorage.removeItem(bootstrapCacheKey(uid)); } catch {}
 }
 
+// Decide whether a cached message still belongs to an active account.
+// A message can carry accountId (UUID) or accountEmail or both — we
+// only keep it when whatever it does carry matches the current set.
+// Messages with neither (highly unusual, but defensive) are kept.
+function msgBelongsToActiveAccount(m, validIds, validEmails) {
+  const hasId = !!m.accountId;
+  const hasEmail = !!m.accountEmail;
+  if (!hasId && !hasEmail) return true;
+  if (hasId && !validIds.has(m.accountId)) return false;
+  if (hasEmail && !validEmails.has((m.accountEmail || '').toLowerCase())) return false;
+  return true;
+}
+
 function writeBootstrapCache(uid, snap) {
   if (!uid) { console.log('[cache] write skipped: no userId'); return; }
   try {
@@ -4616,8 +4629,10 @@ function App({userId, onSignOut}) {
   const [messageList,  setMessageList]  = useState(()=>{
     const ml = bootstrapCache?.messageList;
     if (!ml) return [];
-    const validIds = new Set((bootstrapCache?.mailAccounts || []).map(a => a.id));
-    return ml.filter(m => !m.accountId || validIds.has(m.accountId));
+    const accounts = bootstrapCache?.mailAccounts || [];
+    const validIds = new Set(accounts.map(a => a.id));
+    const validEmails = new Set(accounts.map(a => (a.email || '').toLowerCase()).filter(Boolean));
+    return ml.filter(m => msgBelongsToActiveAccount(m, validIds, validEmails));
   });
   // dataLoading is only "true" on the very first cold load (no cache). On a
   // background refresh the contact list is already populated from cache, so
@@ -5006,9 +5021,10 @@ function App({userId, onSignOut}) {
     if (!cached) return;
     const liveIds = mailAccounts.map(a => a.id).sort().join(',');
     const cachedIds = (cached.mailAccounts || []).map(a => a.id).sort().join(',');
-    const validAccountIds = new Set(mailAccounts.map(a => a.id));
+    const validIds = new Set(mailAccounts.map(a => a.id));
+    const validEmails = new Set(mailAccounts.map(a => (a.email || '').toLowerCase()).filter(Boolean));
     const cachedMessages = cached.messageList || [];
-    const prunedMessages = cachedMessages.filter(m => !m.accountId || validAccountIds.has(m.accountId));
+    const prunedMessages = cachedMessages.filter(m => msgBelongsToActiveAccount(m, validIds, validEmails));
     const accountsDrift = liveIds !== cachedIds;
     const messagesDrift = prunedMessages.length !== cachedMessages.length;
     if (!accountsDrift && !messagesDrift) return;
