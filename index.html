@@ -174,7 +174,7 @@
        polish change is picked up by every browser as soon as the version
        is bumped — no manual cache-busters needed. Keep ?v= here in sync
        with APP_VERSION below at every deploy. -->
-  <link rel="stylesheet" href="polish.css?v=0.0.140"/>
+  <link rel="stylesheet" href="polish.css?v=0.0.141"/>
 </head>
 <body>
 <div id="root">
@@ -189,7 +189,7 @@ const { useState, useMemo, useRef, useEffect, useCallback } = React;
 
 // ─── Constants ───────────────────────────────────────────────────────────────
 
-const APP_VERSION = "0.0.140"; // bumped on every deploy — keep in sync with version.json AND with the ?v= on polish.css above
+const APP_VERSION = "0.0.141"; // bumped on every deploy — keep in sync with version.json AND with the ?v= on polish.css above
 
 // ─── Backend + Supabase config ───────────────────────────────────────────────
 const SUPABASE_URL = "https://oyrlzqbjcsliesvunbwj.supabase.co";
@@ -4607,7 +4607,18 @@ function App({userId, onSignOut}) {
   // and overwrites these once it completes.
   const [mailAccounts, setMailAccounts] = useState(()=>bootstrapCache?.mailAccounts ?? []);
   const [contactList,  setContactList]  = useState(()=>bootstrapCache?.contactList ?? []);
-  const [messageList,  setMessageList]  = useState(()=>bootstrapCache?.messageList ?? []);
+  // messageList hydration drops rows that reference a mail-account id
+  // the cache no longer knows about. That keeps the first paint
+  // consistent with the cached mailAccounts list: if the user deleted
+  // an account in a previous session and our v0.0.139 effect pruned
+  // mailAccounts in the cache, we don't want messages from that account
+  // flashing back into view until /bootstrap lands a clean replacement.
+  const [messageList,  setMessageList]  = useState(()=>{
+    const ml = bootstrapCache?.messageList;
+    if (!ml) return [];
+    const validIds = new Set((bootstrapCache?.mailAccounts || []).map(a => a.id));
+    return ml.filter(m => !m.accountId || validIds.has(m.accountId));
+  });
   // dataLoading is only "true" on the very first cold load (no cache). On a
   // background refresh the contact list is already populated from cache, so
   // we skip the loading state — the spinner in the Sync button is the only
@@ -4973,31 +4984,35 @@ function App({userId, onSignOut}) {
     return () => { cancelled = true; };
   }, [dataRefreshTick]);
 
-  // refreshData also clears the bootstrap cache: callers use it after a
-  // mutation that needs a server round-trip (account delete, profile
-  // save, settings sync). Clearing protects against a kill+reopen
-  // landing on a stale snapshot — e.g. seeing a just-deleted account
-  // ghost back into the selector for the brief window before the
-  // /bootstrap response overwrites the cache.
-  const refreshData = useCallback(() => {
-    clearBootstrapCache(userId);
-    setDataRefreshTick(t => t + 1);
-  }, [userId]);
-  // Belt-and-braces ghost-account fix: keep the cached mailAccounts list
-  // in sync with the live state on every change. The /bootstrap success
-  // path already writes the full cache, but if a write ever races or
-  // misses, stale ghost accounts kept reappearing on the next mount.
-  // This effect overrides ONLY the mailAccounts slice of the existing
-  // cache — every other slice stays whatever the bootstrap success last
-  // wrote. No-op when the IDs match or the cache hasn't been seeded yet.
+  // refreshData triggers a fresh /bootstrap fetch. We deliberately do
+  // NOT clear the cache here — clearing made the next page reload land
+  // on a "No accounts" empty screen until /bootstrap finished, which
+  // is exactly the cold-load UX we want to avoid. Stale entries are
+  // pruned a different way: the sync-effect below diffs live mail-
+  // Accounts against the cached snapshot and rewrites whatever slices
+  // are now out of date.
+  const refreshData = useCallback(() => setDataRefreshTick(t => t + 1), []);
+  // Belt-and-braces ghost-account fix: keep the cached mailAccounts AND
+  // the cached messageList in sync with the live mailAccounts state on
+  // every change. The /bootstrap success path already writes the full
+  // cache, but if a write ever races or misses, stale ghosts kept
+  // reappearing on the next mount. This effect overrides only the
+  // affected slices of the existing cache; everything else (contacts,
+  // tags, signatures, …) stays whatever the bootstrap success last
+  // wrote. No-op when there's no drift.
   useEffect(() => {
     if (!userId || mailAccounts.length === 0) return;
     const cached = readBootstrapCache(userId);
     if (!cached) return;
     const liveIds = mailAccounts.map(a => a.id).sort().join(',');
     const cachedIds = (cached.mailAccounts || []).map(a => a.id).sort().join(',');
-    if (liveIds === cachedIds) return;
-    writeBootstrapCache(userId, { ...cached, mailAccounts });
+    const validAccountIds = new Set(mailAccounts.map(a => a.id));
+    const cachedMessages = cached.messageList || [];
+    const prunedMessages = cachedMessages.filter(m => !m.accountId || validAccountIds.has(m.accountId));
+    const accountsDrift = liveIds !== cachedIds;
+    const messagesDrift = prunedMessages.length !== cachedMessages.length;
+    if (!accountsDrift && !messagesDrift) return;
+    writeBootstrapCache(userId, { ...cached, mailAccounts, messageList: prunedMessages });
   }, [userId, mailAccounts]);
   const [deletedIds,   setDeletedIds]   = useState(()=>bootstrapCache?.deletedIds ?? INIT_DELETED);
   const [msgTags,      setMsgTags]      = useState(()=>bootstrapCache?.msgTags ?? {});            // {msgId: [tagName,...]}
