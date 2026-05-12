@@ -20,7 +20,12 @@ export async function registerContactsRoutes(app: FastifyInstance) {
   }>("/contacts/:id", auth, async (req, reply) => {
     const b = req.body || {};
     const patch: Record<string, unknown> = {};
-    if (typeof b.is_news  === "boolean")  patch.is_news  = b.is_news;
+    if (typeof b.is_news  === "boolean")  {
+      patch.is_news  = b.is_news;
+      // The user explicitly touched News (either direction). From now on
+      // the sync's auto-tag-newsletter logic must not flip it back.
+      patch.is_news_user_set = true;
+    }
     if (typeof b.is_muted === "boolean")  patch.is_muted = b.is_muted;
     if (typeof b.archived === "boolean")  patch.archived_at = b.archived ? new Date().toISOString() : null;
     if (typeof b.name     === "string" && b.name.trim()) patch.name = b.name.trim();

@@ -81,6 +81,11 @@ export async function syncAccount(accountId: string): Promise<SyncResult> {
   // folders we sync. Persisted to mail_accounts.sync_known_uids so the UI
   // can render "324 / 5000 synced" while the per-folder catch-up runs.
   let sumKnownUids = 0;
+  // Senders of incoming mail in this sync that carried a List-Unsubscribe
+  // header — i.e. newsletter mail. After the inserts land we mark their
+  // contacts as is_news = true (unless the user has explicitly toggled
+  // News, signalled by is_news_user_set = true).
+  const newsletterSenders = new Set<string>();
 
   try {
     await client.connect();
@@ -140,6 +145,15 @@ export async function syncAccount(accountId: string): Promise<SyncResult> {
               for (const a of addrList(parsed.to))   allExtractedAddrs.set(a.email, a.name);
               for (const a of addrList(parsed.cc))   allExtractedAddrs.set(a.email, a.name);
             }
+            // Newsletter detection: incoming mail with a List-Unsubscribe
+            // header. The sender becomes a candidate for the News flag.
+            if (
+              row.direction === 'in' &&
+              row.unsubscribe_url &&
+              typeof row.from_email === 'string'
+            ) {
+              newsletterSenders.add((row.from_email as string).toLowerCase());
+            }
           } catch (e) {
             // skip unparseable
           }
@@ -159,6 +173,27 @@ export async function syncAccount(accountId: string): Promise<SyncResult> {
     allExtractedAddrs.delete(userEmail);
     if (allExtractedAddrs.size > 0) {
       contactsCreated = await upsertContacts(userId, allExtractedAddrs);
+    }
+
+    // 3.5) Auto-tag newsletter contacts. For each sender that had a
+    // List-Unsubscribe header in this sync, flip is_news = true — but
+    // ONLY when the user hasn't already toggled News themselves
+    // (is_news_user_set = false). Look up contact_id via contact_emails.
+    if (newsletterSenders.size > 0) {
+      const senderArr = [...newsletterSenders];
+      const { data: emailRows } = await supabaseAdmin
+        .from("contact_emails")
+        .select("contact_id, email")
+        .eq("user_id", userId)
+        .in("email", senderArr);
+      const contactIds = [...new Set((emailRows ?? []).map(r => r.contact_id as string))];
+      if (contactIds.length > 0) {
+        await supabaseAdmin
+          .from("contacts")
+          .update({ is_news: true })
+          .in("id", contactIds)
+          .eq("is_news_user_set", false);
+      }
     }
 
     // 4) Update last_sync_at, sync_known_uids, clear last_error
@@ -206,6 +241,15 @@ async function buildMessageRow(
     draft: flagsArr.includes("\\Draft"),
   };
 
+  // List-Unsubscribe (RFC 2369): newsletter senders include a header like
+  //   List-Unsubscribe: <https://example.com/unsub?id=abc>, <mailto:u@x.io>
+  // Modern senders pair it with
+  //   List-Unsubscribe-Post: List-Unsubscribe=One-Click
+  // which says the URL accepts a one-click POST (RFC 8058) and we can
+  // unsubscribe without opening a browser.
+  const { url: unsubscribeUrl, oneClick: unsubscribeOneClick } =
+    parseUnsubscribeHeaders(parsed?.headers);
+
   return {
     user_id: userId,
     mail_account_id: accountId,
@@ -225,7 +269,34 @@ async function buildMessageRow(
     flags,
     direction,
     has_attachments: (parsed?.attachments?.length ?? 0) > 0,
+    unsubscribe_url: unsubscribeUrl,
+    unsubscribe_one_click: unsubscribeOneClick,
   };
+}
+
+// Parse the List-Unsubscribe and List-Unsubscribe-Post headers from a
+// mailparser ParsedMail.headers map. Returns the http(s) URL when
+// present (preferred over mailto: since the one-click flow is HTTP),
+// otherwise falls back to mailto:, otherwise null.
+function parseUnsubscribeHeaders(headers: Map<string, unknown> | undefined): { url: string | null; oneClick: boolean } {
+  if (!headers) return { url: null, oneClick: false };
+  // mailparser lowercases header names.
+  const raw = headers.get("list-unsubscribe");
+  if (!raw || typeof raw !== "string") return { url: null, oneClick: false };
+  const post = headers.get("list-unsubscribe-post");
+  const oneClick = typeof post === "string" && /one-click/i.test(post);
+  // The header value is a comma-separated list of <url>-bracketed entries.
+  const entries: string[] = [];
+  const re = /<([^>]+)>/g;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(raw)) !== null) entries.push(m[1].trim());
+  if (entries.length === 0) return { url: null, oneClick: false };
+  const http = entries.find(e => /^https?:\/\//i.test(e));
+  if (http) return { url: http, oneClick };
+  const mail = entries.find(e => /^mailto:/i.test(e));
+  // mailto can't be one-click — RFC 8058 requires HTTP.
+  if (mail) return { url: mail, oneClick: false };
+  return { url: null, oneClick: false };
 }
 
 async function upsertContacts(userId: string, addrs: Map<string, string | null>): Promise<number> {

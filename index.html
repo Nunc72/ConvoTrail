@@ -174,7 +174,7 @@
        polish change is picked up by every browser as soon as the version
        is bumped — no manual cache-busters needed. Keep ?v= here in sync
        with APP_VERSION below at every deploy. -->
-  <link rel="stylesheet" href="polish.css?v=0.0.132"/>
+  <link rel="stylesheet" href="polish.css?v=0.0.133"/>
 </head>
 <body>
 <div id="root">
@@ -189,7 +189,7 @@ const { useState, useMemo, useRef, useEffect, useCallback } = React;
 
 // ─── Constants ───────────────────────────────────────────────────────────────
 
-const APP_VERSION = "0.0.132"; // bumped on every deploy — keep in sync with version.json AND with the ?v= on polish.css above
+const APP_VERSION = "0.0.133"; // bumped on every deploy — keep in sync with version.json AND with the ?v= on polish.css above
 
 // ─── Backend + Supabase config ───────────────────────────────────────────────
 const SUPABASE_URL = "https://oyrlzqbjcsliesvunbwj.supabase.co";
@@ -400,7 +400,9 @@ function formatTime(s) {
   if (diff===0) return d.toLocaleTimeString("nl-NL",{hour:"2-digit",minute:"2-digit"});
   if (diff===1) return "gisteren";
   if (diff<7)   return d.toLocaleDateString("nl-NL",{weekday:"short"});
-  return d.toLocaleDateString("nl-NL",{day:"numeric",month:"short"});
+  // 7+ days old: full date with year so "10 mei 2025" can be told apart
+  // from "10 mei 2026" at a glance instead of stripping the year off.
+  return d.toLocaleDateString("nl-NL",{day:"numeric",month:"long",year:"numeric"});
 }
 function formatFull(s) {
   return new Date(s).toLocaleString("nl-NL",{day:"numeric",month:"long",year:"numeric",hour:"2-digit",minute:"2-digit"});
@@ -1818,13 +1820,17 @@ function ComposePane({replyTo, replyKind='reply', toContact, draft, initTo:initT
           <input className="flex-1 outline-none text-gray-800" value={subj} onChange={e=>setSubj(e.target.value)}/>
         </div>
       </div>
+      {/* Mobile: textarea grows via JS so the wrapper scrolls — overflow-
+          hidden keeps the textarea's own scrollbar away. Desktop: pane
+          height is fixed; the textarea is the one that needs to scroll
+          when the draft body grows past the visible area. */}
       <textarea ref={el=>{
           if(isMobile&&el){
             el.style.height='auto';
             el.style.height = Math.max(260, el.scrollHeight) + 'px';
           }
         }}
-        className={`${isMobile?'flex-shrink-0':'flex-1'} px-4 py-3 text-sm text-gray-800 outline-none resize-none overflow-hidden`}
+        className={`${isMobile?'flex-shrink-0 overflow-hidden':'flex-1 overflow-y-auto scroll'} px-4 py-3 text-sm text-gray-800 outline-none resize-none`}
         style={isMobile?{minHeight:260}:{}}
         value={body} onChange={e=>{
           setBody(e.target.value);
@@ -2436,7 +2442,7 @@ function fibSnoozeDays(count) {
   return b;
 }
 
-function MessageDetail({message,contact,isDeleted,msgTags,allTags,onReply,onReplyAll,onForward,onDelete,onRecover,onDismissR2m,onR2mSeen,onR2mSnooze,onMarkRead,onSnooze,onSpam,snoozeCount=0,onAddTag,onRemoveTag,selAccounts=[],fadeOut=false,fadeOutFast=false,slideIn=false,slideOut=false,fadingAlert=null,onHeaderHeight,mobileBack,mobileBackLabel}) {
+function MessageDetail({message,contact,isDeleted,msgTags,allTags,onReply,onReplyAll,onForward,onDelete,onRecover,onDismissR2m,onR2mSeen,onR2mSnooze,onMarkRead,onSnooze,onSpam,onUnsubscribe,snoozeCount=0,onAddTag,onRemoveTag,selAccounts=[],fadeOut=false,fadeOutFast=false,slideIn=false,slideOut=false,fadingAlert=null,onHeaderHeight,mobileBack,mobileBackLabel}) {
   const isMobile = typeof window !== 'undefined' && window.innerWidth < 768;
   const headerRef = useRef(null);
   const [headerH, setHeaderH] = useState(0);
@@ -2628,6 +2634,19 @@ function MessageDetail({message,contact,isDeleted,msgTags,allTags,onReply,onRepl
                 className="px-2 py-0.5 rounded bg-indigo-100 hover:bg-indigo-200 font-medium">Snooze</button>
               <button onClick={()=>onMarkRead?.(message.id)}
                 className="px-2 py-0.5 rounded bg-indigo-100 hover:bg-indigo-200 font-medium">Seen</button>
+            </div>
+          </div>
+        )}
+        {/* Newsletter banner: any incoming mail with a List-Unsubscribe
+            header gets an Unsubscribe button right under the message
+            header, Apple-Mail style. Click triggers onUnsubscribe(message);
+            the parent decides whether to POST one-click or open the URL. */}
+        {message.unsubscribeUrl && message.dir==='in' && !isDeleted && (
+          <div className="mx-4 mt-3 px-3 py-2 rounded bg-gray-50 border border-gray-200 flex items-center gap-2 text-xs text-gray-600">
+            <span>Newsletter</span>
+            <div className="ml-auto flex gap-2">
+              <button onClick={()=>onUnsubscribe?.(message)}
+                className="px-2 py-0.5 rounded bg-gray-100 hover:bg-gray-200 text-gray-700 font-medium">Unsubscribe</button>
             </div>
           </div>
         )}
@@ -3364,9 +3383,18 @@ function LeftColumn({contactMeta, archivedContacts, selectedId, mergeId, onSelec
                      selAccounts, onToggleAccount,
                      mailAccounts=[],
                      actionableCounts={total:0, inSel:0},
+                     onContactTabChange,
                      dataLoading=false}) {
   const [accDropOpen, setAccDropOpen] = useState(false);
-  const [contactTab,  setContactTab]  = useState('Convo');
+  const [contactTab,  setContactTabRaw] = useState('Convo');
+  // Switching tabs (Convo / News / Vendors / Archive) shows a different
+  // contact subset, so the currently-open contact + mail in cols 2/3
+  // should clear back to empty state. The parent App handles the actual
+  // state clearing — we just fire the callback on every tab change.
+  const setContactTab = (tab) => {
+    setContactTabRaw(tab);
+    onContactTabChange?.(tab);
+  };
   const [archiveTagsVisible, setArchiveTagsVisible] = useState(false);
   const accDropRef = useRef(null);
   const tagsDivStartY = useRef(null);
@@ -4700,6 +4728,8 @@ function App({userId, onSignOut}) {
             bodyHtml: hasBodyHtml ? (m.body_html.trim() ? m.body_html : null) : undefined,
             snippet: m.snippet || '',
             hasAttachments: !!m.has_attachments,
+            unsubscribeUrl: m.unsubscribe_url || null,
+            unsubscribeOneClick: !!m.unsubscribe_one_click,
             sender,
           };
         }).filter(m => m.contactId !== null);
@@ -5048,6 +5078,8 @@ function App({userId, onSignOut}) {
             bodyHtml: typeof raw.body_html === 'string' && raw.body_html.trim() ? raw.body_html : (raw.body_html === null ? null : undefined),
             snippet: raw.snippet || '',
             hasAttachments: !!raw.has_attachments,
+            unsubscribeUrl: raw.unsubscribe_url || null,
+            unsubscribeOneClick: !!raw.unsubscribe_one_click,
             sender: null,
           };
         }).filter(m => m.contactId !== null);
@@ -5473,6 +5505,26 @@ function App({userId, onSignOut}) {
     setActionToast('Mail was reported as spam');
     persistDelete(id);
   }
+  // Unsubscribe action: one-click senders go through our backend (it
+  // POSTs to the URL server-side so we sidestep CORS). Non-one-click
+  // senders open the URL in a new tab — the user finishes the flow
+  // there (typically a confirmation page or a mailto: in their mail
+  // client).
+  async function handleUnsubscribe(msg) {
+    if (!msg?.unsubscribeUrl) return;
+    if (msg.unsubscribeOneClick) {
+      try {
+        await apiFetch(`/messages/${msg.id}/unsubscribe`, { method: 'POST' });
+        setActionToast('Unsubscribed');
+      } catch (e) {
+        setActionToast('Unsubscribe failed: ' + (e?.message || 'unknown error'));
+      }
+      return;
+    }
+    // mailto: or plain http(s) URL — let the OS / browser handle it.
+    window.open(msg.unsubscribeUrl, '_blank', 'noopener,noreferrer');
+    setActionToast('Opening unsubscribe page');
+  }
   // Persist an r2m action (dismiss / snooze). Optimistic flip is already
   // applied by the caller; on failure we revert and re-arm the banner.
   function persistR2m(id, body) {
@@ -5750,6 +5802,16 @@ function App({userId, onSignOut}) {
         setActionToast('Tag save failed: ' + e.message);
         refreshData();
       });
+  }
+  // Switching tabs in the left column (Convo / News / Vendors / Archive)
+  // shows a different contact subset, so the currently-open contact + mail
+  // detail should empty out — they may not even live in the new tab.
+  function handleContactTabChange() {
+    setSelContact(null);
+    setSelMsg(null);
+    setSelTag(null);
+    setEditingContact(null);
+    setMergeContact(null);
   }
   function handleToggleAccount(acc){
     if(acc.startsWith('__exclusive__')){
@@ -6236,6 +6298,7 @@ function App({userId, onSignOut}) {
                 selAccounts={selAccounts} onToggleAccount={handleToggleAccount}
                 mailAccounts={mailAccounts}
                 actionableCounts={actionableCounts}
+                onContactTabChange={handleContactTabChange}
                 dataLoading={dataLoading}/>
             </div>
             {/* Mobile Col 2 */}
@@ -6271,7 +6334,7 @@ function App({userId, onSignOut}) {
                     onReply={()=>handleReply(selectedMsg)} onReplyAll={()=>handleReplyAll(selectedMsg)} onForward={()=>handleForward(selectedMsg)}
                     onDelete={()=>handleDelete(selMsg)} onRecover={()=>handleRecover(selMsg)}
                     onDismissR2m={handleDismissR2m} onR2mSeen={handleR2mSeen} onR2mSnooze={handleR2mSnooze}
-                    onMarkRead={handleMarkRead} onSnooze={handleSnoozeMsg} onSpam={handleSpam}
+                    onMarkRead={handleMarkRead} onSnooze={handleSnoozeMsg} onSpam={handleSpam} onUnsubscribe={handleUnsubscribe}
                     snoozeCount={msgSnoozeCounts[selMsg]||0}
                     onAddTag={handleAddMsgTag} onRemoveTag={handleRemoveMsgTag}
                     fadeOut={fadingOut} fadeOutFast={fadingOutFast} slideIn={slidingIn} slideOut={slidingOut} fadingAlert={fadingAlert}
@@ -6297,6 +6360,7 @@ function App({userId, onSignOut}) {
                 selAccounts={selAccounts} onToggleAccount={handleToggleAccount}
                 mailAccounts={mailAccounts}
                 actionableCounts={actionableCounts}
+                onContactTabChange={handleContactTabChange}
                 dataLoading={dataLoading}/>
             </div>
 
@@ -6330,7 +6394,7 @@ function App({userId, onSignOut}) {
                   onReply={()=>handleReply(selectedMsg)} onReplyAll={()=>handleReplyAll(selectedMsg)} onForward={()=>handleForward(selectedMsg)}
                   onDelete={()=>handleDelete(selMsg)} onRecover={()=>handleRecover(selMsg)}
                   onDismissR2m={handleDismissR2m} onR2mSeen={handleR2mSeen} onR2mSnooze={handleR2mSnooze}
-                  onMarkRead={handleMarkRead} onSnooze={handleSnoozeMsg} onSpam={handleSpam}
+                  onMarkRead={handleMarkRead} onSnooze={handleSnoozeMsg} onSpam={handleSpam} onUnsubscribe={handleUnsubscribe}
                   snoozeCount={msgSnoozeCounts[selMsg]||0}
                   onAddTag={handleAddMsgTag} onRemoveTag={handleRemoveMsgTag}
                   fadeOut={fadingOut} fadeOutFast={fadingOutFast} slideIn={slidingIn} slideOut={slidingOut} fadingAlert={fadingAlert}

@@ -277,4 +277,45 @@ export async function registerMessagesRoutes(app: FastifyInstance) {
     );
     return reply.code(204).send();
   });
+
+  // ─── Unsubscribe (server-side POST, RFC 8058 One-Click) ─────────────────
+  // The browser can't always POST cross-origin to a sender's unsubscribe
+  // URL (CORS, mixed-content), so we proxy the request server-side. The
+  // body the spec calls for is "List-Unsubscribe=One-Click", sent with
+  // Content-Type: application/x-www-form-urlencoded.
+  //
+  // Falls back to "open URL" for non-one-click senders — the client can
+  // detect that case from message.unsubscribe_one_click and use the URL
+  // directly instead of hitting this endpoint.
+  app.post<{ Params: { id: string } }>("/messages/:id/unsubscribe", auth, async (req, reply) => {
+    const pool = requirePool();
+    const r = await pool.query<{
+      user_id: string;
+      unsubscribe_url: string | null;
+      unsubscribe_one_click: boolean;
+    }>(
+      `SELECT user_id, unsubscribe_url, unsubscribe_one_click FROM messages WHERE id = $1`,
+      [req.params.id],
+    );
+    if (r.rows.length === 0) return reply.notFound();
+    const row = r.rows[0];
+    if (row.user_id !== req.authUser!.id) return reply.forbidden();
+    if (!row.unsubscribe_url) return reply.badRequest("No unsubscribe URL");
+    if (!row.unsubscribe_one_click) return reply.badRequest("Not a one-click sender");
+    // RFC 8058: POST with body "List-Unsubscribe=One-Click".
+    try {
+      const res = await fetch(row.unsubscribe_url, {
+        method: "POST",
+        headers: { "Content-Type": "application/x-www-form-urlencoded" },
+        body: "List-Unsubscribe=One-Click",
+      });
+      if (!res.ok && res.status !== 202) {
+        return reply.internalServerError(`Unsubscribe POST returned ${res.status}`);
+      }
+      return reply.code(204).send();
+    } catch (e: unknown) {
+      const msg = e instanceof Error ? e.message : String(e);
+      return reply.internalServerError(`Unsubscribe POST failed: ${msg}`);
+    }
+  });
 }
