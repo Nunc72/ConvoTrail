@@ -6,6 +6,7 @@ import type { FastifyInstance } from "fastify";
 import { ImapFlow } from "imapflow";
 import { simpleParser, type Attachment } from "mailparser";
 import { authPreHandler } from "../auth.js";
+import { logAudit } from "../audit.js";
 import { decrypt } from "../crypto.js";
 import { requirePool } from "../db.js";
 
@@ -312,6 +313,9 @@ export async function registerMessagesRoutes(app: FastifyInstance) {
       if (!res.ok && res.status !== 202) {
         return reply.internalServerError(`Unsubscribe POST returned ${res.status}`);
       }
+      logAudit(req, "message.unsubscribe", { type: "message", id: req.params.id }, {
+        url: row.unsubscribe_url, one_click: true,
+      });
       return reply.code(204).send();
     } catch (e: unknown) {
       const msg = e instanceof Error ? e.message : String(e);

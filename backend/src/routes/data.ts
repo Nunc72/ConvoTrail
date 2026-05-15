@@ -1,12 +1,16 @@
 import type { FastifyInstance } from "fastify";
 import { supabaseWithJwt } from "../supabase.js";
 import { authPreHandler } from "../auth.js";
+import { maybeCleanupAuditLog } from "../audit.js";
 
 export async function registerDataRoutes(app: FastifyInstance) {
   const auth = { preHandler: authPreHandler };
 
   // ─── Bootstrap: mail accounts + contacts + messages in one round-trip ───
   app.get<{ Querystring: { limit?: string } }>("/bootstrap", auth, async (req, reply) => {
+    // Opportunistic audit-log retention: 1% chance per /bootstrap to
+    // delete rows older than 180 days. Async, doesn't block the response.
+    maybeCleanupAuditLog(req);
     const limit = Math.min(Number(req.query.limit) || 500, 2000);
     const sb = supabaseWithJwt(req.authJwt!);
     // Phase 1: metadata only — body_text and body_html are excluded from

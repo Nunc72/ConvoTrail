@@ -3,6 +3,7 @@ import { supabaseWithJwt } from "../supabase.js";
 import { encrypt, decrypt } from "../crypto.js";
 import { testImapConnection } from "../imap.js";
 import { authPreHandler } from "../auth.js";
+import { logAudit } from "../audit.js";
 import { syncAccount } from "../sync.js";
 import { requirePool } from "../db.js";
 import { sendMail, splitAddresses } from "../smtp.js";
@@ -89,6 +90,9 @@ export async function registerMailAccountsRoutes(app: FastifyInstance) {
           b.auto_sync ?? false,
         ],
       );
+      logAudit(req, "mail_account.create", { type: "mail_account", id: r.rows[0].id }, {
+        email: b.email, provider: b.provider,
+      });
       return { account: r.rows[0] };
     } catch (e: unknown) {
       const msg = e instanceof Error ? e.message : String(e);
@@ -137,6 +141,12 @@ export async function registerMailAccountsRoutes(app: FastifyInstance) {
       `UPDATE mail_accounts SET ${sets.join(", ")} WHERE id = $${p}`,
       vals,
     );
+    // Don't log the new values — passwords get re-encrypted in this
+    // call and we don't want plaintext metadata to leak into the log.
+    // The set of CHANGED field names is enough for a forensic trail.
+    logAudit(req, "mail_account.update", { type: "mail_account", id }, {
+      fields: Object.keys(b),
+    });
     return reply.code(204).send();
   });
 
@@ -145,6 +155,7 @@ export async function registerMailAccountsRoutes(app: FastifyInstance) {
     const sb = supabaseWithJwt(req.authJwt!);
     const { error } = await sb.from("mail_accounts").delete().eq("id", req.params.id);
     if (error) return reply.internalServerError(error.message);
+    logAudit(req, "mail_account.delete", { type: "mail_account", id: req.params.id });
     return reply.code(204).send();
   });
 
