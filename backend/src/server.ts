@@ -1,5 +1,7 @@
 import Fastify from "fastify";
 import cors from "@fastify/cors";
+import helmet from "@fastify/helmet";
+import rateLimit from "@fastify/rate-limit";
 import sensible from "@fastify/sensible";
 import multipart from "@fastify/multipart";
 import { config } from "./config.js";
@@ -25,8 +27,44 @@ await app.register(sensible);
 await app.register(multipart, {
   limits: { fileSize: 25 * 1024 * 1024, files: 20 },
 });
+
+// Security headers. Defaults give us: X-Frame-Options DENY, X-Content-
+// Type-Options nosniff, Referrer-Policy no-referrer, HSTS, etc. We turn
+// off the default Content-Security-Policy because the JSON API doesn't
+// serve HTML (the frontend has its own CSP needs and lives on GitHub
+// Pages), and we drop crossOriginResourcePolicy so the frontend can
+// still fetch responses cross-origin.
+await app.register(helmet, {
+  contentSecurityPolicy: false,
+  crossOriginResourcePolicy: false,
+});
+
+// Rate limiting: a sane global ceiling stops a runaway client or naive
+// scraper. Auth + invite paths get a stricter override below — those are
+// the brute-force-worthy ones.
+await app.register(rateLimit, {
+  global: true,
+  max: 300,
+  timeWindow: "1 minute",
+  // Key by JWT subject when present, else by IP. That stops a single
+  // user from accidentally hammering us regardless of their IP, while
+  // unauthenticated traffic is still IP-bound.
+  keyGenerator: (req) => {
+    const auth = req.headers["authorization"];
+    if (typeof auth === "string" && auth.startsWith("Bearer ")) {
+      return "jwt:" + auth.slice(7, 39); // first 32 chars is plenty for keying
+    }
+    return req.ip;
+  },
+  errorResponseBuilder: (_req, ctx) => ({
+    statusCode: 429,
+    error: "Too Many Requests",
+    message: `Rate limit exceeded, retry in ${Math.ceil(ctx.ttl / 1000)}s`,
+  }),
+});
+
 await app.register(cors, {
-  origin: config.corsOrigin === "*" ? true : config.corsOrigin.split(","),
+  origin: config.corsOrigin === "*" ? true : config.corsOrigin.split(",").map(s => s.trim()).filter(Boolean),
   credentials: true,
   // @fastify/cors defaults to GET,HEAD,POST — we also need PATCH/DELETE for
   // our CRUD endpoints (mail-accounts, drafts, messages/:id/flags).

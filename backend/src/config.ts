@@ -14,7 +14,12 @@ export const config = {
   env: optional("NODE_ENV", "development"),
   port: Number(optional("PORT", "3000")),
   host: optional("HOST", "0.0.0.0"),
-  corsOrigin: optional("CORS_ORIGIN", "*"),
+  // Restrictive default: only the production GitHub Pages origin and the
+  // local Vite preview port are allowed. Override via CORS_ORIGIN
+  // (comma-separated) if more origins ever need access. Switching the
+  // default away from "*" closes the door on random sites that try to
+  // call /bootstrap with a leaked JWT.
+  corsOrigin: optional("CORS_ORIGIN", "https://nunc72.github.io,http://localhost:4321"),
 
   // Supabase
   supabaseUrl: required("SUPABASE_URL"),

@@ -17,7 +17,13 @@ export async function registerUserAuthRoutes(app: FastifyInstance) {
   // or failure so a probing attacker can't easily confirm an email exists
   // beyond what the email-based reset would already leak.
   app.post<{ Body: { username?: string } }>(
-    "/auth/username-to-email", async (req, reply) => {
+    "/auth/username-to-email",
+    {
+      // Tight per-IP cap because this endpoint is exposed unauthenticated
+      // and would otherwise let an attacker enumerate valid usernames.
+      config: { rateLimit: { max: 10, timeWindow: "1 minute" } },
+    },
+    async (req, reply) => {
       if (!supabaseAdmin) return reply.internalServerError("admin key not configured");
       const u = (req.body?.username || "").trim();
       if (!u) return reply.code(400).send({ ok: false, error: "username required" });
