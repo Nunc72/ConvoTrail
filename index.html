@@ -184,7 +184,7 @@
        polish change is picked up by every browser as soon as the version
        is bumped — no manual cache-busters needed. Keep ?v= here in sync
        with APP_VERSION below at every deploy. -->
-  <link rel="stylesheet" href="polish.css?v=0.0.145"/>
+  <link rel="stylesheet" href="polish.css?v=0.0.146"/>
 </head>
 <body>
 <div id="root">
@@ -199,7 +199,7 @@ const { useState, useMemo, useRef, useEffect, useCallback } = React;
 
 // ─── Constants ───────────────────────────────────────────────────────────────
 
-const APP_VERSION = "0.0.145"; // bumped on every deploy — keep in sync with version.json AND with the ?v= on polish.css above
+const APP_VERSION = "0.0.146"; // bumped on every deploy — keep in sync with version.json AND with the ?v= on polish.css above
 
 // ─── Backend + Supabase config ───────────────────────────────────────────────
 const SUPABASE_URL = "https://oyrlzqbjcsliesvunbwj.supabase.co";
@@ -2468,9 +2468,11 @@ function HtmlMessageBody({html}) {
 }
 
 // Small modal used to introduce a feature the first time a user touches
-// it. Auto-dismiss is via the OK button; a checkbox lets the user
-// suppress it from now on. The "seen" flag lives in localStorage so it
-// persists across sessions and devices that share the browser.
+// it. Closes via OK (= proceed with the gated action) or Cancel (= back
+// out, action does NOT fire). A checkbox lets the user suppress the
+// dialog from now on; the flag is stored either way the user closes,
+// so "Cancel + don't show again" still means "I know what this is, stop
+// asking".
 function OnboardingDialog({title, body, onClose}) {
   const [dontShow, setDontShow] = useState(false);
   return (
@@ -2484,8 +2486,12 @@ function OnboardingDialog({title, body, onClose}) {
             className="accent-indigo-600"/>
           <span>Don't show this message again</span>
         </label>
-        <div className="mt-5 flex justify-end">
-          <button onClick={()=>onClose(dontShow)}
+        <div className="mt-5 flex justify-end gap-2">
+          <button onClick={()=>onClose('cancel', dontShow)}
+            className="px-4 py-1.5 text-sm rounded bg-gray-100 hover:bg-gray-200 text-gray-700 font-medium">
+            Cancel
+          </button>
+          <button onClick={()=>onClose('ok', dontShow)}
             className="px-4 py-1.5 text-sm rounded bg-indigo-600 hover:bg-indigo-700 text-white font-medium">
             OK
           </button>
@@ -3562,13 +3568,18 @@ function LeftColumn({contactMeta, archivedContacts, selectedId, mergeId, onSelec
     // New-mail (blue) wins when both kinds of alert are present — it's the
     // more urgent of the two. Pure-r2m contacts still show amber.
     const badgeColor = unread > 0 ? 'bg-indigo-600' : 'bg-amber-500';
-    // Mobile-only swipe-right gesture for the merge flow. The first swipe
-    // flags this row as the pending half of a merge (purple "Mergen"
-    // badge); a swipe on a second row triggers the merge dialog. A plain
-    // tap still selects the contact; the swiped flag suppresses the tap
-    // that follows a swipe gesture.
+    // Mobile swipe-right gesture for the merge flow. The row drags with
+    // the finger and an indigo strip with white "Merge" text reveals on
+    // the left as it moves. Release past the threshold fires the merge,
+    // else the row springs back. A normal tap still selects the contact;
+    // swipedRef suppresses the click that fires at touch-end after a
+    // drag long enough to count as a swipe.
+    const SWIPE_TRIGGER = 80;
+    const SWIPE_MAX     = 160;
     const startRef = useRef(null);
     const swipedRef = useRef(false);
+    const [dx, setDx] = useState(0);
+    const [dragging, setDragging] = useState(false);
     function onTouchStart(e) {
       const t = e.touches[0];
       startRef.current = { x: t.clientX, y: t.clientY };
@@ -3578,49 +3589,74 @@ function LeftColumn({contactMeta, archivedContacts, selectedId, mergeId, onSelec
       const s = startRef.current;
       if (!s) return;
       const t = e.touches[0];
-      if (t.clientX - s.x > 30) swipedRef.current = true;
+      const rawDx = t.clientX - s.x;
+      const rawDy = t.clientY - s.y;
+      // Cancel if the user is clearly swiping vertically — let the column
+      // scroll instead. Once we've committed to horizontal dragging the
+      // vertical component is ignored.
+      if (!dragging && Math.abs(rawDy) > Math.abs(rawDx)) { return; }
+      if (rawDx > 5) {
+        setDragging(true);
+        swipedRef.current = true;
+        setDx(Math.max(0, Math.min(rawDx, SWIPE_MAX)));
+      }
     }
-    function onTouchEnd(e) {
+    function onTouchEnd() {
       const s = startRef.current;
       if (!s) return;
-      const t = e.changedTouches[0];
-      const dx = t.clientX - s.x;
-      const dy = t.clientY - s.y;
+      const finalDx = dx;
       startRef.current = null;
-      if (dx > 60 && Math.abs(dy) < 40) {
+      setDragging(false);
+      if (finalDx >= SWIPE_TRIGGER) {
         onSwipeMerge?.(contact.id);
-      } else {
-        // Not a horizontal swipe — let the click fall through.
-        swipedRef.current = false;
       }
+      // Always snap back; the pending state has its own persistent UI.
+      setDx(0);
+      // Allow a tiny grace period for the click that may follow before we
+      // re-enable taps — handled by swipedRef in onClickRow.
     }
     function onClickRow(e) {
       if (swipedRef.current) { swipedRef.current = false; e.stopPropagation(); return; }
       onSelect(contact.id, e);
     }
+    // The reveal strip width must fill from the left edge of the row to
+    // where the row currently sits. So its width == dx, anchored to left.
     return (
-      <div onClick={onClickRow}
-        onTouchStart={onTouchStart} onTouchMove={onTouchMove} onTouchEnd={onTouchEnd}
-        className={`px-3 py-2 border-b border-gray-100 cursor-pointer transition-colors
-          ${isSel?"bg-indigo-50 border-l-2 border-l-indigo-500":""}
-          ${isMerge||isPending?"bg-violet-50 border-l-2 border-l-violet-500":""}
-          ${!isSel&&!isMerge&&!isPending?"hover:bg-gray-50":""}`}>
-        <div className="flex items-center gap-2.5">
-          <Avatar contact={contact} size={28}/>
-          <div className="flex-1 min-w-0">
-            <div className="flex items-center justify-between gap-1">
-              <span className={`text-sm truncate ${badge>0?"font-semibold text-gray-900":"text-gray-700"}`}>
-                {isMerge&&<span className="mr-1 text-violet-400">⇄</span>}{contact.name}
-              </span>
-              {isPending
-                ? <span className="text-xs text-violet-600 font-semibold flex-shrink-0">Mergen…</span>
-                : badge>0 && <span className={`${badgeColor} text-white rounded-full flex-shrink-0 font-bold`}
-                    style={{minWidth:22,height:16,fontSize:"0.55rem",padding:"0 6px",display:"flex",alignItems:"center",justifyContent:"center"}}>
-                    {badge}
-                  </span>}
-            </div>
-            <div className="flex items-center mt-0.5">
-              <span className="text-xs text-gray-400 truncate">{contact.org||contact.emails[0]}</span>
+      <div className="relative overflow-hidden border-b border-gray-100">
+        {dx > 0 && (
+          <div className="absolute inset-y-0 left-0 flex items-center px-4 text-white text-sm font-semibold pointer-events-none"
+            style={{width: dx, background: '#6366f1'}}>
+            <span style={{opacity: Math.min(1, dx / SWIPE_TRIGGER)}}>Merge</span>
+          </div>
+        )}
+        <div onClick={onClickRow}
+          onTouchStart={onTouchStart} onTouchMove={onTouchMove} onTouchEnd={onTouchEnd}
+          style={{
+            transform: `translateX(${dx}px)`,
+            transition: dragging ? 'none' : 'transform 200ms ease',
+            willChange: 'transform',
+          }}
+          className={`px-3 py-2 cursor-pointer transition-colors
+            ${isSel?"bg-indigo-50 border-l-2 border-l-indigo-500":""}
+            ${isMerge||isPending?"bg-violet-50 border-l-2 border-l-violet-500":""}
+            ${!isSel&&!isMerge&&!isPending?"hover:bg-gray-50":""}`}>
+          <div className="flex items-center gap-2.5">
+            <Avatar contact={contact} size={28}/>
+            <div className="flex-1 min-w-0">
+              <div className="flex items-center justify-between gap-1">
+                <span className={`text-sm truncate ${badge>0?"font-semibold text-gray-900":"text-gray-700"}`}>
+                  {isMerge&&<span className="mr-1 text-violet-400">⇄</span>}{contact.name}
+                </span>
+                {isPending
+                  ? <span className="text-xs text-violet-600 font-semibold flex-shrink-0">Mergen…</span>
+                  : badge>0 && <span className={`${badgeColor} text-white rounded-full flex-shrink-0 font-bold`}
+                      style={{minWidth:22,height:16,fontSize:"0.55rem",padding:"0 6px",display:"flex",alignItems:"center",justifyContent:"center"}}>
+                      {badge}
+                    </span>}
+              </div>
+              <div className="flex items-center mt-0.5">
+                <span className="text-xs text-gray-400 truncate">{contact.org||contact.emails[0]}</span>
+              </div>
             </div>
           </div>
         </div>
@@ -6593,22 +6629,25 @@ function App({userId, onSignOut}) {
         <OnboardingDialog
           title="Sending with Revert2me"
           body={<>This button just sends the email as normal, but a reminder is shown in case there was no reply within <strong>{r2mSendOnboard.days} day{r2mSendOnboard.days===1?'':'s'}</strong>.</>}
-          onClose={(dontShow)=>{
+          onClose={(action, dontShow)=>{
             if (dontShow) localStorage.setItem(ONBOARD_R2M_KEY, '1');
             const resolve = r2mSendOnboard.resolve;
             setR2mSendOnboard(null);
-            resolve(true);
+            // OK → proceed with the send; Cancel → resolve false so the
+            // compose pane keeps the editor open and unsent.
+            resolve(action === 'ok');
           }}/>
       )}
       {snoozeOnboard && (
         <OnboardingDialog
           title="About Snooze"
           body={<>This alert is snoozed for <strong>3 days</strong>. The next time it can be snoozed for <strong>5 days</strong>, the next time for <strong>8 days</strong>, etcetera.</>}
-          onClose={(dontShow)=>{
+          onClose={(action, dontShow)=>{
             if (dontShow) localStorage.setItem(ONBOARD_SNOOZE_KEY, '1');
             const exec = snoozeOnboard.exec;
             setSnoozeOnboard(null);
-            exec();
+            // OK → actually snooze; Cancel → leave the alert in place.
+            if (action === 'ok') exec();
           }}/>
       )}
 
