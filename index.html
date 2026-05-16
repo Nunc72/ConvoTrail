@@ -184,7 +184,7 @@
        polish change is picked up by every browser as soon as the version
        is bumped — no manual cache-busters needed. Keep ?v= here in sync
        with APP_VERSION below at every deploy. -->
-  <link rel="stylesheet" href="polish.css?v=0.0.146"/>
+  <link rel="stylesheet" href="polish.css?v=0.0.147"/>
 </head>
 <body>
 <div id="root">
@@ -199,7 +199,7 @@ const { useState, useMemo, useRef, useEffect, useCallback } = React;
 
 // ─── Constants ───────────────────────────────────────────────────────────────
 
-const APP_VERSION = "0.0.146"; // bumped on every deploy — keep in sync with version.json AND with the ?v= on polish.css above
+const APP_VERSION = "0.0.147"; // bumped on every deploy — keep in sync with version.json AND with the ?v= on polish.css above
 
 // ─── Backend + Supabase config ───────────────────────────────────────────────
 const SUPABASE_URL = "https://oyrlzqbjcsliesvunbwj.supabase.co";
@@ -3570,20 +3570,32 @@ function LeftColumn({contactMeta, archivedContacts, selectedId, mergeId, onSelec
     const badgeColor = unread > 0 ? 'bg-indigo-600' : 'bg-amber-500';
     // Mobile swipe-right gesture for the merge flow. The row drags with
     // the finger and an indigo strip with white "Merge" text reveals on
-    // the left as it moves. Release past the threshold fires the merge,
-    // else the row springs back. A normal tap still selects the contact;
-    // swipedRef suppresses the click that fires at touch-end after a
-    // drag long enough to count as a swipe.
+    // the left as it moves. Release past the threshold fires the merge
+    // AND leaves the row resting open at SWIPE_RESTING — so the user
+    // sees that the first half of the merge is staged and a swipe on
+    // any second row will complete it. Release short of the threshold
+    // springs the row back to closed. A normal tap still selects the
+    // contact; tapping a pending row (or any other) cancels the staged
+    // merge via handleSelectContact.
     const SWIPE_TRIGGER = 80;
+    const SWIPE_RESTING = 100; // open position the row sits at while it's the pending merge
     const SWIPE_MAX     = 160;
     const startRef = useRef(null);
     const swipedRef = useRef(false);
+    const rawDxRef  = useRef(0); // delta-from-finger-start, separate from rendered dx so we can compare against the trigger without losing accuracy when the slide is capped at SWIPE_MAX
     const [dx, setDx] = useState(0);
     const [dragging, setDragging] = useState(false);
+    // Effective displacement we actually render. While the user is
+    // dragging, follow their finger. When they're not dragging, snap
+    // closed unless this row is the staged half — then sit at the
+    // resting open position so the indigo strip stays visible until
+    // a second swipe (anywhere) or a tap clears the staged merge.
+    const renderDx = dragging ? dx : (isPending ? SWIPE_RESTING : 0);
     function onTouchStart(e) {
       const t = e.touches[0];
       startRef.current = { x: t.clientX, y: t.clientY };
       swipedRef.current = false;
+      rawDxRef.current = 0;
     }
     function onTouchMove(e) {
       const s = startRef.current;
@@ -3595,44 +3607,49 @@ function LeftColumn({contactMeta, archivedContacts, selectedId, mergeId, onSelec
       // scroll instead. Once we've committed to horizontal dragging the
       // vertical component is ignored.
       if (!dragging && Math.abs(rawDy) > Math.abs(rawDx)) { return; }
-      if (rawDx > 5) {
+      if (rawDx > 5 || dragging) {
         setDragging(true);
         swipedRef.current = true;
-        setDx(Math.max(0, Math.min(rawDx, SWIPE_MAX)));
+        rawDxRef.current = rawDx;
+        // For a row that's already staged, drag starts from its resting
+        // open position so the slide is visually continuous instead of
+        // jumping back to 0 the moment the finger touches it.
+        const base = isPending ? SWIPE_RESTING : 0;
+        setDx(Math.max(0, Math.min(base + rawDx, SWIPE_MAX)));
       }
     }
     function onTouchEnd() {
       const s = startRef.current;
       if (!s) return;
-      const finalDx = dx;
+      const finalRaw = rawDxRef.current;
       startRef.current = null;
       setDragging(false);
-      if (finalDx >= SWIPE_TRIGGER) {
+      rawDxRef.current = 0;
+      if (finalRaw >= SWIPE_TRIGGER) {
         onSwipeMerge?.(contact.id);
       }
-      // Always snap back; the pending state has its own persistent UI.
+      // Always reset the live drag value; whether the row STAYS open
+      // is decided by isPending via renderDx above.
       setDx(0);
-      // Allow a tiny grace period for the click that may follow before we
-      // re-enable taps — handled by swipedRef in onClickRow.
     }
     function onClickRow(e) {
       if (swipedRef.current) { swipedRef.current = false; e.stopPropagation(); return; }
       onSelect(contact.id, e);
     }
-    // The reveal strip width must fill from the left edge of the row to
-    // where the row currently sits. So its width == dx, anchored to left.
+    // The reveal strip width fills from the left edge of the row to
+    // where the row currently sits — width == renderDx, anchored left.
     return (
       <div className="relative overflow-hidden border-b border-gray-100">
-        {dx > 0 && (
+        {renderDx > 0 && (
           <div className="absolute inset-y-0 left-0 flex items-center px-4 text-white text-sm font-semibold pointer-events-none"
-            style={{width: dx, background: '#6366f1'}}>
-            <span style={{opacity: Math.min(1, dx / SWIPE_TRIGGER)}}>Merge</span>
+            style={{width: renderDx, background: '#6366f1'}}>
+            <span style={{opacity: Math.min(1, renderDx / SWIPE_TRIGGER)}}>Merge</span>
           </div>
         )}
         <div onClick={onClickRow}
           onTouchStart={onTouchStart} onTouchMove={onTouchMove} onTouchEnd={onTouchEnd}
           style={{
-            transform: `translateX(${dx}px)`,
+            transform: `translateX(${renderDx}px)`,
             transition: dragging ? 'none' : 'transform 200ms ease',
             willChange: 'transform',
           }}
