@@ -122,6 +122,23 @@ body, html { background: var(--bg-canvas) !important; }
   padding: 2px 10px !important;
 }
 
+/* ── Unmerge button: no sticky :hover on touch devices ───────────────
+   On iOS / Android, tapping a button triggers :hover styles that
+   persist until the next tap on a non-interactive element. The Unmerge
+   button uses red on hover as a "destructive action" affordance — but
+   after the tap, the row that was clicked disappears (its email is
+   removed), and the adjacent button slides under the finger position,
+   inheriting the red tint visually. Scoping the hover styling to
+   devices that actually have hover capability fixes both:
+   - touch devices: no hover applied at all → no sticky red
+   - desktop with mouse: hover still works as designed */
+@media (hover: none) {
+  .convooz-unmerge-btn:hover {
+    border-color: var(--input-border) !important;
+    color: var(--text-quaternary) !important;
+  }
+}
+
 /* Tighter rounded corners — keep the auth card a bit softer (12px)
    so the login screen feels welcoming. */
 .rounded-xl  { border-radius: 8px !important; }

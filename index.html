@@ -184,7 +184,7 @@
        polish change is picked up by every browser as soon as the version
        is bumped — no manual cache-busters needed. Keep ?v= here in sync
        with APP_VERSION below at every deploy. -->
-  <link rel="stylesheet" href="polish.css?v=0.0.149"/>
+  <link rel="stylesheet" href="polish.css?v=0.0.150"/>
 </head>
 <body>
 <div id="root">
@@ -199,7 +199,7 @@ const { useState, useMemo, useRef, useEffect, useCallback } = React;
 
 // ─── Constants ───────────────────────────────────────────────────────────────
 
-const APP_VERSION = "0.0.149"; // bumped on every deploy — keep in sync with version.json AND with the ?v= on polish.css above
+const APP_VERSION = "0.0.150"; // bumped on every deploy — keep in sync with version.json AND with the ?v= on polish.css above
 
 // ─── Backend + Supabase config ───────────────────────────────────────────────
 const SUPABASE_URL = "https://oyrlzqbjcsliesvunbwj.supabase.co";
@@ -1985,6 +1985,18 @@ function ContactEditForm({contact, contactTags, allKnownTags, isArchived, onSave
   const [archived, setArchived] = useState(!!isArchived);
   const [isNews,   setIsNews]   = useState(!!contact.isNews);
   const [isMuted,  setIsMuted]  = useState(!!contact.isMuted);
+  // After clicking Unmerge, the row for that email disappears and the
+  // remaining rows shift up. The mouse pointer (or finger) stays in
+  // place, so the next button slides in under it and immediately picks
+  // up the red `:hover` state — visually confusing because the user
+  // thinks the "wrong" email is now marked for unmerge. Suppress the
+  // hover classes briefly so the colour shift can't cascade.
+  const [unmergeHoverFrozen, setUnmergeHoverFrozen] = useState(false);
+  useEffect(() => {
+    if (!unmergeHoverFrozen) return;
+    const t = setTimeout(() => setUnmergeHoverFrozen(false), 600);
+    return () => clearTimeout(t);
+  }, [unmergeHoverFrozen]);
 
   function addTag(t) { if(!tags.includes(t)) setTags([...tags,t]); }
   function removeTag(t) { setTags(tags.filter(x=>x!==t)); }
@@ -2025,8 +2037,9 @@ function ContactEditForm({contact, contactTags, allKnownTags, isArchived, onSave
                 <span className="text-sm text-gray-700 truncate flex-1 min-w-0">{e}</span>
                 {primary===e&&<span className="tag-chip flex-shrink-0">primary</span>}
                 {contact.emails.length > 1 &&
-                  <button type="button" onClick={()=>onUnmergeEmail?.(e)}
-                    className="text-xs px-2 py-0.5 rounded border border-gray-200 text-gray-400 hover:border-red-300 hover:text-red-500 flex-shrink-0">
+                  <button type="button"
+                    onClick={(ev)=>{ ev.currentTarget.blur(); setUnmergeHoverFrozen(true); onUnmergeEmail?.(e); }}
+                    className={`convooz-unmerge-btn text-xs px-2 py-0.5 rounded border border-gray-200 text-gray-400 ${unmergeHoverFrozen?'':'hover:border-red-300 hover:text-red-500'} flex-shrink-0`}>
                     Unmerge
                   </button>
                 }
