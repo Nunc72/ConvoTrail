@@ -2,6 +2,8 @@ import type { FastifyInstance } from "fastify";
 import { supabaseWithJwt } from "../supabase.js";
 import { authPreHandler } from "../auth.js";
 import { maybeCleanupAuditLog } from "../audit.js";
+import { sendTransientOr500 } from "../errors.js";
+import { requirePool } from "../db.js";
 
 export async function registerDataRoutes(app: FastifyInstance) {
   const auth = { preHandler: authPreHandler };
@@ -19,7 +21,7 @@ export async function registerDataRoutes(app: FastifyInstance) {
     // to open immediately (unread incoming + active revert-to-me). The
     // detail view falls back to GET /messages/:id/body for everything
     // else, fetched on demand when the user opens a message.
-    const [accountsRes, contactsRes, messagesRes, draftsRes, tagsRes, msgTagsRes, r2mRes, sigsRes, accSigsRes, draftAttsRes, msgCountsRes] = await Promise.all([
+    const [accountsRes, contactsRes, messagesRes, draftsRes, tagsRes, msgTagsRes, r2mRes, sigsRes, accSigsRes, draftAttsRes] = await Promise.all([
       sb.from("mail_accounts").select(
         "id, email, display_name, provider, last_sync_at, auto_sync, " +
         "retention_deleted_days, retention_spam_days, sync_known_uids",
@@ -47,23 +49,47 @@ export async function registerDataRoutes(app: FastifyInstance) {
       sb.from("account_signatures").select("mail_account_id, signature_id, is_auto"),
       sb.from("draft_attachments").select("id, draft_id, filename, content_type, size, created_at")
         .order("created_at", { ascending: true }),
-      // Per-account synced count for the user-menu progress display.
-      // Excludes soft-deleted rows since those don't contribute to "X / Y
-      // synced".
-      sb.from("messages").select("mail_account_id", { count: "exact", head: false })
-        .is("deleted_at", null),
     ]);
-    if (accountsRes.error) return reply.internalServerError(accountsRes.error.message);
-    if (contactsRes.error) return reply.internalServerError(contactsRes.error.message);
-    if (messagesRes.error) return reply.internalServerError(messagesRes.error.message);
-    if (draftsRes.error)   return reply.internalServerError(draftsRes.error.message);
-    if (tagsRes.error)     return reply.internalServerError(tagsRes.error.message);
-    if (msgTagsRes.error)  return reply.internalServerError(msgTagsRes.error.message);
-    if (r2mRes.error)      return reply.internalServerError(r2mRes.error.message);
-    if (sigsRes.error)     return reply.internalServerError(sigsRes.error.message);
-    if (accSigsRes.error)  return reply.internalServerError(accSigsRes.error.message);
-    if (draftAttsRes.error) return reply.internalServerError(draftAttsRes.error.message);
-    if (msgCountsRes.error) return reply.internalServerError(msgCountsRes.error.message);
+    // Any of these can carry a wrapped "fetch failed" or pooler-drop —
+    // route through sendTransientOr500 so the client gets a 503 it can
+    // safely retry instead of a confusing 500.
+    if (accountsRes.error) return sendTransientOr500(reply, accountsRes.error);
+    if (contactsRes.error) return sendTransientOr500(reply, contactsRes.error);
+    if (messagesRes.error) return sendTransientOr500(reply, messagesRes.error);
+    if (draftsRes.error)   return sendTransientOr500(reply, draftsRes.error);
+    if (tagsRes.error)     return sendTransientOr500(reply, tagsRes.error);
+    if (msgTagsRes.error)  return sendTransientOr500(reply, msgTagsRes.error);
+    if (r2mRes.error)      return sendTransientOr500(reply, r2mRes.error);
+    if (sigsRes.error)     return sendTransientOr500(reply, sigsRes.error);
+    if (accSigsRes.error)  return sendTransientOr500(reply, accSigsRes.error);
+    if (draftAttsRes.error) return sendTransientOr500(reply, draftAttsRes.error);
+
+    // Per-account synced count for the user-menu progress display, via
+    // direct pg GROUP BY. This used to ride on a supabase-js call with
+    // count:"exact" which fetched every mail_account_id row in the
+    // user's table — slow at scale and the first query to start hitting
+    // statement_timeout once the messages table grows past a few thousand
+    // rows. A single aggregated query is O(matching rows) on the server
+    // side and the wire payload is one row per account.
+    let messageCountByAccount: Record<string, number> = {};
+    try {
+      const pool = requirePool();
+      const cntRes = await pool.query<{ mail_account_id: string; cnt: string }>(
+        `SELECT mail_account_id, COUNT(*)::text AS cnt
+           FROM messages
+          WHERE user_id = $1 AND deleted_at IS NULL
+          GROUP BY mail_account_id`,
+        [req.authUser!.id],
+      );
+      messageCountByAccount = Object.fromEntries(
+        cntRes.rows.map(r => [r.mail_account_id, Number(r.cnt)]),
+      );
+    } catch (e) {
+      // Non-fatal: the rest of the bootstrap is still useful even if
+      // the count failed. Log and surface zeros — the FE just won't
+      // show a progress fraction for affected accounts this round.
+      req.log.warn({ err: e }, "bootstrap: per-account count failed (non-fatal)");
+    }
 
     // Phase 2: collect bodies for two sets so the client has them ready:
     //   (a) the "actionable" subset — unread incoming + active r2m, so
@@ -97,16 +123,10 @@ export async function registerDataRoutes(app: FastifyInstance) {
       const bodiesRes = await sb.from("messages")
         .select("id, body_text, body_html")
         .in("id", bodyTargetIds);
-      if (bodiesRes.error) return reply.internalServerError(bodiesRes.error.message);
+      if (bodiesRes.error) return sendTransientOr500(reply, bodiesRes.error);
       for (const row of ((bodiesRes.data ?? []) as unknown as BodyRow[])) {
         bodiesById.set(row.id, { body_text: row.body_text, body_html: row.body_html });
       }
-    }
-    // Aggregate per-account counts. The Supabase head:false count returns
-    // the rows themselves; we just tally them by mail_account_id.
-    const messageCountByAccount: Record<string, number> = {};
-    for (const row of ((msgCountsRes.data ?? []) as unknown as { mail_account_id: string }[])) {
-      messageCountByAccount[row.mail_account_id] = (messageCountByAccount[row.mail_account_id] ?? 0) + 1;
     }
     const messagesWithBodies = messagesRows.map(m => {
       const body = bodiesById.get(m.id);

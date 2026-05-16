@@ -6,6 +6,7 @@ import sensible from "@fastify/sensible";
 import multipart from "@fastify/multipart";
 import { config } from "./config.js";
 import { authPreHandler } from "./auth.js";
+import { setupErrorHandler } from "./errors.js";
 import { registerMailAccountsRoutes } from "./routes/mailAccounts.js";
 import { registerDataRoutes } from "./routes/data.js";
 import { registerContactsRoutes } from "./routes/contacts.js";
@@ -27,6 +28,12 @@ await app.register(sensible);
 await app.register(multipart, {
   limits: { fileSize: 25 * 1024 * 1024, files: 20 },
 });
+
+// Globally translate transient Postgres / supabase-js errors (Supavisor
+// pooler drops, "fetch failed" from the SDK, statement timeouts, …) to
+// a clean 503 instead of leaking SQLSTATE codes to the client. See
+// errors.ts for the full reasoning.
+setupErrorHandler(app);
 
 // Security headers. Defaults give us: X-Frame-Options DENY, X-Content-
 // Type-Options nosniff, Referrer-Policy no-referrer, HSTS, etc. We turn
