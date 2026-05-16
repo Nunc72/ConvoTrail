@@ -173,4 +173,28 @@ input, select, textarea { border-color: var(--input-border) !important; }
   .hover\:bg-gray-200:hover {
     background-color: var(--bg-selected) !important;
   }
+
+  /* Contact-list tabs (Convo / News / Vendors / Archive). Active state
+     uses bg-indigo-50 which renders as a too-bright white-ish blob in
+     dark mode; tone it to a muted indigo-on-dark wash. */
+  .convooz-contact-tab.bg-indigo-50 {
+    background-color: rgba(129, 140, 248, 0.18) !important;
+  }
+
+  /* Mail-list filter tabs (Now / All / In / Out / Draft / Deleted) and
+     the same tabs in TagView / GlobalSearchResults. The "All" and
+     "Draft" active states use bg-gray-200 / bg-gray-100 which become
+     invisible dark-on-dark in dark mode. Pop them to a light surface
+     with black text so they stand out as the actively-selected tab. */
+  .convooz-thread-filter-tab.bg-gray-200,
+  .convooz-thread-filter-tab.bg-gray-100 {
+    background-color: #e5e7eb !important;
+    color: #111827 !important;
+  }
+  /* Text classes inside also get overridden — beat the generic
+     .text-gray-700 override above with a more specific selector. */
+  .convooz-thread-filter-tab.text-gray-700,
+  .convooz-thread-filter-tab.text-gray-600 {
+    color: #111827 !important;
+  }
 }

@@ -184,7 +184,7 @@
        polish change is picked up by every browser as soon as the version
        is bumped — no manual cache-busters needed. Keep ?v= here in sync
        with APP_VERSION below at every deploy. -->
-  <link rel="stylesheet" href="polish.css?v=0.0.147"/>
+  <link rel="stylesheet" href="polish.css?v=0.0.148"/>
 </head>
 <body>
 <div id="root">
@@ -199,7 +199,7 @@ const { useState, useMemo, useRef, useEffect, useCallback } = React;
 
 // ─── Constants ───────────────────────────────────────────────────────────────
 
-const APP_VERSION = "0.0.147"; // bumped on every deploy — keep in sync with version.json AND with the ?v= on polish.css above
+const APP_VERSION = "0.0.148"; // bumped on every deploy — keep in sync with version.json AND with the ?v= on polish.css above
 
 // ─── Backend + Supabase config ───────────────────────────────────────────────
 const SUPABASE_URL = "https://oyrlzqbjcsliesvunbwj.supabase.co";
@@ -3016,7 +3016,7 @@ function ThreadColumn({contact,allMsgs,deletedIds,selectedMsgId,msgTags,onSelect
                 draft:"bg-gray-100 text-gray-600 font-semibold",deleted:"bg-red-100 text-red-600 font-semibold"}[k]
                 :"text-gray-400 hover:text-gray-600";
               return <button key={f} onClick={()=>setFilterAndSave(k)}
-                className={`px-2.5 py-0.5 text-xs rounded-full transition-colors ${style}`}>{f}</button>;
+                className={`convooz-thread-filter-tab px-2.5 py-0.5 text-xs rounded-full transition-colors ${style}`}>{f}</button>;
             })}
           </div>
         </div>
@@ -3111,7 +3111,7 @@ function ThreadColumn({contact,allMsgs,deletedIds,selectedMsgId,msgTags,onSelect
               draft:"bg-gray-100 text-gray-600 font-semibold",deleted:"bg-red-100 text-red-600 font-semibold"}[k]
               :"text-gray-400 hover:text-gray-600";
             return <button key={f} onClick={()=>setFilterAndSave(k)}
-              className={`px-2.5 py-0.5 text-xs rounded-full transition-colors ${style}`}>{f}</button>;
+              className={`convooz-thread-filter-tab px-2.5 py-0.5 text-xs rounded-full transition-colors ${style}`}>{f}</button>;
           })}
         </div>
       </div>
@@ -3258,7 +3258,7 @@ function TagView({tag, messages, contacts, deletedIds, msgTags, emailRoles, myEm
           const k=f.toLowerCase(), active=tagFilter===k;
           const style=active?{all:"bg-gray-200 text-gray-700 font-semibold",in:"bg-sky-100 text-sky-700 font-semibold",out:"bg-emerald-100 text-emerald-700 font-semibold",draft:"bg-gray-100 text-gray-600 font-semibold"}[k]:"text-gray-400 hover:text-gray-600";
           return <button key={f} onClick={()=>setTagFilterAndSave(k)}
-            className={`px-2.5 py-0.5 text-xs rounded-full transition-colors ${style}`}>{f}</button>;
+            className={`convooz-thread-filter-tab px-2.5 py-0.5 text-xs rounded-full transition-colors ${style}`}>{f}</button>;
         })}
       </div>
 
@@ -3407,7 +3407,7 @@ function GlobalSearchResults({messages, contacts, deletedIds, msgTags, msgMatche
             draft:"bg-gray-100 text-gray-600 font-semibold",deleted:"bg-red-100 text-red-600 font-semibold"}[k]
             :"text-gray-400 hover:text-gray-600";
           return <button key={f} onClick={()=>setFilter(k)}
-            className={`px-2.5 py-0.5 text-xs rounded-full transition-colors ${style}`}>{f}</button>;
+            className={`convooz-thread-filter-tab px-2.5 py-0.5 text-xs rounded-full transition-colors ${style}`}>{f}</button>;
         })}
       </div>
       {/* Results list */}
@@ -3756,7 +3756,7 @@ function LeftColumn({contactMeta, archivedContacts, selectedId, mergeId, onSelec
               const active=contactTab===tab;
               const badge=(!active&&(tab==='Convo'||tab==='News'||tab==='Vendors'))?tabBadge(tab):0;
               return <button key={tab} onClick={()=>setContactTab(tab)}
-                className={`flex-1 text-xs py-1 rounded transition-colors ${active?'bg-indigo-50 text-indigo-700 font-semibold':'text-gray-400 hover:text-gray-600'}`}>
+                className={`convooz-contact-tab flex-1 text-xs py-1 rounded transition-colors ${active?'bg-indigo-50 text-indigo-700 font-semibold':'text-gray-400 hover:text-gray-600'}`}>
                 {tab}{badge>0&&<span className="ml-0.5 opacity-70">({badge})</span>}
               </button>;
             })}
@@ -3883,7 +3883,7 @@ function LeftColumn({contactMeta, archivedContacts, selectedId, mergeId, onSelec
             const active=contactTab===tab;
             const badge=(!active&&(tab==='Convo'||tab==='News'||tab==='Vendors'))?tabBadge(tab):0;
             return <button key={tab} onClick={()=>setContactTab(tab)}
-              className={`flex-1 text-xs py-1 rounded transition-colors ${active?'bg-indigo-50 text-indigo-700 font-semibold':'text-gray-400 hover:text-gray-600'}`}>
+              className={`convooz-contact-tab flex-1 text-xs py-1 rounded transition-colors ${active?'bg-indigo-50 text-indigo-700 font-semibold':'text-gray-400 hover:text-gray-600'}`}>
               {tab}{badge>0&&<span className="ml-0.5 opacity-70">({badge})</span>}
             </button>;
           })}
