@@ -11,36 +11,73 @@
    after the inline <style> in index.html, which would otherwise
    win on cascade. */
 
+/* ── Theme tokens ──────────────────────────────────────────────────
+   Centralised colour variables so a single @media block flips the
+   whole UI between light and dark mode. Driven by the OS / browser
+   `prefers-color-scheme`; no in-app toggle (yet). */
+:root {
+  --bg-canvas:        #f5f6f8;
+  --bg-card:          #ffffff;
+  --bg-card-soft:     #fafbfc;
+  --bg-hover:         rgba(99,102,241,0.06);
+  --bg-selected:      rgba(99,102,241,0.10);
+  --text-primary:     #111827;
+  --text-secondary:   #374151;
+  --text-tertiary:    #6b7280;
+  --text-quaternary:  #9ca3af;
+  --text-faint:       #d1d5db;
+  --border-soft:      rgba(15,23,42,0.06);
+  --border-medium:    rgba(15,23,42,0.10);
+  --input-border:     rgba(15,23,42,0.08);
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg-canvas:        #0f1115;
+    --bg-card:          #1a1b21;
+    --bg-card-soft:     #16171c;
+    --bg-hover:         rgba(129,140,248,0.10);
+    --bg-selected:      rgba(129,140,248,0.18);
+    --text-primary:     #f4f4f5;
+    --text-secondary:   #d4d4d8;
+    --text-tertiary:    #a1a1aa;
+    --text-quaternary:  #71717a;
+    --text-faint:       #52525b;
+    --border-soft:      rgba(255,255,255,0.06);
+    --border-medium:    rgba(255,255,255,0.10);
+    --input-border:     rgba(255,255,255,0.10);
+  }
+}
+
 /* Apple-grey canvas behind the columns. App root paints bg-gray-100
    over the body; both need to be the same canvas grey so the columns
    appear to float on a single sheet. */
-body { background: #f5f6f8 !important; }
-.bg-gray-100 { background-color: #f5f6f8 !important; }
+body, html { background: var(--bg-canvas) !important; }
+.bg-gray-100 { background-color: var(--bg-canvas) !important; }
+#root { background: var(--bg-canvas) !important; }
 
 /* ── Col 1 (contacts/tags sidebar): apple-grey canvas, contact rows
    slightly lighter (white) so they read as cards on the grey. ── */
 [data-col="1"] .bg-white,
 [data-col="1"] .bg-gray-50 {
-  background-color: #f5f6f8 !important;
+  background-color: var(--bg-canvas) !important;
 }
 [data-col="1"] .border-b.cursor-pointer {
-  /* Subtly lighter than the column canvas (#f5f6f8) so the rows read
-     as slightly raised, not as pure-white slabs. */
-  background-color: #fafbfc !important;
+  background-color: var(--bg-card-soft) !important;
 }
 [data-col="1"] .border-b.cursor-pointer:hover {
-  background-color: rgba(99,102,241,0.06) !important;
+  background-color: var(--bg-hover) !important;
 }
 
-/* ── Col 2 (contact card / mail rows / tag view): all white. ── */
-[data-col="2"] .bg-gray-50 {
-  background-color: #ffffff !important;
+/* ── Col 2 (contact card / mail rows / tag view): all card-coloured. ── */
+[data-col="2"] .bg-gray-50,
+[data-col="2"] .bg-white {
+  background-color: var(--bg-card) !important;
 }
 
 /* Column dividers — keep the canvas grey running between the columns
    so the "floating sheets" feel is preserved. */
 .col-divider {
-  background: #f5f6f8 !important;
+  background: var(--bg-canvas) !important;
   box-shadow: none !important;
 }
 
@@ -51,28 +88,33 @@ body { background: #f5f6f8 !important; }
 /* List rows: drop the harsh bottom-border, hover gets a faint indigo
    wash so the row reads as a tappable card. */
 .border-b.cursor-pointer {
-  background: #ffffff !important;
+  background: var(--bg-card) !important;
   border-bottom-color: transparent !important;
   transition: background-color .15s ease;
 }
-.border-b.cursor-pointer:hover { background-color: rgba(99,102,241,0.06) !important; }
+.border-b.cursor-pointer:hover { background-color: var(--bg-hover) !important; }
 
 /* Selected row: solid indigo wash, no left accent bar. */
 .bg-indigo-50.border-l-2 {
   border-left-color: transparent !important;
-  background: rgba(99,102,241,0.10) !important;
+  background: var(--bg-selected) !important;
 }
 
 /* Section dividers in MessageDetail (header, banner, footer): faint
    line, no shadow. */
 .flex-shrink-0.border-b {
-  border-bottom-color: rgba(15,23,42,0.06) !important;
+  border-bottom-color: var(--border-soft) !important;
   box-shadow: none !important;
 }
 .flex-shrink-0.border-t {
-  border-top-color: rgba(15,23,42,0.06) !important;
+  border-top-color: var(--border-soft) !important;
   box-shadow: none !important;
 }
+
+/* Generic background swaps for everything we don't reach via a column
+   selector — modals, dropdowns, message detail, settings. */
+.bg-white { background-color: var(--bg-card) !important; }
+.bg-gray-50 { background-color: var(--bg-card-soft) !important; }
 
 /* Tag chips become rounded pills. */
 .tag-chip {
@@ -88,4 +130,47 @@ body { background: #f5f6f8 !important; }
 .rounded-2xl { border-radius: 12px !important; }
 
 /* Inputs in compose, settings, etc. — softer border colour. */
-input, select, textarea { border-color: rgba(15,23,42,0.08) !important; }
+input, select, textarea { border-color: var(--input-border) !important; }
+
+/* ── Dark-mode text + element overrides ───────────────────────────
+   Tailwind class-based text colours all need to flip in dark mode.
+   We only override INSIDE the prefers-color-scheme:dark block so
+   light mode keeps Tailwind's defaults verbatim. */
+@media (prefers-color-scheme: dark) {
+  .text-gray-900 { color: var(--text-primary)     !important; }
+  .text-gray-800 { color: var(--text-primary)     !important; }
+  .text-gray-700 { color: var(--text-secondary)   !important; }
+  .text-gray-600 { color: var(--text-tertiary)    !important; }
+  .text-gray-500 { color: var(--text-tertiary)    !important; }
+  .text-gray-400 { color: var(--text-quaternary)  !important; }
+  .text-gray-300 { color: var(--text-faint)       !important; }
+
+  /* Inputs and textareas: dark surface + readable text. */
+  input, select, textarea {
+    background-color: var(--bg-card-soft) !important;
+    color: var(--text-primary) !important;
+  }
+  input::placeholder, textarea::placeholder {
+    color: var(--text-quaternary) !important;
+  }
+
+  /* Subtle gray borders → faint white-on-dark borders. */
+  .border-gray-100, .border-gray-200, .border-gray-300 {
+    border-color: var(--border-soft) !important;
+  }
+
+  /* Hover state on rows. */
+  .hover\:bg-gray-50:hover, .hover\:bg-gray-100:hover {
+    background-color: var(--bg-hover) !important;
+  }
+
+  /* Tag chips, gray pill labels — darker surface. */
+  .bg-gray-100, .bg-gray-50, .bg-gray-200 {
+    background-color: var(--bg-card-soft) !important;
+  }
+
+  /* Hover indicators on buttons and tabs sit on the card. */
+  .hover\:bg-gray-200:hover {
+    background-color: var(--bg-selected) !important;
+  }
+}

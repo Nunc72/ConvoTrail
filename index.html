@@ -169,12 +169,22 @@
     @keyframes bootloader-spin {
       to { transform: rotate(360deg); }
     }
+    /* Dark-mode bootloader: matches the polish.css canvas + text tokens
+       so there's no white flash before the app's stylesheet loads. */
+    @media (prefers-color-scheme: dark) {
+      html, body { background: #0f1115; }
+      .bootloader { background: #0f1115; color: #818cf8; }
+      .bootloader-spinner {
+        border-color: rgba(129, 140, 248, 0.18);
+        border-top-color: #818cf8;
+      }
+    }
   </style>
   <!-- Apple-style polish lives in its own file with a version query so a
        polish change is picked up by every browser as soon as the version
        is bumped — no manual cache-busters needed. Keep ?v= here in sync
        with APP_VERSION below at every deploy. -->
-  <link rel="stylesheet" href="polish.css?v=0.0.144"/>
+  <link rel="stylesheet" href="polish.css?v=0.0.145"/>
 </head>
 <body>
 <div id="root">
@@ -189,7 +199,7 @@ const { useState, useMemo, useRef, useEffect, useCallback } = React;
 
 // ─── Constants ───────────────────────────────────────────────────────────────
 
-const APP_VERSION = "0.0.144"; // bumped on every deploy — keep in sync with version.json AND with the ?v= on polish.css above
+const APP_VERSION = "0.0.145"; // bumped on every deploy — keep in sync with version.json AND with the ?v= on polish.css above
 
 // ─── Backend + Supabase config ───────────────────────────────────────────────
 const SUPABASE_URL = "https://oyrlzqbjcsliesvunbwj.supabase.co";
@@ -1471,7 +1481,7 @@ function SettingsModal({onClose, initialTab='profile', signatures, setSignatures
 
 const SIG_SEP = '\n\n';
 
-function ComposePane({replyTo, replyKind='reply', toContact, draft, initTo:initToOverride="", initCC="", initBCC="", initTag=null, initMsgTags=[], allKnownTags=[], selAccounts=[], myEmails=[], mailAccounts=[], signatures=[], accountSigs={}, onSend, onSaveDraft, onDeleteDraft, onClose, mobileBack, mobileBackLabel}) {
+function ComposePane({replyTo, replyKind='reply', toContact, draft, initTo:initToOverride="", initCC="", initBCC="", initTag=null, initMsgTags=[], allKnownTags=[], selAccounts=[], myEmails=[], mailAccounts=[], signatures=[], accountSigs={}, onSend, onBeforeR2mSend, onSaveDraft, onDeleteDraft, onClose, mobileBack, mobileBackLabel}) {
   const isMobile = typeof window !== 'undefined' && window.innerWidth < 768;
   const isReply     = !!replyTo && replyKind !== 'forward';
   const isReplyAll  = !!replyTo && replyKind === 'reply-all';
@@ -1556,6 +1566,13 @@ function ComposePane({replyTo, replyKind='reply', toContact, draft, initTo:initT
   async function handleSendClick(withR2m = false) {
     if (!to.trim() || sending) return;
     if (attachments.some(a => a.uploading)) { setSendErr('Wait for uploads to finish…'); return; }
+    // First-time gate: if this is a Revert2me-send, run the onboarding
+    // dialog before flipping the sending state, so the OK button is the
+    // explicit confirmation. Cancel = do nothing.
+    if (withR2m && onBeforeR2mSend) {
+      const proceed = await onBeforeR2mSend(Number(r2mDays) || 0);
+      if (!proceed) return;
+    }
     setSending(true); setSendErr('');
     try {
       await onSend?.({
@@ -2447,6 +2464,34 @@ function HtmlMessageBody({html}) {
       onLoad={onLoad}
       scrolling="no"
       style={{minHeight:200, display:'block'}}/>
+  );
+}
+
+// Small modal used to introduce a feature the first time a user touches
+// it. Auto-dismiss is via the OK button; a checkbox lets the user
+// suppress it from now on. The "seen" flag lives in localStorage so it
+// persists across sessions and devices that share the browser.
+function OnboardingDialog({title, body, onClose}) {
+  const [dontShow, setDontShow] = useState(false);
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center px-4"
+      style={{background:'rgba(0,0,0,0.4)'}}>
+      <div className="bg-white rounded-lg shadow-xl max-w-sm w-full p-5">
+        {title && <div className="text-sm font-semibold text-gray-900 mb-2">{title}</div>}
+        <div className="text-sm text-gray-700 leading-relaxed">{body}</div>
+        <label className="flex items-center gap-2 mt-4 text-xs text-gray-500 cursor-pointer">
+          <input type="checkbox" checked={dontShow} onChange={e=>setDontShow(e.target.checked)}
+            className="accent-indigo-600"/>
+          <span>Don't show this message again</span>
+        </label>
+        <div className="mt-5 flex justify-end">
+          <button onClick={()=>onClose(dontShow)}
+            className="px-4 py-1.5 text-sm rounded bg-indigo-600 hover:bg-indigo-700 text-white font-medium">
+            OK
+          </button>
+        </div>
+      </div>
+    </div>
   );
 }
 
@@ -3433,6 +3478,7 @@ function LeftColumn({contactMeta, archivedContacts, selectedId, mergeId, onSelec
                      mailAccounts=[],
                      actionableCounts={total:0, inSel:0},
                      onContactTabChange,
+                     pendingMergeId=null, onSwipeMerge,
                      dataLoading=false}) {
   const [accDropOpen, setAccDropOpen] = useState(false);
   const [contactTab,  setContactTabRaw] = useState('Convo');
@@ -3511,16 +3557,54 @@ function LeftColumn({contactMeta, archivedContacts, selectedId, mergeId, onSelec
 
   function ContactRow({contact, unread, hasR2m, r2mCount}) {
     const isSel=contact.id===selectedId, isMerge=contact.id===mergeId;
+    const isPending = contact.id === pendingMergeId;
     const badge = unread + (r2mCount||0);
     // New-mail (blue) wins when both kinds of alert are present — it's the
     // more urgent of the two. Pure-r2m contacts still show amber.
     const badgeColor = unread > 0 ? 'bg-indigo-600' : 'bg-amber-500';
+    // Mobile-only swipe-right gesture for the merge flow. The first swipe
+    // flags this row as the pending half of a merge (purple "Mergen"
+    // badge); a swipe on a second row triggers the merge dialog. A plain
+    // tap still selects the contact; the swiped flag suppresses the tap
+    // that follows a swipe gesture.
+    const startRef = useRef(null);
+    const swipedRef = useRef(false);
+    function onTouchStart(e) {
+      const t = e.touches[0];
+      startRef.current = { x: t.clientX, y: t.clientY };
+      swipedRef.current = false;
+    }
+    function onTouchMove(e) {
+      const s = startRef.current;
+      if (!s) return;
+      const t = e.touches[0];
+      if (t.clientX - s.x > 30) swipedRef.current = true;
+    }
+    function onTouchEnd(e) {
+      const s = startRef.current;
+      if (!s) return;
+      const t = e.changedTouches[0];
+      const dx = t.clientX - s.x;
+      const dy = t.clientY - s.y;
+      startRef.current = null;
+      if (dx > 60 && Math.abs(dy) < 40) {
+        onSwipeMerge?.(contact.id);
+      } else {
+        // Not a horizontal swipe — let the click fall through.
+        swipedRef.current = false;
+      }
+    }
+    function onClickRow(e) {
+      if (swipedRef.current) { swipedRef.current = false; e.stopPropagation(); return; }
+      onSelect(contact.id, e);
+    }
     return (
-      <div onClick={e=>onSelect(contact.id,e)}
+      <div onClick={onClickRow}
+        onTouchStart={onTouchStart} onTouchMove={onTouchMove} onTouchEnd={onTouchEnd}
         className={`px-3 py-2 border-b border-gray-100 cursor-pointer transition-colors
           ${isSel?"bg-indigo-50 border-l-2 border-l-indigo-500":""}
-          ${isMerge?"bg-violet-50 border-l-2 border-l-violet-500":""}
-          ${!isSel&&!isMerge?"hover:bg-gray-50":""}`}>
+          ${isMerge||isPending?"bg-violet-50 border-l-2 border-l-violet-500":""}
+          ${!isSel&&!isMerge&&!isPending?"hover:bg-gray-50":""}`}>
         <div className="flex items-center gap-2.5">
           <Avatar contact={contact} size={28}/>
           <div className="flex-1 min-w-0">
@@ -3528,10 +3612,12 @@ function LeftColumn({contactMeta, archivedContacts, selectedId, mergeId, onSelec
               <span className={`text-sm truncate ${badge>0?"font-semibold text-gray-900":"text-gray-700"}`}>
                 {isMerge&&<span className="mr-1 text-violet-400">⇄</span>}{contact.name}
               </span>
-              {badge>0&&<span className={`${badgeColor} text-white rounded-full flex-shrink-0 font-bold`}
-                style={{minWidth:22,height:16,fontSize:"0.55rem",padding:"0 6px",display:"flex",alignItems:"center",justifyContent:"center"}}>
-                {badge}
-              </span>}
+              {isPending
+                ? <span className="text-xs text-violet-600 font-semibold flex-shrink-0">Mergen…</span>
+                : badge>0 && <span className={`${badgeColor} text-white rounded-full flex-shrink-0 font-bold`}
+                    style={{minWidth:22,height:16,fontSize:"0.55rem",padding:"0 6px",display:"flex",alignItems:"center",justifyContent:"center"}}>
+                    {badge}
+                  </span>}
             </div>
             <div className="flex items-center mt-0.5">
               <span className="text-xs text-gray-400 truncate">{contact.org||contact.emails[0]}</span>
@@ -5261,6 +5347,55 @@ function App({userId, onSignOut}) {
     const t=setTimeout(()=>setActionToast(null), 3000);
     return ()=>clearTimeout(t);
   },[actionToast]);
+
+  // Onboarding dialogs that fire the first time the user touches a
+  // feature whose effect isn't obvious from the button label. Each
+  // gates its real action behind an OK click and remembers the "seen"
+  // state in localStorage so it never bothers the user twice.
+  const [r2mSendOnboard,   setR2mSendOnboard]   = useState(null); // null | {resolve, days}
+  const [snoozeOnboard,    setSnoozeOnboard]    = useState(null); // null | {exec}
+  const ONBOARD_R2M_KEY    = 'convooz:onboard:r2m-send';
+  const ONBOARD_SNOOZE_KEY = 'convooz:onboard:snooze';
+  // Called by the compose pane BEFORE the actual send happens, so the
+  // dialog is shown first and the send is gated on the user's OK click.
+  // Returns a Promise<boolean>: true = proceed, false = cancel. When the
+  // user already dismissed the dialog permanently, resolve immediately.
+  function onBeforeR2mSend(days) {
+    return new Promise(resolve => {
+      if (localStorage.getItem(ONBOARD_R2M_KEY)) { resolve(true); return; }
+      setR2mSendOnboard({ days, resolve });
+    });
+  }
+  // Snooze handlers are sync — wrap them so the dialog runs first and
+  // the real action fires on OK.
+  function gateOnSnoozeOnboarding(exec) {
+    if (localStorage.getItem(ONBOARD_SNOOZE_KEY)) { exec(); return; }
+    setSnoozeOnboard({ exec });
+  }
+
+  // Mobile merge gesture: there's no shift-click on a phone, so we use a
+  // swipe-right on a contact row to flag it for merging. First swipe →
+  // remember as the "pending" contact and show a Merge? badge on its
+  // row. Second swipe on a different contact → open the merge dialog
+  // in col 2 with those two as the candidates.
+  const [pendingMergeId, setPendingMergeId] = useState(null);
+  function handleSwipeMerge(contactId) {
+    if (pendingMergeId === null) {
+      setPendingMergeId(contactId);
+      setActionToast('Swipe a second contact to merge with this one — or tap any contact to cancel.');
+      return;
+    }
+    if (pendingMergeId === contactId) {
+      setPendingMergeId(null);
+      setActionToast(null);
+      return;
+    }
+    setSelContact(pendingMergeId);
+    setMergeContact(contactId);
+    setPendingMergeId(null);
+    setActionToast(null);
+    if (isMobile) setMobileCol(1);
+  }
   const [fadingOut,    setFadingOut]    = useState(false); // slow 3s fade (delete/spam)
   const [fadingOutFast,setFadingOutFast]= useState(false); // fast 0.4s fade (last on Now)
   const [pendingMsgId, setPendingMsgId] = useState(undefined);
@@ -5579,6 +5714,9 @@ function App({userId, onSignOut}) {
   // ── Handlers ──
   function handleSelectContact(id,e){
     if(e?.shiftKey&&selContact!==null&&selContact!==id){setMergeContact(id);setShowCompose(false);setSelMsg(null);return;}
+    // Any plain tap clears the pending swipe-merge marker. The user can
+    // explicitly cancel the merge flow this way without finishing it.
+    if (pendingMergeId !== null) { setPendingMergeId(null); setActionToast(null); }
     setSelContact(id);setMergeContact(null);setSelTag(null);
     setShowCompose(false);setReplyTo(null);setReplyKind(null);setComposeContact(null);setComposeDraft(null);setEditingContact(null);
     setSearchQuery('');setSearchScope('all');
@@ -5709,7 +5847,8 @@ function App({userId, onSignOut}) {
     // No toast — the banner disappearing is feedback enough.
     persistR2m(id, { dismiss: true });
   }
-  function handleR2mSnooze(id){
+  function handleR2mSnooze(id){ gateOnSnoozeOnboarding(() => doR2mSnooze(id)); }
+  function doR2mSnooze(id){
     captureAlert(id);
     const prevCount = msgSnoozeCounts[id] || 0;
     const days = fibSnoozeDays(prevCount);
@@ -5742,7 +5881,8 @@ function App({userId, onSignOut}) {
     // No toast — the banner disappearing is feedback enough.
     persistSeen(id);
   }
-  function handleSnoozeMsg(id){
+  function handleSnoozeMsg(id){ gateOnSnoozeOnboarding(() => doSnoozeMsg(id)); }
+  function doSnoozeMsg(id){
     captureAlert(id);
     const count=msgSnoozeCounts[id]||0;
     const days=fibSnoozeDays(count);
@@ -6447,6 +6587,31 @@ function App({userId, onSignOut}) {
         accountSigs={accountSigs} setAccountSigs={setAccountSigs}
         mailAccounts={mailAccounts} onMailAccountsChanged={refreshData}/>}
 
+      {/* Onboarding dialogs: shown on first use of a not-self-evident
+         action, suppressed permanently if the user ticks "don't show". */}
+      {r2mSendOnboard && (
+        <OnboardingDialog
+          title="Sending with Revert2me"
+          body={<>This button just sends the email as normal, but a reminder is shown in case there was no reply within <strong>{r2mSendOnboard.days} day{r2mSendOnboard.days===1?'':'s'}</strong>.</>}
+          onClose={(dontShow)=>{
+            if (dontShow) localStorage.setItem(ONBOARD_R2M_KEY, '1');
+            const resolve = r2mSendOnboard.resolve;
+            setR2mSendOnboard(null);
+            resolve(true);
+          }}/>
+      )}
+      {snoozeOnboard && (
+        <OnboardingDialog
+          title="About Snooze"
+          body={<>This alert is snoozed for <strong>3 days</strong>. The next time it can be snoozed for <strong>5 days</strong>, the next time for <strong>8 days</strong>, etcetera.</>}
+          onClose={(dontShow)=>{
+            if (dontShow) localStorage.setItem(ONBOARD_SNOOZE_KEY, '1');
+            const exec = snoozeOnboard.exec;
+            setSnoozeOnboard(null);
+            exec();
+          }}/>
+      )}
+
       {/* Empty-state / error banner — no longer shows a "loading" state, only
          dataError or post-load empty. Sync feedback now lives entirely in the
          spinner on the Sync button. */}
@@ -6492,6 +6657,7 @@ function App({userId, onSignOut}) {
                 mailAccounts={mailAccounts}
                 actionableCounts={actionableCounts}
                 onContactTabChange={handleContactTabChange}
+                pendingMergeId={pendingMergeId} onSwipeMerge={handleSwipeMerge}
                 dataLoading={dataLoading}/>
             </div>
             {/* Mobile Col 2 */}
@@ -6509,7 +6675,7 @@ function App({userId, onSignOut}) {
                     initMsgTags={composeDraft?composeDraft.tags||[]:replyTo?msgTags[replyTo.id]||[]:[]}
                     allKnownTags={allKnownTags} selAccounts={selAccounts}
                     signatures={signatures} accountSigs={accountSigs}
-                    onSend={handleSend} onSaveDraft={handleSaveDraft} onDeleteDraft={handleDeleteDraft}
+                    onSend={handleSend} onBeforeR2mSend={onBeforeR2mSend} onSaveDraft={handleSaveDraft} onDeleteDraft={handleDeleteDraft}
                     onClose={handleCloseCompose}
                     mobileBack={handleCloseCompose}
                     mobileBackLabel={
@@ -6554,6 +6720,7 @@ function App({userId, onSignOut}) {
                 mailAccounts={mailAccounts}
                 actionableCounts={actionableCounts}
                 onContactTabChange={handleContactTabChange}
+                pendingMergeId={pendingMergeId} onSwipeMerge={handleSwipeMerge}
                 dataLoading={dataLoading}/>
             </div>
 
@@ -6577,7 +6744,7 @@ function App({userId, onSignOut}) {
                   allKnownTags={allKnownTags}
                   selAccounts={selAccounts}
                   signatures={signatures} accountSigs={accountSigs}
-                  onSend={handleSend} onSaveDraft={handleSaveDraft} onDeleteDraft={handleDeleteDraft}
+                  onSend={handleSend} onBeforeR2mSend={onBeforeR2mSend} onSaveDraft={handleSaveDraft} onDeleteDraft={handleDeleteDraft}
                   onClose={handleCloseCompose}/>
               ):(
                 <MessageDetail message={selectedMsg} contact={detailContact}
