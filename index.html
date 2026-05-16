@@ -184,7 +184,7 @@
        polish change is picked up by every browser as soon as the version
        is bumped — no manual cache-busters needed. Keep ?v= here in sync
        with APP_VERSION below at every deploy. -->
-  <link rel="stylesheet" href="polish.css?v=0.0.148"/>
+  <link rel="stylesheet" href="polish.css?v=0.0.149"/>
 </head>
 <body>
 <div id="root">
@@ -199,7 +199,7 @@ const { useState, useMemo, useRef, useEffect, useCallback } = React;
 
 // ─── Constants ───────────────────────────────────────────────────────────────
 
-const APP_VERSION = "0.0.148"; // bumped on every deploy — keep in sync with version.json AND with the ?v= on polish.css above
+const APP_VERSION = "0.0.149"; // bumped on every deploy — keep in sync with version.json AND with the ?v= on polish.css above
 
 // ─── Backend + Supabase config ───────────────────────────────────────────────
 const SUPABASE_URL = "https://oyrlzqbjcsliesvunbwj.supabase.co";
@@ -6272,15 +6272,77 @@ function App({userId, onSignOut}) {
     });
   }
   async function handleUnmergeEmail(contactId, email){
-    const contact = contactList.find(c=>c.id===contactId);
-    if(!contact || contact.emails.length <= 1) return;
+    const oldContact = contactList.find(c=>c.id===contactId);
+    if(!oldContact || oldContact.emails.length <= 1) return;
+    const lowEmail = (email || '').toLowerCase();
+    // Snapshot so we can roll back on server failure.
+    const snapshotContacts = contactList;
+    const snapshotMessages = messageList;
+    // Split the old contact's accountEmails into two buckets based on
+    // which messages anchor to the unmerged email — so the new contact
+    // gets exactly the accountEmails it actually has activity in, and
+    // the old contact drops the ones it no longer needs.
+    const newAccountEmails = new Set();
+    const remainingOldAccountEmails = new Set();
+    for (const m of messageList) {
+      if (m.contactId !== contactId || !m.accountEmail) continue;
+      const anchor = ((m.dir === 'in' ? m.from : m.to) || '').toLowerCase();
+      (anchor === lowEmail ? newAccountEmails : remainingOldAccountEmails).add(m.accountEmail);
+    }
+    // Mirror the backend's default-name derivation so the UI doesn't
+    // flash a different name when the real row swaps in.
+    const defaultName = (email.split('@')[0] || email)
+      .split(/[._-]+/).filter(Boolean)
+      .map(p => p[0].toUpperCase() + p.slice(1)).join(' ') || email;
+    const tempId = `temp-unmerge-${Date.now()}-${Math.random().toString(36).slice(2,8)}`;
+    const newContact = {
+      id: tempId,
+      name: defaultName,
+      org: '',
+      emails: [email],
+      primary_email: email,
+      avatar: initialsOf(defaultName),
+      color: colorFromSeed(defaultName),
+      portrait: null,
+      r2mDays: 3,
+      isNews: false,
+      isMuted: false,
+      archivedAt: null,
+      accountEmails: [...newAccountEmails],
+      account: [...newAccountEmails][0] || null,
+    };
+    // Optimistic split: strip the email from the old contact and append
+    // the new one. Re-attribute messages whose anchor address matches
+    // the unmerged email to the new (temp) contact id.
+    setContactList(prev => prev
+      .map(c => c.id === contactId
+        ? { ...c, emails: c.emails.filter(e => e.toLowerCase() !== lowEmail),
+            accountEmails: [...remainingOldAccountEmails],
+            account: [...remainingOldAccountEmails][0] || null }
+        : c)
+      .concat(newContact)
+    );
+    setMessageList(prev => prev.map(m => {
+      if (m.contactId !== contactId) return m;
+      const anchor = ((m.dir === 'in' ? m.from : m.to) || '').toLowerCase();
+      return anchor === lowEmail ? { ...m, contactId: tempId } : m;
+    }));
     try {
-      await apiFetch(`/contacts/${contactId}/unmerge-email`, {
-        method:'POST',
+      const res = await apiFetch(`/contacts/${contactId}/unmerge-email`, {
+        method: 'POST',
         body: JSON.stringify({ email }),
       });
-      refreshData();
+      const realId = res?.newContactId;
+      if (!realId) return; // server didn't return an id, leave the temp in place; next bootstrap will reconcile
+      // Swap temp id → real id everywhere it could appear so the UI stays
+      // referentially correct across refreshes.
+      setContactList(prev => prev.map(c => c.id === tempId ? { ...c, id: realId } : c));
+      setMessageList(prev => prev.map(m => m.contactId === tempId ? { ...m, contactId: realId } : m));
+      if (selContact   === tempId) setSelContact(realId);
+      if (mergeContact === tempId) setMergeContact(realId);
     } catch (e) {
+      setContactList(snapshotContacts);
+      setMessageList(snapshotMessages);
       alert('Unmerge failed: ' + e.message);
     }
   }
