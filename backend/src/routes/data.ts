@@ -120,12 +120,25 @@ export async function registerDataRoutes(app: FastifyInstance) {
     const bodyTargetIds = Array.from(new Set([...actionableIds, ...recentIds]));
     const bodiesById = new Map<string, { body_text: string | null; body_html: string | null }>();
     if (bodyTargetIds.length > 0) {
-      const bodiesRes = await sb.from("messages")
-        .select("id, body_text, body_html")
-        .in("id", bodyTargetIds);
-      if (bodiesRes.error) return sendTransientOr500(reply, bodiesRes.error);
-      for (const row of ((bodiesRes.data ?? []) as unknown as BodyRow[])) {
-        bodiesById.set(row.id, { body_text: row.body_text, body_html: row.body_html });
+      // Use direct pg, not supabase-js: a 300-id .in() filter serializes
+      // into a ~17 KB URL ("?id=in.(uuid1,uuid2,...)") which exceeds
+      // Supabase pgrest's HTTP header limit (16 KB) and fails the entire
+      // request with UND_ERR_HEADERS_OVERFLOW. pg's $1::uuid[] keeps the
+      // ids in the request body where there is no such limit, and the
+      // user_id filter mirrors what RLS would have enforced anyway.
+      try {
+        const pool = requirePool();
+        const bodiesRes = await pool.query<BodyRow>(
+          `SELECT id, body_text, body_html
+             FROM messages
+            WHERE user_id = $1 AND id = ANY($2::uuid[])`,
+          [req.authUser!.id, bodyTargetIds],
+        );
+        for (const row of bodiesRes.rows) {
+          bodiesById.set(row.id, { body_text: row.body_text, body_html: row.body_html });
+        }
+      } catch (e) {
+        return sendTransientOr500(reply, e);
       }
     }
     const messagesWithBodies = messagesRows.map(m => {
