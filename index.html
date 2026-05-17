@@ -184,7 +184,7 @@
        polish change is picked up by every browser as soon as the version
        is bumped — no manual cache-busters needed. Keep ?v= here in sync
        with APP_VERSION below at every deploy. -->
-  <link rel="stylesheet" href="polish.css?v=0.0.155"/>
+  <link rel="stylesheet" href="polish.css?v=0.0.156"/>
 </head>
 <body>
 <div id="root">
@@ -199,7 +199,7 @@ const { useState, useMemo, useRef, useEffect, useCallback } = React;
 
 // ─── Constants ───────────────────────────────────────────────────────────────
 
-const APP_VERSION = "0.0.155"; // bumped on every deploy — keep in sync with version.json AND with the ?v= on polish.css above
+const APP_VERSION = "0.0.156"; // bumped on every deploy — keep in sync with version.json AND with the ?v= on polish.css above
 
 // ─── Backend + Supabase config ───────────────────────────────────────────────
 const SUPABASE_URL = "https://oyrlzqbjcsliesvunbwj.supabase.co";
@@ -230,18 +230,34 @@ function colorFromSeed(seed) {
 }
 
 async function apiFetch(path, opts = {}) {
-  const { data: { session } } = await sb.auth.getSession();
-  const headers = { ...(opts.headers || {}) };
-  if (opts.body != null) headers["Content-Type"] = "application/json";
-  if (session?.access_token) headers.Authorization = `Bearer ${session.access_token}`;
+  // Build the Authorization header lazily so the 401-refresh path below
+  // can pick up the fresh access_token after refreshSession() runs.
+  async function buildHeaders() {
+    const { data: { session } } = await sb.auth.getSession();
+    const headers = { ...(opts.headers || {}) };
+    if (opts.body != null) headers["Content-Type"] = "application/json";
+    if (session?.access_token) headers.Authorization = `Bearer ${session.access_token}`;
+    return headers;
+  }
+  let res = await fetch(BACKEND_URL + path, { ...opts, headers: await buildHeaders() });
+  // 401 means the backend rejected the JWT as expired/invalid. Supabase
+  // auto-refreshes in the background on a timer, but the timer can lag
+  // when the tab was inactive or the device just woke up — getSession
+  // then returns a stale token. One forced refresh + retry hides that
+  // glitch from the user. If the refresh itself fails (e.g. refresh
+  // token revoked) the second call simply 401s again and we surface
+  // the error so the FE can drop them back to the login screen.
+  if (res.status === 401) {
+    await sb.auth.refreshSession().catch(() => {});
+    res = await fetch(BACKEND_URL + path, { ...opts, headers: await buildHeaders() });
+  }
   // The backend translates Supabase/Postgres pooler hiccups (EDBHANDLEREXITED,
   // "fetch failed" from the SDK, statement timeouts) to a clean 503. Most of
   // those are over within a second or two, so one automatic retry hides the
-  // wobble from the UI. We don't retry on 4xx — those are real client errors.
-  let res = await fetch(BACKEND_URL + path, { ...opts, headers });
+  // wobble from the UI.
   if (res.status === 503) {
     await new Promise(r => setTimeout(r, 1200));
-    res = await fetch(BACKEND_URL + path, { ...opts, headers });
+    res = await fetch(BACKEND_URL + path, { ...opts, headers: await buildHeaders() });
   }
   if (!res.ok) throw new Error(`${res.status} ${res.statusText}: ${await res.text()}`);
   return res.status === 204 ? null : res.json();
