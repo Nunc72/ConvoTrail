@@ -184,7 +184,7 @@
        polish change is picked up by every browser as soon as the version
        is bumped — no manual cache-busters needed. Keep ?v= here in sync
        with APP_VERSION below at every deploy. -->
-  <link rel="stylesheet" href="polish.css?v=0.0.157"/>
+  <link rel="stylesheet" href="polish.css?v=0.0.158"/>
 </head>
 <body>
 <div id="root">
@@ -199,7 +199,7 @@ const { useState, useMemo, useRef, useEffect, useCallback } = React;
 
 // ─── Constants ───────────────────────────────────────────────────────────────
 
-const APP_VERSION = "0.0.157"; // bumped on every deploy — keep in sync with version.json AND with the ?v= on polish.css above
+const APP_VERSION = "0.0.158"; // bumped on every deploy — keep in sync with version.json AND with the ?v= on polish.css above
 
 // ─── Backend + Supabase config ───────────────────────────────────────────────
 const SUPABASE_URL = "https://oyrlzqbjcsliesvunbwj.supabase.co";
@@ -4438,7 +4438,8 @@ function LoginScreen() {
         <div className={cardCls}>
           <h1 className="text-xl font-bold text-gray-900 mb-1">Sign in</h1>
           <p className="text-sm text-gray-400 mb-7">Welcome back</p>
-          {err&&<div className="mb-4 px-3 py-2 rounded-lg bg-red-50 text-red-600 text-xs">{err}</div>}
+          {/* Error rendering moved to right above the submit button so it
+              stays in view when the wrapper is scrolled on mobile. */}
           <form onSubmit={handleLogin} className="space-y-4">
             <div>
               <label className="text-xs text-gray-500 font-medium block mb-1">Username</label>
@@ -4464,9 +4465,14 @@ function LoginScreen() {
                 Forgot password?
               </button>
             </div>
-            <button type="submit"
-              className="w-full py-2.5 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white text-sm font-semibold transition">
-              Sign in
+            {/* Inline error directly above the submit button: on mobile the
+                wrapper is scrollable and the top-of-card error block easily
+                ends up out of view when the user is focused on the button. */}
+            {err&&<div className="px-3 py-2 rounded-lg bg-red-50 text-red-600 text-xs">{err}</div>}
+            <button type="submit" disabled={busy}
+              className="w-full py-2.5 rounded-xl bg-indigo-600 hover:bg-indigo-700 disabled:opacity-60 disabled:cursor-wait text-white text-sm font-semibold transition flex items-center justify-center gap-2">
+              {busy && <span className="inline-block w-3.5 h-3.5 rounded-full border-2 border-white/40 border-t-white animate-spin"/>}
+              {busy ? 'Signing in…' : 'Sign in'}
             </button>
           </form>
           <div className="mt-6 pt-5 border-t border-gray-100 text-center">
