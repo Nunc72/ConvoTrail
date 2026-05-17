@@ -184,7 +184,7 @@
        polish change is picked up by every browser as soon as the version
        is bumped — no manual cache-busters needed. Keep ?v= here in sync
        with APP_VERSION below at every deploy. -->
-  <link rel="stylesheet" href="polish.css?v=0.0.160"/>
+  <link rel="stylesheet" href="polish.css?v=0.0.161"/>
 </head>
 <body>
 <div id="root">
@@ -199,7 +199,7 @@ const { useState, useMemo, useRef, useEffect, useCallback } = React;
 
 // ─── Constants ───────────────────────────────────────────────────────────────
 
-const APP_VERSION = "0.0.160"; // bumped on every deploy — keep in sync with version.json AND with the ?v= on polish.css above
+const APP_VERSION = "0.0.161"; // bumped on every deploy — keep in sync with version.json AND with the ?v= on polish.css above
 
 // ─── Backend + Supabase config ───────────────────────────────────────────────
 const SUPABASE_URL = "https://oyrlzqbjcsliesvunbwj.supabase.co";
@@ -3012,7 +3012,14 @@ function MessageDetail({message,contact,isDeleted,msgTags,allTags,onReply,onRepl
         })()}
       </div>
       {(() => {
-        const atts = (enriched?.attachments || []).filter(a => !a.isInline);
+        // Same fallback chain as the chip view above — without
+        // message.attachmentsMeta here the modal silently refused to
+        // render whenever /body was skipped because the metadata was
+        // already cached (i.e. every visit after the first one for that
+        // message). atts came back empty, previewIdx >= 0 hit the
+        // out-of-bounds guard, and clicking a thumbnail looked like a
+        // dead button.
+        const atts = (enriched?.attachments || message.attachmentsMeta || []).filter(a => !a.isInline);
         if (previewIdx == null || previewIdx < 0 || previewIdx >= atts.length) return null;
         const active = atts[previewIdx];
         const hasPrev = previewIdx > 0;
