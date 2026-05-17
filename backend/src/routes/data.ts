@@ -34,6 +34,7 @@ export async function registerDataRoutes(app: FastifyInstance) {
       sb.from("messages").select(
         "id, mail_account_id, folder, uid, message_id, thread_id, from_email, from_name, to_emails, " +
         "subject, snippet, date, flags, direction, deleted_at, has_attachments, " +
+        "attachments_meta, " +
         "unsubscribe_url, unsubscribe_one_click",
       ).order("date", { ascending: false }).limit(limit),
       sb.from("drafts").select(

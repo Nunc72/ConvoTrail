@@ -184,7 +184,7 @@
        polish change is picked up by every browser as soon as the version
        is bumped — no manual cache-busters needed. Keep ?v= here in sync
        with APP_VERSION below at every deploy. -->
-  <link rel="stylesheet" href="polish.css?v=0.0.153"/>
+  <link rel="stylesheet" href="polish.css?v=0.0.154"/>
 </head>
 <body>
 <div id="root">
@@ -199,7 +199,7 @@ const { useState, useMemo, useRef, useEffect, useCallback } = React;
 
 // ─── Constants ───────────────────────────────────────────────────────────────
 
-const APP_VERSION = "0.0.153"; // bumped on every deploy — keep in sync with version.json AND with the ?v= on polish.css above
+const APP_VERSION = "0.0.154"; // bumped on every deploy — keep in sync with version.json AND with the ?v= on polish.css above
 
 // ─── Backend + Supabase config ───────────────────────────────────────────────
 const SUPABASE_URL = "https://oyrlzqbjcsliesvunbwj.supabase.co";
@@ -2661,7 +2661,19 @@ function MessageDetail({message,contact,isDeleted,msgTags,allTags,onReply,onRepl
     //    so we have nothing to show until either /body or /bootstrap returns.
     //    Fetching /body directly is much faster than waiting for the full
     //    bootstrap to land, so the user sees the message body sooner.
-    const needsAttachmentEnrichment = message.hasAttachments || (typeof message.bodyHtml === 'string' && /cid:/i.test(message.bodyHtml));
+    // We only need to call /body when one of the following holds:
+    //   - the message has attachments AND we don't have the metadata
+    //     cached (older mails synced before the backend started saving
+    //     attachments_meta still fall back to IMAP on first click);
+    //   - the cached bodyHtml still has unresolved cid: refs and the
+    //     attachments aren't yet inlined into it;
+    //   - we have no body at all yet.
+    // Once attachmentsMeta is present AND the html is either absent or
+    // already inlined, /body adds nothing the FE can't render itself.
+    const hasAttachmentsMeta = Array.isArray(message.attachmentsMeta);
+    const needsAttachmentEnrichment =
+      (message.hasAttachments && !hasAttachmentsMeta) ||
+      (typeof message.bodyHtml === 'string' && /cid:/i.test(message.bodyHtml));
     const needsBodyFetch = message.body === undefined && message.bodyHtml === undefined;
     if (!needsAttachmentEnrichment && !needsBodyFetch) return;
     let cancelled = false;
@@ -2928,7 +2940,7 @@ function MessageDetail({message,contact,isDeleted,msgTags,allTags,onReply,onRepl
         })()}
         {enrichedErr && <p className="mt-3 text-xs text-red-500">Attachments load failed: {enrichedErr}</p>}
         {(() => {
-          const atts = (enriched?.attachments || []).filter(a => !a.isInline);
+          const atts = (enriched?.attachments || message.attachmentsMeta || []).filter(a => !a.isInline);
           if (atts.length === 0) return null;
           const images = atts.filter(a => attachmentKind(a.contentType) === 'image');
           return (
@@ -5122,6 +5134,7 @@ function App({userId, onSignOut}) {
             bodyHtml: hasBodyHtml ? (m.body_html.trim() ? m.body_html : null) : undefined,
             snippet: m.snippet || '',
             hasAttachments: !!m.has_attachments,
+            attachmentsMeta: Array.isArray(m.attachments_meta) ? m.attachments_meta : null,
             unsubscribeUrl: m.unsubscribe_url || null,
             unsubscribeOneClick: !!m.unsubscribe_one_click,
             sender,

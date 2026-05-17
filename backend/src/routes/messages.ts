@@ -141,14 +141,30 @@ export async function registerMessagesRoutes(app: FastifyInstance) {
   );
 
   // ─── Full body with inline cid: resolution + attachment list ────────────
-  // On-demand fetch from IMAP — we don't cache the source locally yet. The
-  // attachments list includes both inline images and regular attachments;
-  // the frontend filters the inline ones out of its "chip" view.
+  // Cached in Postgres after the first IMAP round-trip. Subsequent /body
+  // calls for the same message return from pg in <50 ms instead of the
+  // 600-1500 ms it costs to spin up an IMAP connection, SELECT a mailbox,
+  // and UID FETCH the source every time. The cache is invalidated when
+  // sync overwrites the row (e.g. the mailbox replaced the message), at
+  // which point the next /body call re-IMAPs and re-caches.
+  interface AttMeta {
+    index: number;
+    filename: string;
+    contentType: string;
+    size: number;
+    isInline: boolean;
+    cid: string | null;
+  }
   app.get<{ Params: { id: string } }>(
     "/messages/:id/body", auth, async (req, reply) => {
       const pool = requirePool();
-      const r = await pool.query<MessageImapRow>(
+      const r = await pool.query<MessageImapRow & {
+        body_text: string | null;
+        body_html: string | null;
+        attachments_meta: AttMeta[] | null;
+      }>(
         `SELECT m.user_id, m.mail_account_id, m.folder, m.uid,
+                m.body_text, m.body_html, m.attachments_meta,
                 a.imap_host, a.imap_port, a.imap_user, a.imap_cred_enc
            FROM messages m
            JOIN mail_accounts a ON a.id = m.mail_account_id
@@ -158,6 +174,19 @@ export async function registerMessagesRoutes(app: FastifyInstance) {
       if (r.rows.length === 0) return reply.notFound();
       const row = r.rows[0];
       if (row.user_id !== req.authUser!.id) return reply.forbidden();
+
+      // Cache hit: we already have both body and attachments-meta. The
+      // FE only needs /body for the attachments list when bodies were
+      // cached without it, so we still serve a hit when attachments_meta
+      // is present even with NULL bodies (rare: pure-binary mail).
+      if (row.attachments_meta !== null && (row.body_text !== null || row.body_html !== null)) {
+        return {
+          html: row.body_html,
+          text: row.body_text,
+          attachments: row.attachments_meta,
+        };
+      }
+
       if (!row.imap_host || !row.imap_port || !row.imap_cred_enc) {
         return reply.badRequest("IMAP not configured for this account");
       }
@@ -170,37 +199,70 @@ export async function registerMessagesRoutes(app: FastifyInstance) {
       }
 
       const attachments = parsed.attachments || [];
+      // Pass 1: build the cid → data-uri map so the HTML rewrite below can
+      // inline images. We do this for every attachment that carries a
+      // Content-ID, regardless of disposition — the cid might still be
+      // referenced in HTML even if the disposition is "attachment".
       const cidToDataUri = new Map<string, string>();
-      const publicList = attachments.map((att: Attachment, index: number) => {
+      for (const att of attachments as Attachment[]) {
         const cidBare = att.cid ? stripAngleBrackets(att.cid) : null;
         if (cidBare && att.content) {
-          // Inline image: encode once so the HTML can render without extra
-          // round-trips. contentType defaults to octet-stream for safety.
           const type = att.contentType || "application/octet-stream";
           cidToDataUri.set(cidBare, `data:${type};base64,${att.content.toString("base64")}`);
         }
+      }
+
+      // Pass 2: rewrite the HTML and remember which cids were actually
+      // consumed by an <img src="cid:..."> reference. Only those are truly
+      // inline (visible in the body, no need to list separately). Anything
+      // else — including attachments that happen to have a Content-ID but
+      // aren't referenced in the markup — gets shown as a downloadable
+      // attachment. This fixes the old behaviour where a Content-ID alone
+      // hid the attachment from the user, which is how some mail clients
+      // stamp every attachment.
+      const usedCids = new Set<string>();
+      let html: string | null = typeof parsed.html === "string" ? parsed.html : null;
+      if (html) {
+        html = html.replace(/cid:<?([^"'\s>]+?)>?(?=["'\s>])/gi, (m, cid) => {
+          const bare = stripAngleBrackets(cid);
+          const replacement = cidToDataUri.get(bare);
+          if (replacement) usedCids.add(bare);
+          return replacement || m;
+        });
+      }
+
+      // Pass 3: build the public attachment list. isInline now requires
+      // both a cid AND that cid being actually consumed by the HTML, so
+      // a misclassification can no longer make a real attachment vanish.
+      const publicList = attachments.map((att: Attachment, index: number) => {
+        const cidBare = att.cid ? stripAngleBrackets(att.cid) : null;
         return {
           index,
           filename: att.filename || `attachment-${index + 1}`,
           contentType: att.contentType || "application/octet-stream",
           size: att.size ?? att.content?.length ?? 0,
-          isInline: !!cidBare,
+          isInline: !!cidBare && usedCids.has(cidBare),
           cid: cidBare,
         };
       });
 
-      let html: string | null = typeof parsed.html === "string" ? parsed.html : null;
-      if (html) {
-        // Resolve both single- and double-quoted forms, plus cid references
-        // without surrounding quotes. Also tolerate an optional leading '<'.
-        html = html.replace(/cid:<?([^"'\s>]+?)>?(?=["'\s>])/gi, (m, cid) => {
-          return cidToDataUri.get(stripAngleBrackets(cid)) || m;
-        });
-      }
+      // Write the parsed result back to messages so the next /body
+      // call returns instantly from pg. Failure here is non-fatal — we
+      // still served the user's current request, only the next one
+      // would re-IMAP. Don't block on the write either.
+      const textForCache = parsed.text || null;
+      pool.query(
+        `UPDATE messages
+            SET body_text = $1,
+                body_html = $2,
+                attachments_meta = $3
+          WHERE id = $4`,
+        [textForCache, html, JSON.stringify(publicList), req.params.id],
+      ).catch(e => req.log.warn({ err: e }, "/body cache write failed (non-fatal)"));
 
       return {
         html,
-        text: parsed.text || null,
+        text: textForCache,
         attachments: publicList,
       };
     },
