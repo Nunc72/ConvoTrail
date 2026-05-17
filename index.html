@@ -184,7 +184,7 @@
        polish change is picked up by every browser as soon as the version
        is bumped — no manual cache-busters needed. Keep ?v= here in sync
        with APP_VERSION below at every deploy. -->
-  <link rel="stylesheet" href="polish.css?v=0.0.158"/>
+  <link rel="stylesheet" href="polish.css?v=0.0.159"/>
 </head>
 <body>
 <div id="root">
@@ -199,7 +199,7 @@ const { useState, useMemo, useRef, useEffect, useCallback } = React;
 
 // ─── Constants ───────────────────────────────────────────────────────────────
 
-const APP_VERSION = "0.0.158"; // bumped on every deploy — keep in sync with version.json AND with the ?v= on polish.css above
+const APP_VERSION = "0.0.159"; // bumped on every deploy — keep in sync with version.json AND with the ?v= on polish.css above
 
 // ─── Backend + Supabase config ───────────────────────────────────────────────
 const SUPABASE_URL = "https://oyrlzqbjcsliesvunbwj.supabase.co";
@@ -6214,6 +6214,59 @@ function App({userId, onSignOut}) {
     return () => { clearInterval(interval); window.removeEventListener('focus', tick); };
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [mailAccounts]);
+
+  // ── Realtime cross-device sync ─────────────────────────────────────
+  // Subscribe to Supabase Realtime on every public table that carries
+  // user-mutable state, so a change made on phone A pushes to phone B
+  // within ~200-500 ms over WebSocket instead of waiting for the next
+  // auto-sync poll. RLS still applies on the Realtime side — clients
+  // only receive events for rows their session is authorised to read.
+  //
+  // We don't try to apply individual diffs; the FE state graph is
+  // dense enough that a coarse refreshData() is far simpler and just
+  // as fast over the wire (bootstrap is ~1-2 s on the warm Fly
+  // machine). A 400 ms debounce coalesces bursts (e.g. a merge that
+  // touches contacts + contact_emails + messages in one transaction)
+  // into a single bootstrap.
+  //
+  // Messages table is intentionally NOT subscribed: too noisy on busy
+  // mailboxes and the auto-sync poll + manual sync already cover new-
+  // mail delivery. This subscription is for the "metadata change"
+  // path: vendor toggle, mute, tags, drafts, merge/unmerge, r2m, mail
+  // account settings, signatures.
+  useEffect(() => {
+    let debounce;
+    const triggerRefresh = () => {
+      clearTimeout(debounce);
+      debounce = setTimeout(() => refreshData(), 400);
+    };
+    const tables = [
+      'contacts', 'contact_emails', 'tags', 'message_tags',
+      'r2m_state', 'drafts', 'draft_attachments',
+      'mail_accounts', 'signatures', 'account_signatures',
+    ];
+    // Build one channel binding each event source. supabase-js applies
+    // the session's JWT automatically so RLS gates the stream.
+    let channel = sb.channel('convooz-user-data');
+    for (const table of tables) {
+      channel = channel.on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table },
+        triggerRefresh,
+      );
+    }
+    channel.subscribe(status => {
+      if (status === 'SUBSCRIBED') {
+        console.log('[realtime] subscribed to', tables.length, 'tables');
+      } else if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT') {
+        console.warn('[realtime] channel status:', status, '— falling back to poll');
+      }
+    });
+    return () => {
+      clearTimeout(debounce);
+      sb.removeChannel(channel);
+    };
+  }, [refreshData]);
 
   // ── Onboarding nudge: after the very first bootstrap completes, if the
   // user has no mail accounts yet, auto-open Settings → Mail accounts so
