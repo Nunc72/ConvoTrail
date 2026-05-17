@@ -18,17 +18,33 @@ import { config } from "./config.js";
 // connection (50-100ms), and the cold-start cost is paid once per
 // machine boot instead of once per /bootstrap.
 const sbDispatcher = new Agent({
-  // Keep idle connections open long enough that the next request
-  // (typically polling every minute or two) finds a warm slot.
-  keepAliveTimeout: 60_000,
-  keepAliveMaxTimeout: 10 * 60_000,
+  // Force HTTP/1.1 over the pool. undici 8 negotiates HTTP/2 with Supabase
+  // when ALPN allows it (Supabase's edge gateway speaks h2), and the
+  // resulting ClientHttp2Stream then occasionally stalls indefinitely
+  // — observed in prod as 60s "stream timeout" hangs on
+  // supabaseAdmin.auth.admin.getUserById that surface as a "No account
+  // with that username" 404 in the FE. HTTP/1.1 with keep-alive keeps
+  // the connection-pooling win (skip the 3-5s cold TLS handshake from
+  // Fly to Supabase) without the HTTP/2 stream lifecycle bugs.
+  allowH2: false,
+  // Idle connection retention. Shorter than before so a half-broken
+  // socket that survives a network blip won't be reused for minutes
+  // before discovery. 15s is well within the inter-request gap of an
+  // active session yet short enough to cycle dead connections quickly.
+  keepAliveTimeout: 15_000,
+  keepAliveMaxTimeout: 60_000,
   // Cap the number of connections per host so a burst doesn't
   // accidentally DoS Supabase's pgrest.
   connections: 32,
-  // Sensible deadlines so a hung request fails fast instead of
-  // tying up a slot for minutes.
-  headersTimeout: 30_000,
-  bodyTimeout: 60_000,
+  // Aggressive per-request deadlines: a hung request shouldn't tie up
+  // a worker for a full minute. If Supabase actually needs more than
+  // 15s to start replying something is genuinely wrong and we want
+  // the error fast so the FE can retry / show a clean 503.
+  headersTimeout: 15_000,
+  bodyTimeout: 30_000,
+  // If the TLS+TCP connect itself takes more than 8s we should give
+  // up and retry rather than waiting on a dead-looking link.
+  connect: { timeout: 8_000 },
 });
 
 // supabase-js expects a fetch with the global Fetch API signature, but
