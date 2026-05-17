@@ -6,7 +6,15 @@ primary_region = "fra"
 [http_service]
   internal_port = 3000
   force_https = true
-  auto_stop_machines = "stop"
+  # "suspend" freezes the machine's memory to disk instead of fully stopping
+  # the VM. Wake-up drops from ~15-30s (cold boot + Node startup + DB pool
+  # init + Undici Agent warm-up) to a few hundred ms, because the running
+  # process is restored straight from its serialised RAM image. Same idle
+  # CPU cost as "stop", just faster recovery — important here because the
+  # backend goes idle quickly when a single user pauses for a minute and
+  # the next click would otherwise hit a cold boot that looks like the
+  # request itself is slow.
+  auto_stop_machines = "suspend"
   auto_start_machines = true
   min_machines_running = 0
 
