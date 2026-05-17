@@ -184,7 +184,7 @@
        polish change is picked up by every browser as soon as the version
        is bumped — no manual cache-busters needed. Keep ?v= here in sync
        with APP_VERSION below at every deploy. -->
-  <link rel="stylesheet" href="polish.css?v=0.0.159"/>
+  <link rel="stylesheet" href="polish.css?v=0.0.160"/>
 </head>
 <body>
 <div id="root">
@@ -199,7 +199,7 @@ const { useState, useMemo, useRef, useEffect, useCallback } = React;
 
 // ─── Constants ───────────────────────────────────────────────────────────────
 
-const APP_VERSION = "0.0.159"; // bumped on every deploy — keep in sync with version.json AND with the ?v= on polish.css above
+const APP_VERSION = "0.0.160"; // bumped on every deploy — keep in sync with version.json AND with the ?v= on polish.css above
 
 // ─── Backend + Supabase config ───────────────────────────────────────────────
 const SUPABASE_URL = "https://oyrlzqbjcsliesvunbwj.supabase.co";
@@ -2260,13 +2260,27 @@ function attachmentKind(ct) {
   return 'other';
 }
 
-// Fetch an attachment as a blob via apiFetch's auth plumbing. The message
-// download path uses the same URL so the server only sees it as one call.
+// Fetch an attachment as a blob. apiFetch wraps JSON endpoints; attachments
+// need the raw blob, so we duplicate apiFetch's 401-refresh-retry + 503-retry
+// logic here. Without it a Realtime-triggered token refresh racing with an
+// attachment thumb fetch would silently 401 (the modal/thumb just shows the
+// generic "Can't load" state) and the user thinks "attachments are broken".
 async function fetchAttachmentBlob(messageId, index) {
-  const { data: { session } } = await sb.auth.getSession();
-  const res = await fetch(`${BACKEND_URL}/messages/${messageId}/attachments/${index}`, {
-    headers: session?.access_token ? { Authorization: `Bearer ${session.access_token}` } : {},
-  });
+  async function doFetch() {
+    const { data: { session } } = await sb.auth.getSession();
+    return fetch(`${BACKEND_URL}/messages/${messageId}/attachments/${index}`, {
+      headers: session?.access_token ? { Authorization: `Bearer ${session.access_token}` } : {},
+    });
+  }
+  let res = await doFetch();
+  if (res.status === 401) {
+    await sb.auth.refreshSession().catch(() => {});
+    res = await doFetch();
+  }
+  if (res.status === 503) {
+    await new Promise(r => setTimeout(r, 1200));
+    res = await doFetch();
+  }
   if (!res.ok) throw new Error(`${res.status} ${res.statusText}`);
   return res.blob();
 }
@@ -2401,12 +2415,10 @@ function AttachmentPreviewModal({messageId, attachment, attachments, onClose, on
     (async () => {
       try {
         if (kind === 'text') {
-          const { data: { session } } = await sb.auth.getSession();
-          const res = await fetch(`${BACKEND_URL}/messages/${messageId}/attachments/${attachment.index}`, {
-            headers: session?.access_token ? { Authorization: `Bearer ${session.access_token}` } : {},
-          });
-          if (!res.ok) throw new Error(`${res.status} ${res.statusText}`);
-          const t = await res.text();
+          // Go through fetchAttachmentBlob for the 401/503-retry plumbing,
+          // then read the blob as text.
+          const blob = await fetchAttachmentBlob(messageId, attachment.index);
+          const t = await blob.text();
           if (!cancelled) setText(t);
         } else if (kind !== 'other') {
           const blob = await fetchAttachmentBlob(messageId, attachment.index);
@@ -2709,12 +2721,10 @@ function MessageDetail({message,contact,isDeleted,msgTags,allTags,onReply,onRepl
   },[message?.id]);
   async function downloadAttachment(att) {
     try {
-      const { data: { session } } = await sb.auth.getSession();
-      const res = await fetch(`${BACKEND_URL}/messages/${message.id}/attachments/${att.index}`, {
-        headers: session?.access_token ? { Authorization: `Bearer ${session.access_token}` } : {},
-      });
-      if (!res.ok) throw new Error(`${res.status} ${res.statusText}`);
-      const blob = await res.blob();
+      // Reuse the blob fetcher so the same 401/503 retry plumbing applies
+      // — a stale token race during Realtime refresh would otherwise
+      // silently 401 and the user just sees "Download failed".
+      const blob = await fetchAttachmentBlob(message.id, att.index);
       const url = URL.createObjectURL(blob);
       const a = document.createElement('a');
       a.href = url; a.download = att.filename; a.rel = 'noopener';
