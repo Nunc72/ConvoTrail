@@ -184,7 +184,7 @@
        polish change is picked up by every browser as soon as the version
        is bumped — no manual cache-busters needed. Keep ?v= here in sync
        with APP_VERSION below at every deploy. -->
-  <link rel="stylesheet" href="polish.css?v=0.0.154"/>
+  <link rel="stylesheet" href="polish.css?v=0.0.155"/>
 </head>
 <body>
 <div id="root">
@@ -199,7 +199,7 @@ const { useState, useMemo, useRef, useEffect, useCallback } = React;
 
 // ─── Constants ───────────────────────────────────────────────────────────────
 
-const APP_VERSION = "0.0.154"; // bumped on every deploy — keep in sync with version.json AND with the ?v= on polish.css above
+const APP_VERSION = "0.0.155"; // bumped on every deploy — keep in sync with version.json AND with the ?v= on polish.css above
 
 // ─── Backend + Supabase config ───────────────────────────────────────────────
 const SUPABASE_URL = "https://oyrlzqbjcsliesvunbwj.supabase.co";
@@ -4387,8 +4387,18 @@ function LoginScreen() {
   const inputCls = "w-full border border-gray-200 rounded-xl px-4 py-2.5 text-sm outline-none focus:border-indigo-400 focus:ring-2 focus:ring-indigo-100 transition";
   const inputSmCls = "w-full border border-gray-200 rounded-lg px-2.5 py-1.5 text-sm outline-none focus:border-indigo-400";
 
+  // h-full + overflow-y-auto on the wrapper below: the parent (#root)
+  // has overflow:hidden to lock the main app frame, so without an
+  // explicit scroll container here the login form was stuck at its
+  // rendered position. On mobile with the on-screen keyboard up the
+  // visible area shrinks below the form's height and the Sign-in button
+  // slid off the bottom edge with no way to reach it. h-full bounds the
+  // wrapper to the visible area (= viewport minus iOS safe-areas) and
+  // overflow-y-auto turns it into a scroll context; flex justify-center
+  // still centers the form when it fits and content overflows downward
+  // when it doesn't.
   return (
-    <div className="min-h-screen bg-gradient-to-br from-indigo-50 to-slate-100 flex flex-col items-center justify-center px-4 py-6">
+    <div className="h-full overflow-y-auto bg-gradient-to-br from-indigo-50 to-slate-100 flex flex-col items-center justify-center px-4 py-6">
 
       {/* Logo */}
       <div className="mb-8 flex items-center gap-2.5 select-none">
@@ -7141,7 +7151,11 @@ function RecoveryScreen({onDone}) {
     onDone();
   }
   return (
-    <div className="min-h-screen bg-gradient-to-br from-indigo-50 to-slate-100 flex flex-col items-center justify-center px-4 py-6">
+    // Same scrollable-wrapper treatment as LoginScreen — the recovery
+    // flow shows the same kind of form on the same constrained mobile
+    // viewport, so the submit button is just as easy to lose under the
+    // on-screen keyboard without overflow-y-auto on the wrapper.
+    <div className="h-full overflow-y-auto bg-gradient-to-br from-indigo-50 to-slate-100 flex flex-col items-center justify-center px-4 py-6">
       <div className={cardCls}>
         <div className="w-14 h-14 rounded-full bg-green-100 flex items-center justify-center text-2xl mx-auto mb-5">✓</div>
         <h1 className="text-xl font-bold text-gray-900 mb-1 text-center">Set a new password</h1>
