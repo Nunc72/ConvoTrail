@@ -184,7 +184,7 @@
        polish change is picked up by every browser as soon as the version
        is bumped — no manual cache-busters needed. Keep ?v= here in sync
        with APP_VERSION below at every deploy. -->
-  <link rel="stylesheet" href="polish.css?v=0.0.161"/>
+  <link rel="stylesheet" href="polish.css?v=0.0.162"/>
 </head>
 <body>
 <div id="root">
@@ -199,7 +199,7 @@ const { useState, useMemo, useRef, useEffect, useCallback } = React;
 
 // ─── Constants ───────────────────────────────────────────────────────────────
 
-const APP_VERSION = "0.0.161"; // bumped on every deploy — keep in sync with version.json AND with the ?v= on polish.css above
+const APP_VERSION = "0.0.162"; // bumped on every deploy — keep in sync with version.json AND with the ?v= on polish.css above
 
 // ─── Backend + Supabase config ───────────────────────────────────────────────
 const SUPABASE_URL = "https://oyrlzqbjcsliesvunbwj.supabase.co";
@@ -229,6 +229,19 @@ function colorFromSeed(seed) {
   return AVATAR_PALETTE[h % AVATAR_PALETTE.length];
 }
 
+// Single-flight refresh: Supabase rotates the refresh-token on every
+// refreshSession() call (one-shot use). If two parallel API calls both
+// 401 at the same time, each firing its own refreshSession() races the
+// other — the second one tries to use the now-spent refresh token and
+// gets "Invalid Refresh Token: Refresh Token Not Found", corrupting
+// the session state. Dedupe by sharing one in-flight promise.
+let __refreshInFlight = null;
+function refreshSessionDedup() {
+  if (__refreshInFlight) return __refreshInFlight;
+  __refreshInFlight = sb.auth.refreshSession()
+    .finally(() => { __refreshInFlight = null; });
+  return __refreshInFlight;
+}
 async function apiFetch(path, opts = {}) {
   // Build the Authorization header lazily so the 401-refresh path below
   // can pick up the fresh access_token after refreshSession() runs.
@@ -244,9 +257,11 @@ async function apiFetch(path, opts = {}) {
   // auto-refreshes in the background on a timer, but the timer can lag
   // when the tab was inactive or the device just woke up — getSession
   // then returns a stale token. One forced refresh + retry hides that
-  // glitch from the user.
+  // glitch from the user. The dedup helper makes parallel 401s share
+  // a single refresh attempt so the rotated refresh-token isn't burned
+  // twice.
   if (res.status === 401) {
-    await sb.auth.refreshSession().catch(() => {});
+    await refreshSessionDedup().catch(() => {});
     res = await fetch(BACKEND_URL + path, { ...opts, headers: await buildHeaders() });
     // Still 401 after a forced refresh — the refresh token is itself
     // expired, revoked, or for a deleted user. There is nothing the
@@ -2274,7 +2289,7 @@ async function fetchAttachmentBlob(messageId, index) {
   }
   let res = await doFetch();
   if (res.status === 401) {
-    await sb.auth.refreshSession().catch(() => {});
+    await refreshSessionDedup().catch(() => {});
     res = await doFetch();
   }
   if (res.status === 503) {
