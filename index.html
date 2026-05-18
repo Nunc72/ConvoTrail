@@ -184,7 +184,7 @@
        polish change is picked up by every browser as soon as the version
        is bumped — no manual cache-busters needed. Keep ?v= here in sync
        with APP_VERSION below at every deploy. -->
-  <link rel="stylesheet" href="polish.css?v=0.0.167"/>
+  <link rel="stylesheet" href="polish.css?v=0.0.168"/>
 </head>
 <body>
 <div id="root">
@@ -199,7 +199,7 @@ const { useState, useMemo, useRef, useEffect, useCallback } = React;
 
 // ─── Constants ───────────────────────────────────────────────────────────────
 
-const APP_VERSION = "0.0.167"; // bumped on every deploy — keep in sync with version.json AND with the ?v= on polish.css above
+const APP_VERSION = "0.0.168"; // bumped on every deploy — keep in sync with version.json AND with the ?v= on polish.css above
 
 // ─── Backend + Supabase config ───────────────────────────────────────────────
 const SUPABASE_URL = "https://oyrlzqbjcsliesvunbwj.supabase.co";
@@ -4021,7 +4021,7 @@ function LeftColumn({contactMeta, archivedContacts, selectedId, mergeId, onSelec
               also collapse the contacts panel. */}
           {!collapsed.contacts && (
             <button onClick={e=>{e.stopPropagation(); setArchiveContactsVisible(v=>!v);}}
-              className={`text-xs py-0.5 px-2 rounded transition-colors ${archiveContactsVisible?'bg-indigo-50 text-indigo-700 font-semibold':'text-gray-400 hover:text-gray-600'}`}>
+              className={`text-xs py-0.5 px-2 rounded transition-colors font-normal normal-case tracking-normal ${archiveContactsVisible?'bg-gray-100 text-gray-600':'text-gray-400 hover:text-gray-600'}`}>
               Archive
             </button>
           )}
@@ -4089,7 +4089,7 @@ function LeftColumn({contactMeta, archivedContacts, selectedId, mergeId, onSelec
           <span className="text-xs font-semibold text-gray-400 uppercase tracking-wider">Tags</span>
           <div className="flex items-center gap-2">
             {tagsExpanded&&<button onClick={e=>{e.stopPropagation();setArchiveTagsVisible(v=>!v);}}
-              className={`text-xs py-0.5 px-2 rounded transition-colors ${archiveTagsVisible?'bg-indigo-50 text-indigo-700 font-semibold':'text-gray-400 hover:text-gray-600'}`}>
+              className={`text-xs py-0.5 px-2 rounded transition-colors font-normal normal-case tracking-normal ${archiveTagsVisible?'bg-gray-100 text-gray-600':'text-gray-400 hover:text-gray-600'}`}>
               Archive
             </button>}
           </div>
@@ -4161,7 +4161,7 @@ function LeftColumn({contactMeta, archivedContacts, selectedId, mergeId, onSelec
                 hides it along with the rest of the tabs. */}
             {!collapsed.contacts && (
               <button onClick={()=>setArchiveContactsVisible(v=>!v)}
-                className={`text-xs py-0.5 px-2 rounded transition-colors ${archiveContactsVisible?'bg-indigo-50 text-indigo-700 font-semibold':'text-gray-400 hover:text-gray-600'}`}>
+                className={`text-xs py-0.5 px-2 rounded transition-colors font-normal normal-case tracking-normal ${archiveContactsVisible?'bg-gray-100 text-gray-600':'text-gray-400 hover:text-gray-600'}`}>
                 Archive
               </button>
             )}
@@ -4221,7 +4221,7 @@ function LeftColumn({contactMeta, archivedContacts, selectedId, mergeId, onSelec
             <div className="flex items-center gap-2">
               {!collapsed.tags && (
                 <button onClick={()=>setArchiveTagsVisible(v=>!v)}
-                  className={`text-xs py-0.5 px-2 rounded transition-colors ${archiveTagsVisible?'bg-indigo-50 text-indigo-700 font-semibold':'text-gray-400 hover:text-gray-600'}`}>
+                  className={`text-xs py-0.5 px-2 rounded transition-colors font-normal normal-case tracking-normal ${archiveTagsVisible?'bg-gray-100 text-gray-600':'text-gray-400 hover:text-gray-600'}`}>
                   Archive
                 </button>
               )}
