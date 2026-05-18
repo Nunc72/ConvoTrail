@@ -184,7 +184,7 @@
        polish change is picked up by every browser as soon as the version
        is bumped — no manual cache-busters needed. Keep ?v= here in sync
        with APP_VERSION below at every deploy. -->
-  <link rel="stylesheet" href="polish.css?v=0.0.170"/>
+  <link rel="stylesheet" href="polish.css?v=0.0.171"/>
 </head>
 <body>
 <div id="root">
@@ -199,7 +199,7 @@ const { useState, useMemo, useRef, useEffect, useCallback } = React;
 
 // ─── Constants ───────────────────────────────────────────────────────────────
 
-const APP_VERSION = "0.0.170"; // bumped on every deploy — keep in sync with version.json AND with the ?v= on polish.css above
+const APP_VERSION = "0.0.171"; // bumped on every deploy — keep in sync with version.json AND with the ?v= on polish.css above
 
 // ─── Backend + Supabase config ───────────────────────────────────────────────
 const SUPABASE_URL = "https://oyrlzqbjcsliesvunbwj.supabase.co";
@@ -6027,9 +6027,6 @@ function App({userId, onSignOut}) {
   // is supported on iOS 16.4+ Safari (after Add-to-Home-Screen), recent
   // Chrome / Edge (desktop + Android PWAs) and Safari macOS PWAs. On any
   // browser that doesn't expose setAppBadge the calls are silently no-op.
-  // Notification permission is NOT required for setAppBadge on iOS — it
-  // shares the badge channel with notifications but the API is its own
-  // permission grant when called from a PWA context.
   useEffect(() => {
     if (typeof navigator === 'undefined') return;
     const setBadge = navigator.setAppBadge?.bind(navigator);
@@ -6041,6 +6038,33 @@ function App({userId, onSignOut}) {
       clearBadge?.().catch(() => {});
     }
   }, [actionableCounts.inSel]);
+
+  // iOS PWAs only surface in Settings → Notifications AFTER the app has
+  // successfully called Notification.requestPermission() at least once
+  // from a user gesture. Without that call the app icon badge never
+  // shows. We expose a single "Enable home-screen badge" entry in the
+  // user menu (only inside a standalone PWA + only when permission is
+  // still in its default state) to trigger that one-shot prompt.
+  const isStandalonePWA = typeof window !== 'undefined' && (
+    (window.matchMedia && window.matchMedia('(display-mode: standalone)').matches) ||
+    window.navigator?.standalone === true
+  );
+  const [badgePermission, setBadgePermission] = useState(() =>
+    typeof Notification === 'undefined' ? 'unsupported' : Notification.permission,
+  );
+  async function requestBadgePermission() {
+    if (typeof Notification === 'undefined') return;
+    try {
+      const result = await Notification.requestPermission();
+      setBadgePermission(result);
+      // Re-fire the badge call now that permission may have flipped to
+      // granted — the useEffect above already covered the count, but a
+      // fresh setAppBadge nudge makes the icon update immediately.
+      if (result === 'granted' && typeof navigator !== 'undefined' && navigator.setAppBadge) {
+        navigator.setAppBadge(actionableCounts.inSel).catch(() => {});
+      }
+    } catch (_) { /* ignore */ }
+  }
 
   // ── Helpers ──
   function captureAlert(id) {
@@ -7063,6 +7087,20 @@ function App({userId, onSignOut}) {
                     className="w-full flex items-center gap-2.5 px-3 py-2 text-sm text-gray-700 hover:bg-gray-50">
                     <GearIcon size={14}/><span>Settings</span>
                   </button>
+                  {/* Home-screen badge: only show inside a standalone PWA;
+                      ask for the one-time iOS notification permission and
+                      thereafter let the user see the result. */}
+                  {isStandalonePWA && badgePermission === 'default' && (
+                    <button onClick={()=>{setShowUserMenu(false); requestBadgePermission();}}
+                      className="w-full flex items-center gap-2.5 px-3 py-2 text-sm text-gray-700 hover:bg-gray-50">
+                      <span className="text-base leading-none">●</span><span>Enable home-screen badge</span>
+                    </button>
+                  )}
+                  {isStandalonePWA && badgePermission === 'denied' && (
+                    <div className="px-3 py-2 text-xs text-gray-400">
+                      Badge disabled — re-enable under Settings → Notifications → Convooz on your device.
+                    </div>
+                  )}
                   <div className="border-t border-gray-100"/>
                   <button onClick={()=>{setShowUserMenu(false);onSignOut?.();}}
                     className="w-full flex items-center gap-2.5 px-3 py-2 text-sm text-gray-700 hover:bg-gray-50">
@@ -7159,6 +7197,18 @@ function App({userId, onSignOut}) {
                     <GearIcon size={14}/>
                     <span>Settings</span>
                   </button>
+                  {isStandalonePWA && badgePermission === 'default' && (
+                    <button onClick={()=>{setShowUserMenu(false); requestBadgePermission();}}
+                      className="w-full flex items-center gap-2.5 px-3 py-2 text-sm text-gray-700 hover:bg-gray-50">
+                      <span className="text-base leading-none">●</span>
+                      <span>Enable home-screen badge</span>
+                    </button>
+                  )}
+                  {isStandalonePWA && badgePermission === 'denied' && (
+                    <div className="px-3 py-2 text-xs text-gray-400">
+                      Badge disabled — re-enable under Settings → Notifications → Convooz on your device.
+                    </div>
+                  )}
                   <div className="border-t border-gray-100"/>
                   <button onClick={()=>{setShowUserMenu(false);onSignOut?.();}}
                     className="w-full flex items-center gap-2.5 px-3 py-2 text-sm text-gray-700 hover:bg-gray-50">
