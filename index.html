@@ -184,7 +184,7 @@
        polish change is picked up by every browser as soon as the version
        is bumped — no manual cache-busters needed. Keep ?v= here in sync
        with APP_VERSION below at every deploy. -->
-  <link rel="stylesheet" href="polish.css?v=0.0.171"/>
+  <link rel="stylesheet" href="polish.css?v=0.0.172"/>
 </head>
 <body>
 <div id="root">
@@ -199,7 +199,7 @@ const { useState, useMemo, useRef, useEffect, useCallback } = React;
 
 // ─── Constants ───────────────────────────────────────────────────────────────
 
-const APP_VERSION = "0.0.171"; // bumped on every deploy — keep in sync with version.json AND with the ?v= on polish.css above
+const APP_VERSION = "0.0.172"; // bumped on every deploy — keep in sync with version.json AND with the ?v= on polish.css above
 
 // ─── Backend + Supabase config ───────────────────────────────────────────────
 const SUPABASE_URL = "https://oyrlzqbjcsliesvunbwj.supabase.co";
@@ -6419,16 +6419,33 @@ function App({userId, onSignOut}) {
   }
   async function handleGetMail() {
     if (mailAccounts.length === 0) return;
-    const results = await Promise.all(mailAccounts.map(a => handleSyncAccount(a.id)));
-    const fired = results.filter(r => r !== null);
-    if (fired.length === 0) return; // already in flight
-    const errors = fired.filter(r => r && !r.ok);
-    // Only toast on errors — success is already communicated by the
-    // "Syncing…" indicator disappearing and new mail appearing in the list.
-    if (errors.length > 0) {
-      setActionToast(`Sync had errors: ${errors.map(e=>e.error).slice(0,2).join('; ')}`);
+    // Sync pulls at most PER_FOLDER_CAP (100 today) missing mails per
+    // folder per call. With a backlog this used to leave "1065 of 1114"
+    // visible until the next manual click. Loop until every folder
+    // reports skipped:0 — i.e. nothing left to catch up — or we hit a
+    // safety ceiling so a broken account can't spin forever. Each
+    // iteration refreshes the bootstrap so the user-menu progress line
+    // updates in real time.
+    const MAX_ITERATIONS = 25;        // ~25 * 100 = 2500 mails per account
+    for (let i = 0; i < MAX_ITERATIONS; i++) {
+      const results = await Promise.all(mailAccounts.map(a => handleSyncAccount(a.id)));
+      const fired = results.filter(r => r !== null);
+      if (fired.length === 0) return; // every account already in flight elsewhere
+      const errors = fired.filter(r => r && !r.ok);
+      if (errors.length > 0) {
+        setActionToast(`Sync had errors: ${errors.map(e=>e.error).slice(0,2).join('; ')}`);
+        break;
+      }
+      refreshData(); // updates messages_count / sync_known_uids in the menu
+      // Each /sync response returns folder stats with `skipped` = UIDs
+      // we didn't fetch because we hit PER_FOLDER_CAP. Any non-zero
+      // skipped means more missing mails for next round.
+      const moreToGo = fired.some(r => (r.folders || []).some(f => (f.skipped || 0) > 0));
+      if (!moreToGo) {
+        if (i > 0) setActionToast(`Sync complete: all mails in sync`);
+        break;
+      }
     }
-    refreshData();
   }
   async function handleAutoSync() {
     const autos = mailAccounts.filter(a => a.auto_sync);
