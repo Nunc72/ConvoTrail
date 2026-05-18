@@ -184,7 +184,7 @@
        polish change is picked up by every browser as soon as the version
        is bumped — no manual cache-busters needed. Keep ?v= here in sync
        with APP_VERSION below at every deploy. -->
-  <link rel="stylesheet" href="polish.css?v=0.0.168"/>
+  <link rel="stylesheet" href="polish.css?v=0.0.169"/>
 </head>
 <body>
 <div id="root">
@@ -199,7 +199,7 @@ const { useState, useMemo, useRef, useEffect, useCallback } = React;
 
 // ─── Constants ───────────────────────────────────────────────────────────────
 
-const APP_VERSION = "0.0.168"; // bumped on every deploy — keep in sync with version.json AND with the ?v= on polish.css above
+const APP_VERSION = "0.0.169"; // bumped on every deploy — keep in sync with version.json AND with the ?v= on polish.css above
 
 // ─── Backend + Supabase config ───────────────────────────────────────────────
 const SUPABASE_URL = "https://oyrlzqbjcsliesvunbwj.supabase.co";
@@ -3799,22 +3799,22 @@ function LeftColumn({contactMeta, archivedContacts, selectedId, mergeId, onSelec
     const a = mailAccounts.find(a => (a.email||'').toLowerCase() === email);
     return a ? (a.display_name || a.email) : email;
   };
-  const baseAccountLabel = mailAccounts.length === 0
-    ? 'No accounts'
-    : selAccounts.length === mailAccounts.length ? 'All accounts'
-    : selAccounts.length === 1 ? labelForEmail(selAccounts[0])
-    : selAccounts.length === 0 ? '(none)'
-    : `${selAccounts.length} accounts`;
-  // Actionable badge after the account name. When all accounts are
-  // selected it's just "(32)" — a single-number summary. With a subset
-  // selected the user wants both the in-scope count and the grand total
-  // so the trade-off is visible: "(14/32)". Hide it altogether when the
-  // user has no accounts yet.
+  // Label format requested by the user:
+  //   • all selected         → "All accounts"             (no count)
+  //   • subset selected      → "3 accounts (17/44 mails)" (in-scope/total)
+  //   • 1 selected           → "1 account (4/44 mails)"   (singular noun)
+  //   • zero selected        → "(none)"
+  // When mailAccounts.length <= 1 the selector itself is hidden, so the
+  // "No accounts" / single-account branches are no longer reached.
   const allSelected = mailAccounts.length > 0 && selAccounts.length === mailAccounts.length;
-  const actionableSuffix = mailAccounts.length === 0
-    ? ''
-    : allSelected ? ` (${actionableCounts.total})`
-    : ` (${actionableCounts.inSel}/${actionableCounts.total})`;
+  const baseAccountLabel = allSelected
+    ? 'All accounts'
+    : selAccounts.length === 0 ? '(none)'
+    : selAccounts.length === 1 ? '1 account'
+    : `${selAccounts.length} accounts`;
+  const actionableSuffix = (!allSelected && selAccounts.length > 0)
+    ? ` (${actionableCounts.inSel}/${actionableCounts.total} mails)`
+    : '';
   const accountLabel = baseAccountLabel + actionableSuffix;
 
   function CollapseIcon({open}) {
@@ -3976,7 +3976,10 @@ function LeftColumn({contactMeta, archivedContacts, selectedId, mergeId, onSelec
     // Tags is a real flex sibling so it can never disappear behind the
     // contacts list or be clipped by a stacking context created on the
     // contacts scroller.
-    const accountHeader = (
+    // Account selector is only meaningful when there's more than one
+    // IMAP account; with zero or one account there's nothing to pick
+    // and the row would just consume space.
+    const accountHeader = mailAccounts.length > 1 ? (
       <div className="border-b border-gray-100 bg-white relative flex-shrink-0" ref={accDropRef}>
         <button onClick={()=>setAccDropOpen(o=>!o)}
           className="w-full px-3 pt-2 pb-1 text-xs font-semibold text-gray-400 flex items-center justify-between hover:text-gray-600 transition-colors">
@@ -4006,7 +4009,7 @@ function LeftColumn({contactMeta, archivedContacts, selectedId, mergeId, onSelec
           </div>
         )}
       </div>
-    );
+    ) : null;
 
     const contactsHeader = (
       <div className="border-b border-gray-100 bg-white flex-shrink-0">
@@ -4118,36 +4121,38 @@ function LeftColumn({contactMeta, archivedContacts, selectedId, mergeId, onSelec
   return (
     <div className="flex flex-col h-full bg-gray-50">
 
-      {/* Account selector */}
-      <div className="border-b border-gray-100 flex-shrink-0 bg-white relative" ref={accDropRef}>
-        <button onClick={()=>setAccDropOpen(o=>!o)}
-          className="w-full px-3 pt-2 pb-1 text-xs font-semibold text-gray-400 flex items-center justify-between hover:text-gray-600 transition-colors">
-          <span className="truncate flex-1 text-left">{accountLabel}</span>
-          <svg width="10" height="10" viewBox="0 0 10 10" fill="none" className="flex-shrink-0 mr-1">
-            <path d="M2 3.5L5 6.5L8 3.5" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
-          </svg>
-        </button>
-        {accDropOpen&&(
-          <div className="absolute left-0 right-0 top-full z-50 bg-white border border-gray-200 rounded-b-lg shadow-lg overflow-hidden">
-            {mailAccounts.length===0 && <div className="px-3 py-2 text-xs text-gray-400">No mail accounts connected.</div>}
-            {mailAccounts.map(a=>{
-              const email=(a.email||'').toLowerCase();
-              const checked=selAccounts.includes(email);
-              return (
-                <div key={a.id} className="flex items-center gap-2 px-3 py-2 hover:bg-gray-50">
-                  <input type="checkbox" checked={checked}
-                    onChange={e=>{e.stopPropagation();onToggleAccount(email);}}
-                    className="accent-indigo-600 flex-shrink-0 cursor-pointer"/>
-                  <span className="text-xs text-gray-700 truncate flex-1 cursor-pointer"
-                    onClick={()=>{onToggleAccount('__exclusive__'+email);setAccDropOpen(false);}}>
-                    {a.display_name ? <><span>{a.display_name}</span> <span className="text-gray-400">· {a.imap_user || a.email}</span></> : (a.imap_user || a.email)}
-                  </span>
-                </div>
-              );
-            })}
-          </div>
-        )}
-      </div>
+      {/* Account selector — only when there's more than one IMAP account.
+          With zero or one account the row would be useless real-estate. */}
+      {mailAccounts.length > 1 && (
+        <div className="border-b border-gray-100 flex-shrink-0 bg-white relative" ref={accDropRef}>
+          <button onClick={()=>setAccDropOpen(o=>!o)}
+            className="w-full px-3 pt-2 pb-1 text-xs font-semibold text-gray-400 flex items-center justify-between hover:text-gray-600 transition-colors">
+            <span className="truncate flex-1 text-left">{accountLabel}</span>
+            <svg width="10" height="10" viewBox="0 0 10 10" fill="none" className="flex-shrink-0 mr-1">
+              <path d="M2 3.5L5 6.5L8 3.5" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
+            </svg>
+          </button>
+          {accDropOpen&&(
+            <div className="absolute left-0 right-0 top-full z-50 bg-white border border-gray-200 rounded-b-lg shadow-lg overflow-hidden">
+              {mailAccounts.map(a=>{
+                const email=(a.email||'').toLowerCase();
+                const checked=selAccounts.includes(email);
+                return (
+                  <div key={a.id} className="flex items-center gap-2 px-3 py-2 hover:bg-gray-50">
+                    <input type="checkbox" checked={checked}
+                      onChange={e=>{e.stopPropagation();onToggleAccount(email);}}
+                      className="accent-indigo-600 flex-shrink-0 cursor-pointer"/>
+                    <span className="text-xs text-gray-700 truncate flex-1 cursor-pointer"
+                      onClick={()=>{onToggleAccount('__exclusive__'+email);setAccDropOpen(false);}}>
+                      {a.display_name ? <><span>{a.display_name}</span> <span className="text-gray-400">· {a.imap_user || a.email}</span></> : (a.imap_user || a.email)}
+                    </span>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </div>
+      )}
 
       {/* CONTACTS header */}
       <div className="border-b border-gray-100 flex-shrink-0 bg-white">
