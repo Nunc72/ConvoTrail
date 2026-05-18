@@ -184,7 +184,7 @@
        polish change is picked up by every browser as soon as the version
        is bumped — no manual cache-busters needed. Keep ?v= here in sync
        with APP_VERSION below at every deploy. -->
-  <link rel="stylesheet" href="polish.css?v=0.0.169"/>
+  <link rel="stylesheet" href="polish.css?v=0.0.170"/>
 </head>
 <body>
 <div id="root">
@@ -199,7 +199,7 @@ const { useState, useMemo, useRef, useEffect, useCallback } = React;
 
 // ─── Constants ───────────────────────────────────────────────────────────────
 
-const APP_VERSION = "0.0.169"; // bumped on every deploy — keep in sync with version.json AND with the ?v= on polish.css above
+const APP_VERSION = "0.0.170"; // bumped on every deploy — keep in sync with version.json AND with the ?v= on polish.css above
 
 // ─── Backend + Supabase config ───────────────────────────────────────────────
 const SUPABASE_URL = "https://oyrlzqbjcsliesvunbwj.supabase.co";
@@ -3799,21 +3799,23 @@ function LeftColumn({contactMeta, archivedContacts, selectedId, mergeId, onSelec
     const a = mailAccounts.find(a => (a.email||'').toLowerCase() === email);
     return a ? (a.display_name || a.email) : email;
   };
-  // Label format requested by the user:
-  //   • all selected         → "All accounts"             (no count)
-  //   • subset selected      → "3 accounts (17/44 mails)" (in-scope/total)
-  //   • 1 selected           → "1 account (4/44 mails)"   (singular noun)
+  // Label format:
+  //   • all selected         → "All accounts"           (no count)
+  //   • 1 selected           → "alice@example.com (4/44 now)"
+  //   • subset selected (2+) → "3 accounts (17/44 now)" (in-scope/total)
   //   • zero selected        → "(none)"
+  // X/Y "now" reads more naturally than "mails" — it's the same number
+  // as the Now-tab actionable count (unread incoming + armed r2m).
   // When mailAccounts.length <= 1 the selector itself is hidden, so the
-  // "No accounts" / single-account branches are no longer reached.
+  // "No accounts" branch is no longer reached.
   const allSelected = mailAccounts.length > 0 && selAccounts.length === mailAccounts.length;
   const baseAccountLabel = allSelected
     ? 'All accounts'
     : selAccounts.length === 0 ? '(none)'
-    : selAccounts.length === 1 ? '1 account'
+    : selAccounts.length === 1 ? labelForEmail(selAccounts[0])
     : `${selAccounts.length} accounts`;
   const actionableSuffix = (!allSelected && selAccounts.length > 0)
-    ? ` (${actionableCounts.inSel}/${actionableCounts.total} mails)`
+    ? ` (${actionableCounts.inSel}/${actionableCounts.total} now)`
     : '';
   const accountLabel = baseAccountLabel + actionableSuffix;
 
@@ -6018,6 +6020,27 @@ function App({userId, onSignOut}) {
     }
     return { total, inSel };
   }, [messageList, deletedIds, selAccounts]);
+
+  // App-icon badge on the home-screen / dock when installed as a PWA.
+  // Mirrors the "now" count of the active account selection — same number
+  // the user sees in the selector's "(X/Y now)" suffix. The Badging API
+  // is supported on iOS 16.4+ Safari (after Add-to-Home-Screen), recent
+  // Chrome / Edge (desktop + Android PWAs) and Safari macOS PWAs. On any
+  // browser that doesn't expose setAppBadge the calls are silently no-op.
+  // Notification permission is NOT required for setAppBadge on iOS — it
+  // shares the badge channel with notifications but the API is its own
+  // permission grant when called from a PWA context.
+  useEffect(() => {
+    if (typeof navigator === 'undefined') return;
+    const setBadge = navigator.setAppBadge?.bind(navigator);
+    const clearBadge = navigator.clearAppBadge?.bind(navigator);
+    if (!setBadge) return;
+    if (actionableCounts.inSel > 0) {
+      setBadge(actionableCounts.inSel).catch(() => {/* permission denied / unsupported / private mode — ignore */});
+    } else {
+      clearBadge?.().catch(() => {});
+    }
+  }, [actionableCounts.inSel]);
 
   // ── Helpers ──
   function captureAlert(id) {
