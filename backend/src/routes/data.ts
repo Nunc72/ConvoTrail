@@ -66,19 +66,20 @@ export async function registerDataRoutes(app: FastifyInstance) {
     if (draftAttsRes.error) return sendTransientOr500(reply, draftAttsRes.error);
 
     // Per-account synced count for the user-menu progress display, via
-    // direct pg GROUP BY. This used to ride on a supabase-js call with
-    // count:"exact" which fetched every mail_account_id row in the
-    // user's table — slow at scale and the first query to start hitting
-    // statement_timeout once the messages table grows past a few thousand
-    // rows. A single aggregated query is O(matching rows) on the server
-    // side and the wire payload is one row per account.
+    // direct pg GROUP BY. This is matched against sync_known_uids (the
+    // server-side IMAP UID search count) to render "X of Y mails".
+    // INCLUDES soft-deleted rows on purpose: the user-perceived question
+    // "are all UIDs in scope present in our DB?" is yes whether or not
+    // a particular mail later got soft-deleted. Excluding deleted_at
+    // rows used to leave a permanent gap equal to the soft-delete count
+    // (e.g. "1066 of 1115" never closing because 49 were deleted).
     let messageCountByAccount: Record<string, number> = {};
     try {
       const pool = requirePool();
       const cntRes = await pool.query<{ mail_account_id: string; cnt: string }>(
         `SELECT mail_account_id, COUNT(*)::text AS cnt
            FROM messages
-          WHERE user_id = $1 AND deleted_at IS NULL
+          WHERE user_id = $1
           GROUP BY mail_account_id`,
         [req.authUser!.id],
       );

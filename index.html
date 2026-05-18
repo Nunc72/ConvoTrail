@@ -184,7 +184,7 @@
        polish change is picked up by every browser as soon as the version
        is bumped — no manual cache-busters needed. Keep ?v= here in sync
        with APP_VERSION below at every deploy. -->
-  <link rel="stylesheet" href="polish.css?v=0.0.172"/>
+  <link rel="stylesheet" href="polish.css?v=0.0.173"/>
 </head>
 <body>
 <div id="root">
@@ -199,7 +199,7 @@ const { useState, useMemo, useRef, useEffect, useCallback } = React;
 
 // ─── Constants ───────────────────────────────────────────────────────────────
 
-const APP_VERSION = "0.0.172"; // bumped on every deploy — keep in sync with version.json AND with the ?v= on polish.css above
+const APP_VERSION = "0.0.173"; // bumped on every deploy — keep in sync with version.json AND with the ?v= on polish.css above
 
 // ─── Backend + Supabase config ───────────────────────────────────────────────
 const SUPABASE_URL = "https://oyrlzqbjcsliesvunbwj.supabase.co";
@@ -7499,9 +7499,17 @@ function Root() {
   }, []);
 
   if (session === undefined) {
-    return <div className="min-h-screen bg-gradient-to-br from-indigo-50 to-slate-100 flex items-center justify-center">
-      <div className="text-sm text-gray-400">Loading…</div>
-    </div>;
+    // Re-use the same inline bootloader markup that index.html showed
+    // before React mounted — same white background, same Convooz logo,
+    // same rotating circle. Without this React mounting replaced the
+    // bootloader with a gradient + 'Loading…' text panel, which read
+    // as a second, slower load step.
+    return (
+      <div className="bootloader">
+        <div className="bootloader-logo">Convooz</div>
+        <div className="bootloader-spinner"/>
+      </div>
+    );
   }
 
   // Recovery: user clicked reset-password link in email. Show set-new-password screen regardless of session.
