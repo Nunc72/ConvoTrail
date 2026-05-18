@@ -184,7 +184,7 @@
        polish change is picked up by every browser as soon as the version
        is bumped — no manual cache-busters needed. Keep ?v= here in sync
        with APP_VERSION below at every deploy. -->
-  <link rel="stylesheet" href="polish.css?v=0.0.165"/>
+  <link rel="stylesheet" href="polish.css?v=0.0.166"/>
 </head>
 <body>
 <div id="root">
@@ -199,7 +199,7 @@ const { useState, useMemo, useRef, useEffect, useCallback } = React;
 
 // ─── Constants ───────────────────────────────────────────────────────────────
 
-const APP_VERSION = "0.0.165"; // bumped on every deploy — keep in sync with version.json AND with the ?v= on polish.css above
+const APP_VERSION = "0.0.166"; // bumped on every deploy — keep in sync with version.json AND with the ?v= on polish.css above
 
 // ─── Backend + Supabase config ───────────────────────────────────────────────
 const SUPABASE_URL = "https://oyrlzqbjcsliesvunbwj.supabase.co";
@@ -3139,10 +3139,14 @@ function ThreadColumn({contact,allMsgs,deletedIds,selectedMsgId,msgTags,onSelect
       ((x.dir === 'in' && !x.read) || (x.dir === 'out' && x.revert2me))
   ), [allMsgs, deletedIds]);
   // Styled to match the Newsletter / Unsubscribe banner on a message
-  // (mx-4, gray-50 background, gray-200 border, neutral chip on the
-  // right) so the two "act on this pile" affordances feel consistent.
+  // (mx-4, soft card-tinted background, gray-200 border, neutral chip on
+  // the right) so the two "act on this pile" affordances feel consistent.
+  // The background is forced via inline style because polish.css rewrites
+  // .bg-gray-50 inside column 2 to pure white (so contact thread cards
+  // stay white-on-canvas) — the alert wants the column-3 banner tint.
   const actionableAlert = actionableInThread.length > 5 ? (
-    <div className="mx-4 mt-3 px-3 py-2 rounded bg-gray-50 border border-gray-200 flex items-center gap-2 text-xs text-gray-600 flex-shrink-0">
+    <div className="mx-4 mt-3 px-3 py-2 rounded border border-gray-200 flex items-center gap-2 text-xs text-gray-600 flex-shrink-0"
+      style={{backgroundColor: 'var(--bg-card-soft)'}}>
       <span><span className="font-semibold text-gray-800">{actionableInThread.length}</span> actionable mails</span>
       <div className="ml-auto flex gap-2">
         <button onClick={()=>onMarkManyRead?.(actionableInThread.map(m=>m.id))}
