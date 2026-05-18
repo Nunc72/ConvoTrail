@@ -326,6 +326,65 @@ export async function registerMessagesRoutes(app: FastifyInstance) {
     return reply.code(204).send();
   });
 
+  // ─── Soft-delete-as-spam: deleted_at + spam=true + mute the contact ──────
+  // Reporting a mail as spam should also stop future mail from the same
+  // contact from cluttering the main feed. We:
+  //   1. flag the message: deleted_at + spam=true (the FE renders a "Spam"
+  //      label in the deleted list to distinguish from a plain delete),
+  //   2. find the contact tied to the sender's email, and
+  //   3. set that contact's is_muted = true + mute_reason = 'spam' so the
+  //      Muted tab shows it (with a "Spam" chip in the row).
+  // The contact step is best-effort: if no contact owns this from_email
+  // we leave the mail flagged and move on. RLS is enforced via user_id
+  // checks at both layers.
+  app.patch<{ Params: { id: string } }>("/messages/:id/spam", auth, async (req, reply) => {
+    const pool = requirePool();
+    const userId = req.authUser!.id;
+    const r = await pool.query<{ user_id: string; from_email: string | null }>(
+      `SELECT user_id, from_email FROM messages WHERE id = $1`,
+      [req.params.id],
+    );
+    if (r.rows.length === 0) return reply.notFound();
+    if (r.rows[0].user_id !== userId) return reply.forbidden();
+    const fromEmail = (r.rows[0].from_email || '').toLowerCase();
+
+    const client = await pool.connect();
+    try {
+      await client.query("BEGIN");
+      await client.query(
+        `UPDATE messages
+            SET deleted_at = COALESCE(deleted_at, now()),
+                spam = TRUE
+          WHERE id = $1`,
+        [req.params.id],
+      );
+      // Mute the contact whose email this mail came from (only for
+      // incoming mail — outgoing-as-spam doesn't make sense, but the
+      // check is cheap).
+      if (fromEmail) {
+        await client.query(
+          `UPDATE contacts c
+              SET is_muted = TRUE,
+                  mute_reason = 'spam'
+            WHERE c.user_id = $1
+              AND EXISTS (
+                SELECT 1 FROM contact_emails ce
+                 WHERE ce.contact_id = c.id AND LOWER(ce.email) = $2
+              )`,
+          [userId, fromEmail],
+        );
+      }
+      await client.query("COMMIT");
+    } catch (e) {
+      await client.query("ROLLBACK");
+      const msg = e instanceof Error ? e.message : String(e);
+      return reply.internalServerError(msg);
+    } finally {
+      client.release();
+    }
+    return reply.code(204).send();
+  });
+
   // ─── Recover from Deleted (clear deleted_at) ─────────────────────────────
   app.patch<{ Params: { id: string } }>("/messages/:id/recover", auth, async (req, reply) => {
     const pool = requirePool();

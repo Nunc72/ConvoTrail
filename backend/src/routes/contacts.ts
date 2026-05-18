@@ -13,20 +13,32 @@ export async function registerContactsRoutes(app: FastifyInstance) {
   app.patch<{
     Params: { id: string };
     Body: {
-      is_news?: boolean; is_muted?: boolean; archived?: boolean;
+      is_news?: boolean; is_no_reply?: boolean; is_muted?: boolean;
+      mute_reason?: string | null;
+      archived?: boolean;
       name?: string; org?: string | null; color?: string | null;
       r2m_days?: number; primary_email?: string;
     };
   }>("/contacts/:id", auth, async (req, reply) => {
     const b = req.body || {};
     const patch: Record<string, unknown> = {};
-    if (typeof b.is_news  === "boolean")  {
+    if (typeof b.is_news    === "boolean")  {
       patch.is_news  = b.is_news;
       // The user explicitly touched News (either direction). From now on
       // the sync's auto-tag-newsletter logic must not flip it back.
       patch.is_news_user_set = true;
     }
-    if (typeof b.is_muted === "boolean")  patch.is_muted = b.is_muted;
+    if (typeof b.is_no_reply === "boolean") patch.is_no_reply = b.is_no_reply;
+    if (typeof b.is_muted    === "boolean") {
+      patch.is_muted = b.is_muted;
+      // Clear the reason on un-mute so the next mute (e.g. manual) doesn't
+      // inherit a stale "spam" tag.
+      if (b.is_muted === false) patch.mute_reason = null;
+    }
+    if (b.mute_reason !== undefined) {
+      patch.mute_reason = (typeof b.mute_reason === "string" && b.mute_reason.trim())
+        ? b.mute_reason.trim() : null;
+    }
     if (typeof b.archived === "boolean")  patch.archived_at = b.archived ? new Date().toISOString() : null;
     if (typeof b.name     === "string" && b.name.trim()) patch.name = b.name.trim();
     if (b.org   !== undefined)            patch.org   = (typeof b.org   === "string" && b.org.trim())   ? b.org.trim()   : null;

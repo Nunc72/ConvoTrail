@@ -28,12 +28,12 @@ export async function registerDataRoutes(app: FastifyInstance) {
       ).order("created_at", { ascending: true }),
       sb.from("contacts").select(
         "id, name, org, color, portrait_url, r2m_days, primary_email, archived_at, " +
-        "is_news, is_muted, " +
-        "contact_emails(email, is_news, is_muted)",
+        "is_news, is_no_reply, is_muted, mute_reason, " +
+        "contact_emails(email, is_news, is_no_reply, is_muted)",
       ).order("name", { ascending: true }),
       sb.from("messages").select(
         "id, mail_account_id, folder, uid, message_id, thread_id, from_email, from_name, to_emails, " +
-        "subject, snippet, date, flags, direction, deleted_at, has_attachments, " +
+        "subject, snippet, date, flags, direction, deleted_at, spam, has_attachments, " +
         "attachments_meta, " +
         "unsubscribe_url, unsubscribe_one_click",
       ).order("date", { ascending: false }).limit(limit),
@@ -174,7 +174,7 @@ export async function registerDataRoutes(app: FastifyInstance) {
     const sb = supabaseWithJwt(req.authJwt!);
     const cols =
       "id, mail_account_id, folder, uid, message_id, thread_id, from_email, from_name, to_emails, " +
-      "subject, snippet, body_text, body_html, date, flags, direction, deleted_at, has_attachments";
+      "subject, snippet, body_text, body_html, date, flags, direction, deleted_at, spam, has_attachments";
     const pattern = `%${q}%`;
     const [subjectRes, bodyRes, fromRes] = await Promise.all([
       sb.from("messages").select(cols).ilike("subject", pattern).order("date", { ascending: false }).limit(limit),
@@ -203,7 +203,8 @@ export async function registerDataRoutes(app: FastifyInstance) {
       .from("contacts")
       .select(
         "id, name, org, color, portrait_url, r2m_days, primary_email, archived_at, " +
-        "contact_emails(email, is_news, is_muted)",
+        "is_news, is_no_reply, is_muted, mute_reason, " +
+        "contact_emails(email, is_news, is_no_reply, is_muted)",
       )
       .order("name", { ascending: true });
     if (error) return reply.internalServerError(error.message);
@@ -218,7 +219,7 @@ export async function registerDataRoutes(app: FastifyInstance) {
       .from("messages")
       .select(
         "id, mail_account_id, folder, uid, thread_id, from_email, from_name, to_emails, " +
-        "subject, snippet, body_text, date, flags, direction, deleted_at, has_attachments",
+        "subject, snippet, body_text, date, flags, direction, deleted_at, spam, has_attachments",
       )
       .order("date", { ascending: false })
       .limit(limit);

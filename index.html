@@ -184,7 +184,7 @@
        polish change is picked up by every browser as soon as the version
        is bumped — no manual cache-busters needed. Keep ?v= here in sync
        with APP_VERSION below at every deploy. -->
-  <link rel="stylesheet" href="polish.css?v=0.0.163"/>
+  <link rel="stylesheet" href="polish.css?v=0.0.164"/>
 </head>
 <body>
 <div id="root">
@@ -199,7 +199,7 @@ const { useState, useMemo, useRef, useEffect, useCallback } = React;
 
 // ─── Constants ───────────────────────────────────────────────────────────────
 
-const APP_VERSION = "0.0.163"; // bumped on every deploy — keep in sync with version.json AND with the ?v= on polish.css above
+const APP_VERSION = "0.0.164"; // bumped on every deploy — keep in sync with version.json AND with the ?v= on polish.css above
 
 // ─── Backend + Supabase config ───────────────────────────────────────────────
 const SUPABASE_URL = "https://oyrlzqbjcsliesvunbwj.supabase.co";
@@ -2138,8 +2138,9 @@ function ContactEditForm({contact, contactTags, allKnownTags, isArchived, onSave
   const [r2m,    setR2m]    = useState(contact.r2mDays ?? 3);
   const [tags,   setTags]   = useState([...(contactTags||[])]);
   const [archived, setArchived] = useState(!!isArchived);
-  const [isNews,   setIsNews]   = useState(!!contact.isNews);
-  const [isMuted,  setIsMuted]  = useState(!!contact.isMuted);
+  const [isNews,    setIsNews]    = useState(!!contact.isNews);
+  const [isNoReply, setIsNoReply] = useState(!!contact.isNoReply);
+  const [isMuted,   setIsMuted]   = useState(!!contact.isMuted);
   // After clicking Unmerge, the row for that email disappears and the
   // remaining rows shift up. The mouse pointer (or finger) stays in
   // place, so the next button slides in under it and immediately picks
@@ -2226,7 +2227,7 @@ function ContactEditForm({contact, contactTags, allKnownTags, isArchived, onSave
         <button onClick={onDelete} className="px-3 py-1.5 text-xs rounded bg-gray-100 hover:bg-red-100 text-red-500">Delete</button>
         <div className="flex-1"/>
         <button onClick={onCancel} className="px-4 py-1.5 text-xs rounded bg-gray-100 hover:bg-gray-200 text-gray-600">Cancel</button>
-        <button onClick={()=>onSave({name,org,primary,r2mDays:r2m,tags,archived,isNews,isMuted})}
+        <button onClick={()=>onSave({name,org,primary,r2mDays:r2m,tags,archived,isNews,isNoReply,isMuted})}
           className="px-4 py-1.5 text-xs rounded bg-indigo-600 hover:bg-indigo-700 text-white font-medium">Save</button>
       </div>
     </div>
@@ -2235,7 +2236,7 @@ function ContactEditForm({contact, contactTags, allKnownTags, isArchived, onSave
 
 // ─── Message label helper ─────────────────────────────────────────────────────
 
-function MsgLabel({dir,isDraft,isDeleted}) {
+function MsgLabel({dir,isDraft,isDeleted,isSpam}) {
   return (
     <div className="flex gap-1 flex-shrink-0">
       {isDraft
@@ -2243,7 +2244,14 @@ function MsgLabel({dir,isDraft,isDeleted}) {
         : <span className={`text-xs px-1.5 py-0.5 rounded font-medium ${dir==="in"?"bg-sky-100 text-sky-600":"bg-emerald-100 text-emerald-600"}`}>
             {dir==="in"?"In":"Out"}
           </span>}
-      {isDeleted&&<span className="text-xs px-1.5 py-0.5 rounded font-medium bg-red-100 text-red-500">Deleted</span>}
+      {/* Spam takes priority over the generic Deleted chip — a spammed
+          mail is deleted, but it's the "reported as spam" provenance the
+          user cares about in the deleted list. */}
+      {isDeleted && (
+        isSpam
+          ? <span className="text-xs px-1.5 py-0.5 rounded font-medium bg-red-100 text-red-600">Spam</span>
+          : <span className="text-xs px-1.5 py-0.5 rounded font-medium bg-red-100 text-red-500">Deleted</span>
+      )}
     </div>
   );
 }
@@ -2870,7 +2878,7 @@ function MessageDetail({message,contact,isDeleted,msgTags,allTags,onReply,onRepl
       <div ref={headerRef} className="px-5 py-4 border-b border-gray-200 flex-shrink-0">
         <div className="flex items-start justify-between gap-3 mb-2">
           <div className="font-semibold text-gray-900 leading-snug">{message.subject}</div>
-          <MsgLabel dir={message.dir} isDraft={isDraft} isDeleted={isDeleted}/>
+          <MsgLabel dir={message.dir} isDraft={isDraft} isDeleted={isDeleted} isSpam={!!message.spam}/>
         </div>
         <div className="flex items-start gap-3">
           <Avatar contact={senderPerson} size={36}/>
@@ -3195,7 +3203,7 @@ function ThreadColumn({contact,allMsgs,deletedIds,selectedMsgId,msgTags,onSelect
               </button>
               {flagsOpen&&(
                 <div className="absolute right-0 top-full mt-1 z-20 bg-white border border-gray-200 rounded-lg shadow-lg overflow-hidden" style={{minWidth:140}}>
-                  {[['News','isNews'],['noReply','isMuted']].map(([label,key])=>{
+                  {[['News','isNews'],['noReply','isNoReply'],['Muted','isMuted']].map(([label,key])=>{
                     const checked=!!contact[key];
                     return <button key={label} onClick={()=>onToggleFlag?.(contact.id,key)}
                       className="w-full flex items-center gap-2 px-3 py-2 text-sm text-gray-700 hover:bg-gray-50">
@@ -3265,7 +3273,9 @@ function ThreadColumn({contact,allMsgs,deletedIds,selectedMsgId,msgTags,onSelect
                 <div className="flex items-center gap-1.5 pr-14">
                   {isDraft?<span className="text-xs px-1.5 rounded font-medium bg-gray-100 text-gray-500 flex-shrink-0">Draft</span>
                     :<span className={`text-xs px-1.5 rounded font-medium flex-shrink-0 ${msg.dir==="in"?"bg-sky-100 text-sky-600":"bg-emerald-100 text-emerald-600"}`}>{msg.dir==="in"?"In":"Out"}</span>}
-                  {isDel&&<span className="text-xs px-1.5 rounded font-medium bg-red-100 text-red-500 flex-shrink-0">Deleted</span>}
+                  {isDel&&(msg.spam
+                    ? <span className="text-xs px-1.5 rounded font-medium bg-red-100 text-red-600 flex-shrink-0">Spam</span>
+                    : <span className="text-xs px-1.5 rounded font-medium bg-red-100 text-red-500 flex-shrink-0">Deleted</span>)}
                   <span className="text-xs text-gray-400 truncate flex-1 min-w-0">{(msg.snippet||msg.body||'').replace(/\n/g," ")}</span>
                 </div>
               </div>
@@ -3295,7 +3305,7 @@ function ThreadColumn({contact,allMsgs,deletedIds,selectedMsgId,msgTags,onSelect
                   <PencilIcon size={11}/>
                 </span>
               </div>
-              {[['News','isNews'],['noReply','isMuted']].map(([label,key])=>{
+              {[['News','isNews'],['noReply','isNoReply'],['Muted','isMuted']].map(([label,key])=>{
                 const on=!!contact[key];
                 const cls=on?'bg-indigo-50 border-indigo-300 text-indigo-600'
                   :'border-gray-200 text-gray-300 hover:border-gray-300 hover:text-gray-500';
@@ -3360,7 +3370,9 @@ function ThreadColumn({contact,allMsgs,deletedIds,selectedMsgId,msgTags,onSelect
               <div className="flex items-center gap-1.5 pr-14">
                 {isDraft?<span className="text-xs px-1.5 rounded font-medium bg-gray-100 text-gray-500 flex-shrink-0">Draft</span>
                   :<span className={`text-xs px-1.5 rounded font-medium flex-shrink-0 ${msg.dir==="in"?"bg-sky-100 text-sky-600":"bg-emerald-100 text-emerald-600"}`}>{msg.dir==="in"?"In":"Out"}</span>}
-                {isDel&&<span className="text-xs px-1.5 rounded font-medium bg-red-100 text-red-500 flex-shrink-0">Deleted</span>}
+                {isDel&&(msg.spam
+                    ? <span className="text-xs px-1.5 rounded font-medium bg-red-100 text-red-600 flex-shrink-0">Spam</span>
+                    : <span className="text-xs px-1.5 rounded font-medium bg-red-100 text-red-500 flex-shrink-0">Deleted</span>)}
                 <span className="text-xs text-gray-400 truncate flex-1 min-w-0">{(msg.snippet||msg.body||'').replace(/\n/g," ")}</span>
               </div>
             </div>
@@ -3681,7 +3693,9 @@ function renderSearchRow({msg, contacts, deletedIds, selectedMsgId, onSelectMsg,
           {isDraft
             ? <span className="text-xs px-1.5 rounded font-medium bg-gray-100 text-gray-500 flex-shrink-0">Draft</span>
             : <span className={`text-xs px-1.5 rounded font-medium flex-shrink-0 ${msg.dir==='in'?"bg-sky-100 text-sky-600":"bg-emerald-100 text-emerald-600"}`}>{msg.dir==='in'?"In":"Out"}</span>}
-          {isDel && <span className="text-xs px-1.5 rounded font-medium bg-red-100 text-red-500 flex-shrink-0">Deleted</span>}
+          {isDel && (msg.spam
+            ? <span className="text-xs px-1.5 rounded font-medium bg-red-100 text-red-600 flex-shrink-0">Spam</span>
+            : <span className="text-xs px-1.5 rounded font-medium bg-red-100 text-red-500 flex-shrink-0">Deleted</span>)}
           <span className={`text-xs truncate ${!msg.read&&!isDraft&&msg.dir==='in'&&!isDel?"font-semibold text-gray-800":"text-gray-600"}`}>{msg.subject}</span>
         </div>
       </div>
@@ -3717,6 +3731,11 @@ function LeftColumn({contactMeta, archivedContacts, selectedId, mergeId, onSelec
     onContactTabChange?.(tab);
   };
   const [archiveTagsVisible, setArchiveTagsVisible] = useState(false);
+  // Archive moved out of the contact tabs (which now mirror the data model:
+  // Convo / News / noReply / Muted) and into its own toggle, just like the
+  // Tags section. When this is true the contact list shows archived rows
+  // regardless of the selected tab.
+  const [archiveContactsVisible, setArchiveContactsVisible] = useState(false);
   const accDropRef = useRef(null);
   const tagsDivStartY = useRef(null);
   const archiveDivStartY = useRef(null);
@@ -3731,13 +3750,26 @@ function LeftColumn({contactMeta, archivedContacts, selectedId, mergeId, onSelec
   function getTab(id){
     const c = contactMeta.find(m => m.contact.id === id)?.contact;
     if (!c) return 'Convo';
+    // Archive is now its own toggle in the section header (mirrors Tags
+    // bar). Archived contacts disappear from the tabs above and only show
+    // when the Archive toggle is on, so we surface them via a synthetic
+    // "Archive" tab name that the renderer treats specially.
     if (archivedContacts.has(id)) return 'Archive';
-    if (c.isMuted) return 'noReply';
-    if (c.isNews)  return 'News';
+    // Muted wins over noReply (spam path forces is_muted=true; the user
+    // might also have set is_no_reply for a previous interaction). News
+    // is the lowest-priority "still wants this in the timeline" flag.
+    if (c.isMuted)   return 'Muted';
+    if (c.isNoReply) return 'noReply';
+    if (c.isNews)    return 'News';
     return 'Convo';
   }
+  // When Archive toggle is on, the tab filter is replaced by "is archived"
+  // — same UX as the Tags Archive button. The contactTab still controls the
+  // empty-state copy below, but the displayed rows are the archived ones.
   const activeContacts  = contactMeta
-    .filter(m=>getTab(m.contact.id,m.contact.emails)===contactTab)
+    .filter(m => archiveContactsVisible
+      ? getTab(m.contact.id) === 'Archive'
+      : getTab(m.contact.id) === contactTab)
     .slice()
     .sort((a,b)=>{
       // Actionable contacts (badge > 0) first; within each group preserve original order
@@ -3884,6 +3916,11 @@ function LeftColumn({contactMeta, archivedContacts, selectedId, mergeId, onSelec
                 <span className={`text-sm truncate ${badge>0?"font-semibold text-gray-900":"text-gray-700"}`}>
                   {isMerge&&<span className="mr-1 text-violet-400">⇄</span>}{contact.name}
                 </span>
+                {/* "Spam" chip on muted-via-spam contacts so the Muted tab can
+                    tell auto-muted (Spam action) rows apart from manual ones. */}
+                {contact.muteReason === 'spam' && (
+                  <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-red-100 text-red-600 font-semibold flex-shrink-0 uppercase tracking-wider">Spam</span>
+                )}
                 {isPending
                   ? <span className="text-xs text-violet-600 font-semibold flex-shrink-0">Mergen…</span>
                   : badge>0 && <span className={`${badgeColor} text-white rounded-full flex-shrink-0 font-bold`}
@@ -3971,15 +4008,22 @@ function LeftColumn({contactMeta, archivedContacts, selectedId, mergeId, onSelec
           </span>
         </div>
         {!collapsed.contacts&&(
-          <div className="flex px-2 pt-[3px] pb-1.5 gap-0.5">
-            {['Convo','News','noReply','Archive'].map(tab=>{
-              const active=contactTab===tab;
-              const badge=(!active&&(tab==='Convo'||tab==='News'||tab==='noReply'))?tabBadge(tab):0;
-              return <button key={tab} onClick={()=>setContactTab(tab)}
+          <div className="flex px-2 pt-[3px] pb-1.5 gap-0.5 items-center">
+            {['Convo','News','noReply','Muted'].map(tab=>{
+              const active=contactTab===tab && !archiveContactsVisible;
+              const badge=(!active && !archiveContactsVisible)?tabBadge(tab):0;
+              return <button key={tab} onClick={()=>{setArchiveContactsVisible(false); setContactTab(tab);}}
                 className={`convooz-contact-tab flex-1 text-xs py-1 rounded transition-colors ${active?'bg-indigo-50 text-indigo-700 font-semibold':'text-gray-400 hover:text-gray-600'}`}>
                 {tab}{badge>0&&<span className="ml-0.5 opacity-70">({badge})</span>}
               </button>;
             })}
+            {/* Archive — separate toggle like the Tags section, instead of
+                a 5th tab. Highlights when active and overrides the tab
+                filter to show archived contacts. */}
+            <button onClick={()=>setArchiveContactsVisible(v=>!v)}
+              className={`flex-shrink-0 text-xs py-1 px-2 ml-0.5 rounded transition-colors ${archiveContactsVisible?'bg-indigo-50 text-indigo-700 font-semibold':'text-gray-400 hover:text-gray-600'}`}>
+              Archive
+            </button>
           </div>
         )}
       </div>
@@ -4003,7 +4047,11 @@ function LeftColumn({contactMeta, archivedContacts, selectedId, mergeId, onSelec
           {!(dataLoading && contactMeta.length===0) && (<>
             {activeContacts.length===0 && (
               <div className="px-3 py-3 text-xs text-gray-300 italic">
-                {contactTab==='News'?'No newsletter contacts':contactTab==='noReply'?'No noReply contacts':contactTab==='Archive'?'No archived contacts':'No contacts'}
+                {archiveContactsVisible?'No archived contacts'
+                  :contactTab==='News'?'No newsletter contacts'
+                  :contactTab==='noReply'?'No noReply contacts'
+                  :contactTab==='Muted'?'No muted contacts'
+                  :'No contacts'}
               </div>
             )}
             {activeContacts.map(({contact,unread,hasR2m,r2mCount})=><ContactRow key={contact.id} contact={contact} unread={unread} hasR2m={hasR2m} r2mCount={r2mCount}/>)}
@@ -4098,15 +4146,19 @@ function LeftColumn({contactMeta, archivedContacts, selectedId, mergeId, onSelec
             <CollapseIcon open={!collapsed.contacts}/>
           </button>
         </div>
-        {!collapsed.contacts&&<div className="flex px-2 pt-[3px] pb-1.5 gap-0.5">
-          {['Convo','News','noReply','Archive'].map(tab=>{
-            const active=contactTab===tab;
-            const badge=(!active&&(tab==='Convo'||tab==='News'||tab==='noReply'))?tabBadge(tab):0;
-            return <button key={tab} onClick={()=>setContactTab(tab)}
+        {!collapsed.contacts&&<div className="flex px-2 pt-[3px] pb-1.5 gap-0.5 items-center">
+          {['Convo','News','noReply','Muted'].map(tab=>{
+            const active=contactTab===tab && !archiveContactsVisible;
+            const badge=(!active && !archiveContactsVisible)?tabBadge(tab):0;
+            return <button key={tab} onClick={()=>{setArchiveContactsVisible(false); setContactTab(tab);}}
               className={`convooz-contact-tab flex-1 text-xs py-1 rounded transition-colors ${active?'bg-indigo-50 text-indigo-700 font-semibold':'text-gray-400 hover:text-gray-600'}`}>
               {tab}{badge>0&&<span className="ml-0.5 opacity-70">({badge})</span>}
             </button>;
           })}
+          <button onClick={()=>setArchiveContactsVisible(v=>!v)}
+            className={`flex-shrink-0 text-xs py-1 px-2 ml-0.5 rounded transition-colors ${archiveContactsVisible?'bg-indigo-50 text-indigo-700 font-semibold':'text-gray-400 hover:text-gray-600'}`}>
+            Archive
+          </button>
         </div>}
       </div>
 
@@ -4130,7 +4182,11 @@ function LeftColumn({contactMeta, archivedContacts, selectedId, mergeId, onSelec
           <div className="flex-1 overflow-y-auto scroll">
             {!(dataLoading && contactMeta.length===0) && (<>
               {activeContacts.length===0&&<div className="px-3 py-3 text-xs text-gray-300 italic">
-                {contactTab==='News'?'No newsletter contacts':contactTab==='noReply'?'No noReply contacts':contactTab==='Archive'?'No archived contacts':'No contacts'}
+                {archiveContactsVisible?'No archived contacts'
+                  :contactTab==='News'?'No newsletter contacts'
+                  :contactTab==='noReply'?'No noReply contacts'
+                  :contactTab==='Muted'?'No muted contacts'
+                  :'No contacts'}
               </div>}
               {activeContacts.map(({contact,unread,hasR2m,r2mCount})=><ContactRow key={contact.id} contact={contact} unread={unread} hasR2m={hasR2m} r2mCount={r2mCount}/>)}
             </>)}
@@ -4839,7 +4895,7 @@ const RETENTION_OPTIONS = [
 // to 1 makes existing caches readable again. The clearBootstrapCache
 // hook in refreshData below catches future account deletes; that's
 // the real fix, the schema bump never should have shipped.
-const BOOTSTRAP_CACHE_SCHEMA = 1;
+const BOOTSTRAP_CACHE_SCHEMA = 2;
 function bootstrapCacheKey(uid) { return `convooz:bootstrap:${uid}:s${BOOTSTRAP_CACHE_SCHEMA}`; }
 function readBootstrapCache(uid) {
   if (!uid) { console.log('[cache] read skipped: no userId'); return null; }
@@ -5231,6 +5287,7 @@ function App({userId, onSignOut}) {
             snippet: m.snippet || '',
             hasAttachments: !!m.has_attachments,
             attachmentsMeta: Array.isArray(m.attachments_meta) ? m.attachments_meta : null,
+            spam: !!m.spam,
             unsubscribeUrl: m.unsubscribe_url || null,
             unsubscribeOneClick: !!m.unsubscribe_one_click,
             sender,
@@ -5324,7 +5381,9 @@ function App({userId, onSignOut}) {
             portrait: c.portrait_url || null,
             r2mDays: c.r2m_days ?? 3,
             isNews: !!c.is_news,
+            isNoReply: !!c.is_no_reply,
             isMuted: !!c.is_muted,
+            muteReason: c.mute_reason || null,
             archivedAt: c.archived_at || null,
             accountEmails: accEmails,                 // array of all account-emails this contact has activity in
             account: accEmails[0] || null,            // "primary" account (first seen) — kept for back-compat
@@ -5611,6 +5670,7 @@ function App({userId, onSignOut}) {
             bodyHtml: typeof raw.body_html === 'string' && raw.body_html.trim() ? raw.body_html : (raw.body_html === null ? null : undefined),
             snippet: raw.snippet || '',
             hasAttachments: !!raw.has_attachments,
+            spam: !!raw.spam,
             unsubscribeUrl: raw.unsubscribe_url || null,
             unsubscribeOneClick: !!raw.unsubscribe_one_click,
             sender: null,
@@ -6122,11 +6182,32 @@ function App({userId, onSignOut}) {
   function handleSpam(id){
     captureAlert(id);
     const {id:nid,alwaysGo,switchTab}=getDestination(id,'spam');
+    // Optimistic local updates: mail goes to the deleted list AND is
+    // tagged spam (the FE renders a "Spam" chip on it in the deleted
+    // view). The contact tied to from_email moves to Muted with
+    // muteReason='spam' so the contact list shows a "Spam" badge.
+    const msg = messageList.find(m => m.id === id);
     setDeletedIds(prev=>[...prev,id]);
-
+    setMessageList(prev=>prev.map(m=>m.id===id?{...m,spam:true}:m));
+    if (msg && msg.contactId) {
+      setContactList(prev => prev.map(c =>
+        c.id === msg.contactId ? { ...c, isMuted: true, muteReason: 'spam' } : c,
+      ));
+    }
     navigateTo(nid,alwaysGo,'fade-fast');
-    setActionToast('Mail was reported as spam');
-    persistDelete(id);
+    setActionToast('Mail reported as spam · contact muted');
+    // Single backend call does delete + spam flag + contact mute in one
+    // transaction. On failure, revert all three local flips.
+    apiFetch(`/messages/${id}/spam`, { method: 'PATCH' }).catch(e => {
+      setDeletedIds(prev=>prev.filter(x=>x!==id));
+      setMessageList(prev=>prev.map(m=>m.id===id?{...m,spam:false}:m));
+      if (msg && msg.contactId) {
+        setContactList(prev => prev.map(c =>
+          c.id === msg.contactId ? { ...c, isMuted: false, muteReason: null } : c,
+        ));
+      }
+      setActionToast('Spam-report failed: ' + e.message);
+    });
   }
   // Unsubscribe action: one-click senders go through our backend (it
   // POSTs to the URL server-side so we sidestep CORS). Non-one-click
@@ -6432,14 +6513,21 @@ function App({userId, onSignOut}) {
     refreshData();
   }
   function handleEditContact(){setEditingContact(selContact);setShowCompose(false);}
-  function handleSaveContact({name,org,primary,r2mDays,tags,archived,isNews,isMuted}){
+  function handleSaveContact({name,org,primary,r2mDays,tags,archived,isNews,isNoReply,isMuted}){
     const id = editingContact;
     const prevContact = contactList.find(c => c.id === id);
-    // Optimistic local update (covers the full form)
+    // Optimistic local update (covers the full form). If the user un-mutes
+    // here we also clear muteReason so a stale "spam" tag doesn't survive.
     setContactList(prev=>prev.map(c=>{
       if(c.id!==id)return c;
       const emails=[primary,...c.emails.filter(e=>e!==primary)];
-      return{...c,name,org,emails,r2mDays,isNews:!!isNews,isMuted:!!isMuted};
+      return{
+        ...c, name, org, emails, r2mDays,
+        isNews: !!isNews,
+        isNoReply: !!isNoReply,
+        isMuted: !!isMuted,
+        muteReason: isMuted ? c.muteReason : null,
+      };
     }));
     setConTags(prev=>({...prev,[id]:tags}));
     setArchivedContacts(prev=>{const n=new Set(prev);archived?n.add(id):n.delete(id);return n;});
@@ -6454,6 +6542,7 @@ function App({userId, onSignOut}) {
       // replaced it. Only fall back when we can't parse a finite number.
       r2m_days: Number.isFinite(r2mNum) ? r2mNum : 3,
       is_news: !!isNews,
+      is_no_reply: !!isNoReply,
       is_muted: !!isMuted,
       archived: !!archived,
     };
@@ -6544,8 +6633,8 @@ function App({userId, onSignOut}) {
     }
     setSelAccounts(prev=>prev.includes(acc)?(prev.length>1?prev.filter(a=>a!==acc):prev):[...prev,acc]);
   }
-  // Toggle a contact-level flag (isNews | isMuted | archive). Optimistic flip
-  // then PATCH /contacts/:id — revert + toast on failure.
+  // Toggle a contact-level flag (isNews | isNoReply | isMuted | archive).
+  // Optimistic flip then PATCH /contacts/:id — revert + toast on failure.
   function handleToggleContactFlag(id, flag){
     const contact = contactList.find(c=>c.id===id);
     if (!contact) return;
@@ -6559,15 +6648,25 @@ function App({userId, onSignOut}) {
         });
       return;
     }
-    // flag = 'isNews' | 'isMuted'
+    // flag = 'isNews' | 'isNoReply' | 'isMuted'
     const wasOn = !!contact[flag];
     const newVal = !wasOn;
-    setContactList(prev => prev.map(c => c.id===id ? {...c, [flag]: newVal} : c));
-    const bodyKey = flag === 'isNews' ? 'is_news' : 'is_muted';
+    setContactList(prev => prev.map(c => {
+      if (c.id !== id) return c;
+      // Un-muting clears any mute_reason (e.g. lingering "spam" tag).
+      const reasonChange = flag === 'isMuted' && !newVal ? { muteReason: null } : {};
+      return { ...c, [flag]: newVal, ...reasonChange };
+    }));
+    const bodyKey = flag === 'isNews' ? 'is_news'
+                  : flag === 'isNoReply' ? 'is_no_reply'
+                  : 'is_muted';
+    const labelForToast = flag === 'isNews' ? 'News'
+                        : flag === 'isNoReply' ? 'noReply'
+                        : 'Muted';
     apiFetch(`/contacts/${id}`, { method:'PATCH', body: JSON.stringify({ [bodyKey]: newVal }) })
       .catch(e => {
         setContactList(prev => prev.map(c => c.id===id ? {...c, [flag]: wasOn} : c));
-        setActionToast((flag==='isNews'?'News':'noReply') + ' toggle failed: ' + e.message);
+        setActionToast(labelForToast + ' toggle failed: ' + e.message);
       });
   }
   function handleToggleEmailFlag(id, email, flag){
@@ -6649,7 +6748,9 @@ function App({userId, onSignOut}) {
       portrait: null,
       r2mDays: 3,
       isNews: false,
+      isNoReply: false,
       isMuted: false,
+      muteReason: null,
       archivedAt: null,
       accountEmails: [...newAccountEmails],
       account: [...newAccountEmails][0] || null,
