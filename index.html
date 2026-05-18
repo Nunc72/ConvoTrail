@@ -184,7 +184,7 @@
        polish change is picked up by every browser as soon as the version
        is bumped — no manual cache-busters needed. Keep ?v= here in sync
        with APP_VERSION below at every deploy. -->
-  <link rel="stylesheet" href="polish.css?v=0.0.164"/>
+  <link rel="stylesheet" href="polish.css?v=0.0.165"/>
 </head>
 <body>
 <div id="root">
@@ -199,7 +199,7 @@ const { useState, useMemo, useRef, useEffect, useCallback } = React;
 
 // ─── Constants ───────────────────────────────────────────────────────────────
 
-const APP_VERSION = "0.0.164"; // bumped on every deploy — keep in sync with version.json AND with the ?v= on polish.css above
+const APP_VERSION = "0.0.165"; // bumped on every deploy — keep in sync with version.json AND with the ?v= on polish.css above
 
 // ─── Backend + Supabase config ───────────────────────────────────────────────
 const SUPABASE_URL = "https://oyrlzqbjcsliesvunbwj.supabase.co";
@@ -2249,7 +2249,7 @@ function MsgLabel({dir,isDraft,isDeleted,isSpam}) {
           user cares about in the deleted list. */}
       {isDeleted && (
         isSpam
-          ? <span className="text-xs px-1.5 py-0.5 rounded font-medium bg-red-100 text-red-600">Spam</span>
+          ? <span className="text-xs px-1.5 py-0.5 rounded font-medium bg-fuchsia-100 text-fuchsia-700">Spam</span>
           : <span className="text-xs px-1.5 py-0.5 rounded font-medium bg-red-100 text-red-500">Deleted</span>
       )}
     </div>
@@ -3138,15 +3138,16 @@ function ThreadColumn({contact,allMsgs,deletedIds,selectedMsgId,msgTags,onSelect
     x => !deletedIds.includes(x.id) && !x.draft &&
       ((x.dir === 'in' && !x.read) || (x.dir === 'out' && x.revert2me))
   ), [allMsgs, deletedIds]);
+  // Styled to match the Newsletter / Unsubscribe banner on a message
+  // (mx-4, gray-50 background, gray-200 border, neutral chip on the
+  // right) so the two "act on this pile" affordances feel consistent.
   const actionableAlert = actionableInThread.length > 5 ? (
-    <div className="px-4 py-2 bg-amber-50 border-b border-amber-200 flex items-center justify-between gap-2 flex-shrink-0">
-      <span className="text-xs text-amber-800">
-        <span className="font-semibold">{actionableInThread.length}</span> actionable mails
-      </span>
-      <button onClick={()=>onMarkManyRead?.(actionableInThread.map(m=>m.id))}
-        className="text-xs px-2.5 py-1 rounded bg-amber-200 hover:bg-amber-300 text-amber-900 font-semibold transition-colors">
-        All Seen
-      </button>
+    <div className="mx-4 mt-3 px-3 py-2 rounded bg-gray-50 border border-gray-200 flex items-center gap-2 text-xs text-gray-600 flex-shrink-0">
+      <span><span className="font-semibold text-gray-800">{actionableInThread.length}</span> actionable mails</span>
+      <div className="ml-auto flex gap-2">
+        <button onClick={()=>onMarkManyRead?.(actionableInThread.map(m=>m.id))}
+          className="px-2 py-0.5 rounded bg-gray-100 hover:bg-gray-200 text-gray-700 font-medium">All Seen</button>
+      </div>
     </div>
   ) : null;
 
@@ -3203,7 +3204,7 @@ function ThreadColumn({contact,allMsgs,deletedIds,selectedMsgId,msgTags,onSelect
               </button>
               {flagsOpen&&(
                 <div className="absolute right-0 top-full mt-1 z-20 bg-white border border-gray-200 rounded-lg shadow-lg overflow-hidden" style={{minWidth:140}}>
-                  {[['News','isNews'],['noReply','isNoReply'],['Muted','isMuted']].map(([label,key])=>{
+                  {[['News','isNews'],['Noreply','isNoReply'],['Muted','isMuted']].map(([label,key])=>{
                     const checked=!!contact[key];
                     return <button key={label} onClick={()=>onToggleFlag?.(contact.id,key)}
                       className="w-full flex items-center gap-2 px-3 py-2 text-sm text-gray-700 hover:bg-gray-50">
@@ -3274,7 +3275,7 @@ function ThreadColumn({contact,allMsgs,deletedIds,selectedMsgId,msgTags,onSelect
                   {isDraft?<span className="text-xs px-1.5 rounded font-medium bg-gray-100 text-gray-500 flex-shrink-0">Draft</span>
                     :<span className={`text-xs px-1.5 rounded font-medium flex-shrink-0 ${msg.dir==="in"?"bg-sky-100 text-sky-600":"bg-emerald-100 text-emerald-600"}`}>{msg.dir==="in"?"In":"Out"}</span>}
                   {isDel&&(msg.spam
-                    ? <span className="text-xs px-1.5 rounded font-medium bg-red-100 text-red-600 flex-shrink-0">Spam</span>
+                    ? <span className="text-xs px-1.5 rounded font-medium bg-fuchsia-100 text-fuchsia-700 flex-shrink-0">Spam</span>
                     : <span className="text-xs px-1.5 rounded font-medium bg-red-100 text-red-500 flex-shrink-0">Deleted</span>)}
                   <span className="text-xs text-gray-400 truncate flex-1 min-w-0">{(msg.snippet||msg.body||'').replace(/\n/g," ")}</span>
                 </div>
@@ -3305,7 +3306,7 @@ function ThreadColumn({contact,allMsgs,deletedIds,selectedMsgId,msgTags,onSelect
                   <PencilIcon size={11}/>
                 </span>
               </div>
-              {[['News','isNews'],['noReply','isNoReply'],['Muted','isMuted']].map(([label,key])=>{
+              {[['News','isNews'],['Noreply','isNoReply'],['Muted','isMuted']].map(([label,key])=>{
                 const on=!!contact[key];
                 const cls=on?'bg-indigo-50 border-indigo-300 text-indigo-600'
                   :'border-gray-200 text-gray-300 hover:border-gray-300 hover:text-gray-500';
@@ -3371,7 +3372,7 @@ function ThreadColumn({contact,allMsgs,deletedIds,selectedMsgId,msgTags,onSelect
                 {isDraft?<span className="text-xs px-1.5 rounded font-medium bg-gray-100 text-gray-500 flex-shrink-0">Draft</span>
                   :<span className={`text-xs px-1.5 rounded font-medium flex-shrink-0 ${msg.dir==="in"?"bg-sky-100 text-sky-600":"bg-emerald-100 text-emerald-600"}`}>{msg.dir==="in"?"In":"Out"}</span>}
                 {isDel&&(msg.spam
-                    ? <span className="text-xs px-1.5 rounded font-medium bg-red-100 text-red-600 flex-shrink-0">Spam</span>
+                    ? <span className="text-xs px-1.5 rounded font-medium bg-fuchsia-100 text-fuchsia-700 flex-shrink-0">Spam</span>
                     : <span className="text-xs px-1.5 rounded font-medium bg-red-100 text-red-500 flex-shrink-0">Deleted</span>)}
                 <span className="text-xs text-gray-400 truncate flex-1 min-w-0">{(msg.snippet||msg.body||'').replace(/\n/g," ")}</span>
               </div>
@@ -3694,7 +3695,7 @@ function renderSearchRow({msg, contacts, deletedIds, selectedMsgId, onSelectMsg,
             ? <span className="text-xs px-1.5 rounded font-medium bg-gray-100 text-gray-500 flex-shrink-0">Draft</span>
             : <span className={`text-xs px-1.5 rounded font-medium flex-shrink-0 ${msg.dir==='in'?"bg-sky-100 text-sky-600":"bg-emerald-100 text-emerald-600"}`}>{msg.dir==='in'?"In":"Out"}</span>}
           {isDel && (msg.spam
-            ? <span className="text-xs px-1.5 rounded font-medium bg-red-100 text-red-600 flex-shrink-0">Spam</span>
+            ? <span className="text-xs px-1.5 rounded font-medium bg-fuchsia-100 text-fuchsia-700 flex-shrink-0">Spam</span>
             : <span className="text-xs px-1.5 rounded font-medium bg-red-100 text-red-500 flex-shrink-0">Deleted</span>)}
           <span className={`text-xs truncate ${!msg.read&&!isDraft&&msg.dir==='in'&&!isDel?"font-semibold text-gray-800":"text-gray-600"}`}>{msg.subject}</span>
         </div>
@@ -3759,7 +3760,7 @@ function LeftColumn({contactMeta, archivedContacts, selectedId, mergeId, onSelec
     // might also have set is_no_reply for a previous interaction). News
     // is the lowest-priority "still wants this in the timeline" flag.
     if (c.isMuted)   return 'Muted';
-    if (c.isNoReply) return 'noReply';
+    if (c.isNoReply) return 'Noreply';
     if (c.isNews)    return 'News';
     return 'Convo';
   }
@@ -3919,7 +3920,7 @@ function LeftColumn({contactMeta, archivedContacts, selectedId, mergeId, onSelec
                 {/* "Spam" chip on muted-via-spam contacts so the Muted tab can
                     tell auto-muted (Spam action) rows apart from manual ones. */}
                 {contact.muteReason === 'spam' && (
-                  <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-red-100 text-red-600 font-semibold flex-shrink-0 uppercase tracking-wider">Spam</span>
+                  <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-fuchsia-100 text-fuchsia-700 font-semibold flex-shrink-0 uppercase tracking-wider">Spam</span>
                 )}
                 {isPending
                   ? <span className="text-xs text-violet-600 font-semibold flex-shrink-0">Mergen…</span>
@@ -4006,24 +4007,27 @@ function LeftColumn({contactMeta, archivedContacts, selectedId, mergeId, onSelec
           <span>Contacts
             {mergeId!==null&&<span className="ml-2 text-indigo-500 normal-case font-normal">· Shift+click</span>}
           </span>
+          {/* Archive lives on the same line as the section label, mirroring
+              the Tags header. stopPropagation so a click on the chip doesn't
+              also collapse the contacts panel. */}
+          {!collapsed.contacts && (
+            <button onClick={e=>{e.stopPropagation(); setArchiveContactsVisible(v=>!v);}}
+              className={`text-xs py-0.5 px-2 rounded transition-colors ${archiveContactsVisible?'bg-indigo-50 text-indigo-700 font-semibold':'text-gray-400 hover:text-gray-600'}`}>
+              Archive
+            </button>
+          )}
         </div>
         {!collapsed.contacts&&(
-          <div className="flex px-2 pt-[3px] pb-1.5 gap-0.5 items-center">
-            {['Convo','News','noReply','Muted'].map(tab=>{
+          <div className="flex px-2 pt-[3px] pb-1.5 gap-0.5">
+            {['Convo','News','Noreply','Muted'].map(tab=>{
               const active=contactTab===tab && !archiveContactsVisible;
-              const badge=(!active && !archiveContactsVisible)?tabBadge(tab):0;
+              // Muted is a destination, not an actionable bucket — no badge.
+              const badge=(!active && !archiveContactsVisible && tab !== 'Muted')?tabBadge(tab):0;
               return <button key={tab} onClick={()=>{setArchiveContactsVisible(false); setContactTab(tab);}}
                 className={`convooz-contact-tab flex-1 text-xs py-1 rounded transition-colors ${active?'bg-indigo-50 text-indigo-700 font-semibold':'text-gray-400 hover:text-gray-600'}`}>
                 {tab}{badge>0&&<span className="ml-0.5 opacity-70">({badge})</span>}
               </button>;
             })}
-            {/* Archive — separate toggle like the Tags section, instead of
-                a 5th tab. Highlights when active and overrides the tab
-                filter to show archived contacts. */}
-            <button onClick={()=>setArchiveContactsVisible(v=>!v)}
-              className={`flex-shrink-0 text-xs py-1 px-2 ml-0.5 rounded transition-colors ${archiveContactsVisible?'bg-indigo-50 text-indigo-700 font-semibold':'text-gray-400 hover:text-gray-600'}`}>
-              Archive
-            </button>
           </div>
         )}
       </div>
@@ -4049,7 +4053,7 @@ function LeftColumn({contactMeta, archivedContacts, selectedId, mergeId, onSelec
               <div className="px-3 py-3 text-xs text-gray-300 italic">
                 {archiveContactsVisible?'No archived contacts'
                   :contactTab==='News'?'No newsletter contacts'
-                  :contactTab==='noReply'?'No noReply contacts'
+                  :contactTab==='Noreply'?'No Noreply contacts'
                   :contactTab==='Muted'?'No muted contacts'
                   :'No contacts'}
               </div>
@@ -4142,23 +4146,31 @@ function LeftColumn({contactMeta, archivedContacts, selectedId, mergeId, onSelec
           <span>Contacts
             {mergeId!==null&&<span className="ml-2 text-indigo-500 normal-case font-normal">· Shift+click</span>}
           </span>
-          <button onClick={()=>onToggleCollapse('contacts')} className="text-gray-300 hover:text-gray-500 pr-1">
-            <CollapseIcon open={!collapsed.contacts}/>
-          </button>
+          <div className="flex items-center gap-2">
+            {/* Archive toggle on the same row as the section label, like
+                Tags. Only shows when contacts panel is expanded — collapsing
+                hides it along with the rest of the tabs. */}
+            {!collapsed.contacts && (
+              <button onClick={()=>setArchiveContactsVisible(v=>!v)}
+                className={`text-xs py-0.5 px-2 rounded transition-colors ${archiveContactsVisible?'bg-indigo-50 text-indigo-700 font-semibold':'text-gray-400 hover:text-gray-600'}`}>
+                Archive
+              </button>
+            )}
+            <button onClick={()=>onToggleCollapse('contacts')} className="text-gray-300 hover:text-gray-500 pr-1">
+              <CollapseIcon open={!collapsed.contacts}/>
+            </button>
+          </div>
         </div>
-        {!collapsed.contacts&&<div className="flex px-2 pt-[3px] pb-1.5 gap-0.5 items-center">
-          {['Convo','News','noReply','Muted'].map(tab=>{
+        {!collapsed.contacts&&<div className="flex px-2 pt-[3px] pb-1.5 gap-0.5">
+          {['Convo','News','Noreply','Muted'].map(tab=>{
             const active=contactTab===tab && !archiveContactsVisible;
-            const badge=(!active && !archiveContactsVisible)?tabBadge(tab):0;
+            // Muted is a destination, not an actionable bucket — no badge.
+            const badge=(!active && !archiveContactsVisible && tab !== 'Muted')?tabBadge(tab):0;
             return <button key={tab} onClick={()=>{setArchiveContactsVisible(false); setContactTab(tab);}}
               className={`convooz-contact-tab flex-1 text-xs py-1 rounded transition-colors ${active?'bg-indigo-50 text-indigo-700 font-semibold':'text-gray-400 hover:text-gray-600'}`}>
               {tab}{badge>0&&<span className="ml-0.5 opacity-70">({badge})</span>}
             </button>;
           })}
-          <button onClick={()=>setArchiveContactsVisible(v=>!v)}
-            className={`flex-shrink-0 text-xs py-1 px-2 ml-0.5 rounded transition-colors ${archiveContactsVisible?'bg-indigo-50 text-indigo-700 font-semibold':'text-gray-400 hover:text-gray-600'}`}>
-            Archive
-          </button>
         </div>}
       </div>
 
@@ -4184,7 +4196,7 @@ function LeftColumn({contactMeta, archivedContacts, selectedId, mergeId, onSelec
               {activeContacts.length===0&&<div className="px-3 py-3 text-xs text-gray-300 italic">
                 {archiveContactsVisible?'No archived contacts'
                   :contactTab==='News'?'No newsletter contacts'
-                  :contactTab==='noReply'?'No noReply contacts'
+                  :contactTab==='Noreply'?'No Noreply contacts'
                   :contactTab==='Muted'?'No muted contacts'
                   :'No contacts'}
               </div>}
@@ -4197,16 +4209,18 @@ function LeftColumn({contactMeta, archivedContacts, selectedId, mergeId, onSelec
         <div className="border-t border-gray-200 border-b border-gray-100 flex-shrink-0 bg-white">
           <div className="px-3 pt-2 pb-1 text-xs font-semibold text-gray-400 uppercase tracking-wider flex items-center justify-between">
             <span>Tags</span>
-            <button onClick={()=>onToggleCollapse('tags')} className="text-gray-300 hover:text-gray-500 pr-1">
-              <CollapseIcon open={!collapsed.tags}/>
-            </button>
+            <div className="flex items-center gap-2">
+              {!collapsed.tags && (
+                <button onClick={()=>setArchiveTagsVisible(v=>!v)}
+                  className={`text-xs py-0.5 px-2 rounded transition-colors ${archiveTagsVisible?'bg-indigo-50 text-indigo-700 font-semibold':'text-gray-400 hover:text-gray-600'}`}>
+                  Archive
+                </button>
+              )}
+              <button onClick={()=>onToggleCollapse('tags')} className="text-gray-300 hover:text-gray-500 pr-1">
+                <CollapseIcon open={!collapsed.tags}/>
+              </button>
+            </div>
           </div>
-          {!collapsed.tags&&<div className="flex px-2 pt-[3px] pb-1.5 gap-0.5 justify-end">
-            <button onClick={()=>setArchiveTagsVisible(v=>!v)}
-              className={`text-xs py-1 px-2.5 rounded transition-colors ${archiveTagsVisible?'bg-indigo-50 text-indigo-700 font-semibold':'text-gray-400 hover:text-gray-600'}`}>
-              Archive
-            </button>
-          </div>}
         </div>
 
         {/* TAGS content — fills remaining space, collapses to 0 */}
@@ -6661,7 +6675,7 @@ function App({userId, onSignOut}) {
                   : flag === 'isNoReply' ? 'is_no_reply'
                   : 'is_muted';
     const labelForToast = flag === 'isNews' ? 'News'
-                        : flag === 'isNoReply' ? 'noReply'
+                        : flag === 'isNoReply' ? 'Noreply'
                         : 'Muted';
     apiFetch(`/contacts/${id}`, { method:'PATCH', body: JSON.stringify({ [bodyKey]: newVal }) })
       .catch(e => {
