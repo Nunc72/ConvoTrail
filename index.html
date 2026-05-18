@@ -184,7 +184,7 @@
        polish change is picked up by every browser as soon as the version
        is bumped — no manual cache-busters needed. Keep ?v= here in sync
        with APP_VERSION below at every deploy. -->
-  <link rel="stylesheet" href="polish.css?v=0.0.162"/>
+  <link rel="stylesheet" href="polish.css?v=0.0.163"/>
 </head>
 <body>
 <div id="root">
@@ -199,7 +199,7 @@ const { useState, useMemo, useRef, useEffect, useCallback } = React;
 
 // ─── Constants ───────────────────────────────────────────────────────────────
 
-const APP_VERSION = "0.0.162"; // bumped on every deploy — keep in sync with version.json AND with the ?v= on polish.css above
+const APP_VERSION = "0.0.163"; // bumped on every deploy — keep in sync with version.json AND with the ?v= on polish.css above
 
 // ─── Backend + Supabase config ───────────────────────────────────────────────
 const SUPABASE_URL = "https://oyrlzqbjcsliesvunbwj.supabase.co";
@@ -473,8 +473,10 @@ function formatTime(s) {
   if (diff===0) return d.toLocaleTimeString("nl-NL",{hour:"2-digit",minute:"2-digit"});
   if (diff===1) return "gisteren";
   if (diff<7)   return d.toLocaleDateString("nl-NL",{weekday:"short"});
-  // 7+ days old: full date with year so "10 mei 2025" can be told apart
-  // from "10 mei 2026" at a glance instead of stripping the year off.
+  // 7-364 days old: day + month, no year — the year is implied (current
+  // year for anything within the last 365 days). 365+ days: include the
+  // year so "10 mei 2025" can be told apart from "10 mei 2026".
+  if (diff<365) return d.toLocaleDateString("nl-NL",{day:"numeric",month:"long"});
   return d.toLocaleDateString("nl-NL",{day:"numeric",month:"long",year:"numeric"});
 }
 function formatFull(s) {
@@ -3086,7 +3088,7 @@ const FILTER_TABS = ["Now","All","In","Out","Draft","Deleted"];
 function ThreadColumn({contact,allMsgs,deletedIds,selectedMsgId,msgTags,onSelect,onSelectDraft,onNewMsg,onEditContact,
                        contactTags,allTags,onAddContactTag,onRemoveContactTag,
                        emailFlags,archivedContacts,onToggleFlag,
-                       savedFilter,onFilterChange,mobileBack}) {
+                       savedFilter,onFilterChange,onMarkManyRead,mobileBack}) {
   const isMobile = typeof window !== 'undefined' && window.innerWidth < 768;
   const [nameHover,setNameHover]=useState(false);
   const [flagsOpen,setFlagsOpen]=useState(false);
@@ -3118,6 +3120,27 @@ function ThreadColumn({contact,allMsgs,deletedIds,selectedMsgId,msgTags,onSelect
     const sortKey=x=>x.draft?(x.modifiedAt||x.date):x.date;
     return [...m].sort((a,b)=>sortKey(b).localeCompare(sortKey(a)));
   },[allMsgs,filter,deletedIds]);
+
+  // Actionable = unread incoming + outgoing with armed revert2me. Same
+  // definition as the "Now" filter and the left-column actionable badge.
+  // The alert below the contact card surfaces when the pile gets large
+  // enough that scrolling through them feels daunting; clicking "All
+  // Seen" marks them all read in one go.
+  const actionableInThread = useMemo(() => allMsgs.filter(
+    x => !deletedIds.includes(x.id) && !x.draft &&
+      ((x.dir === 'in' && !x.read) || (x.dir === 'out' && x.revert2me))
+  ), [allMsgs, deletedIds]);
+  const actionableAlert = actionableInThread.length > 5 ? (
+    <div className="px-4 py-2 bg-amber-50 border-b border-amber-200 flex items-center justify-between gap-2 flex-shrink-0">
+      <span className="text-xs text-amber-800">
+        <span className="font-semibold">{actionableInThread.length}</span> actionable mails
+      </span>
+      <button onClick={()=>onMarkManyRead?.(actionableInThread.map(m=>m.id))}
+        className="text-xs px-2.5 py-1 rounded bg-amber-200 hover:bg-amber-300 text-amber-900 font-semibold transition-colors">
+        All Seen
+      </button>
+    </div>
+  ) : null;
 
   if(!contact) return (
     <div className="flex items-center justify-center h-full bg-white text-gray-300 text-sm select-none">
@@ -3172,7 +3195,7 @@ function ThreadColumn({contact,allMsgs,deletedIds,selectedMsgId,msgTags,onSelect
               </button>
               {flagsOpen&&(
                 <div className="absolute right-0 top-full mt-1 z-20 bg-white border border-gray-200 rounded-lg shadow-lg overflow-hidden" style={{minWidth:140}}>
-                  {[['News','isNews'],['Vendor','isMuted']].map(([label,key])=>{
+                  {[['News','isNews'],['noReply','isMuted']].map(([label,key])=>{
                     const checked=!!contact[key];
                     return <button key={label} onClick={()=>onToggleFlag?.(contact.id,key)}
                       className="w-full flex items-center gap-2 px-3 py-2 text-sm text-gray-700 hover:bg-gray-50">
@@ -3216,6 +3239,7 @@ function ThreadColumn({contact,allMsgs,deletedIds,selectedMsgId,msgTags,onSelect
           </div>
         </div>
 
+        {actionableAlert}
         {/* Messages */}
         <div ref={listRef} className="flex-shrink-0 bg-white">
           {msgs.length===0&&<div className="text-center text-gray-300 text-sm mt-10">No messages</div>}
@@ -3271,7 +3295,7 @@ function ThreadColumn({contact,allMsgs,deletedIds,selectedMsgId,msgTags,onSelect
                   <PencilIcon size={11}/>
                 </span>
               </div>
-              {[['News','isNews'],['Vendor','isMuted']].map(([label,key])=>{
+              {[['News','isNews'],['noReply','isMuted']].map(([label,key])=>{
                 const on=!!contact[key];
                 const cls=on?'bg-indigo-50 border-indigo-300 text-indigo-600'
                   :'border-gray-200 text-gray-300 hover:border-gray-300 hover:text-gray-500';
@@ -3310,6 +3334,7 @@ function ThreadColumn({contact,allMsgs,deletedIds,selectedMsgId,msgTags,onSelect
           })}
         </div>
       </div>
+      {actionableAlert}
       {/* Messages */}
       <div ref={listRef} className="flex-1 overflow-y-auto scroll">
         {msgs.length===0&&<div className="text-center text-gray-300 text-sm mt-10">No messages</div>}
@@ -3683,7 +3708,7 @@ function LeftColumn({contactMeta, archivedContacts, selectedId, mergeId, onSelec
                      dataLoading=false}) {
   const [accDropOpen, setAccDropOpen] = useState(false);
   const [contactTab,  setContactTabRaw] = useState('Convo');
-  // Switching tabs (Convo / News / Vendors / Archive) shows a different
+  // Switching tabs (Convo / News / noReply / Archive) shows a different
   // contact subset, so the currently-open contact + mail in cols 2/3
   // should clear back to empty state. The parent App handles the actual
   // state clearing — we just fire the callback on every tab change.
@@ -3707,7 +3732,7 @@ function LeftColumn({contactMeta, archivedContacts, selectedId, mergeId, onSelec
     const c = contactMeta.find(m => m.contact.id === id)?.contact;
     if (!c) return 'Convo';
     if (archivedContacts.has(id)) return 'Archive';
-    if (c.isMuted) return 'Vendors';
+    if (c.isMuted) return 'noReply';
     if (c.isNews)  return 'News';
     return 'Convo';
   }
@@ -3947,9 +3972,9 @@ function LeftColumn({contactMeta, archivedContacts, selectedId, mergeId, onSelec
         </div>
         {!collapsed.contacts&&(
           <div className="flex px-2 pt-[3px] pb-1.5 gap-0.5">
-            {['Convo','News','Vendors','Archive'].map(tab=>{
+            {['Convo','News','noReply','Archive'].map(tab=>{
               const active=contactTab===tab;
-              const badge=(!active&&(tab==='Convo'||tab==='News'||tab==='Vendors'))?tabBadge(tab):0;
+              const badge=(!active&&(tab==='Convo'||tab==='News'||tab==='noReply'))?tabBadge(tab):0;
               return <button key={tab} onClick={()=>setContactTab(tab)}
                 className={`convooz-contact-tab flex-1 text-xs py-1 rounded transition-colors ${active?'bg-indigo-50 text-indigo-700 font-semibold':'text-gray-400 hover:text-gray-600'}`}>
                 {tab}{badge>0&&<span className="ml-0.5 opacity-70">({badge})</span>}
@@ -3978,7 +4003,7 @@ function LeftColumn({contactMeta, archivedContacts, selectedId, mergeId, onSelec
           {!(dataLoading && contactMeta.length===0) && (<>
             {activeContacts.length===0 && (
               <div className="px-3 py-3 text-xs text-gray-300 italic">
-                {contactTab==='News'?'No newsletter contacts':contactTab==='Vendors'?'No vendors':contactTab==='Archive'?'No archived contacts':'No contacts'}
+                {contactTab==='News'?'No newsletter contacts':contactTab==='noReply'?'No noReply contacts':contactTab==='Archive'?'No archived contacts':'No contacts'}
               </div>
             )}
             {activeContacts.map(({contact,unread,hasR2m,r2mCount})=><ContactRow key={contact.id} contact={contact} unread={unread} hasR2m={hasR2m} r2mCount={r2mCount}/>)}
@@ -4074,9 +4099,9 @@ function LeftColumn({contactMeta, archivedContacts, selectedId, mergeId, onSelec
           </button>
         </div>
         {!collapsed.contacts&&<div className="flex px-2 pt-[3px] pb-1.5 gap-0.5">
-          {['Convo','News','Vendors','Archive'].map(tab=>{
+          {['Convo','News','noReply','Archive'].map(tab=>{
             const active=contactTab===tab;
-            const badge=(!active&&(tab==='Convo'||tab==='News'||tab==='Vendors'))?tabBadge(tab):0;
+            const badge=(!active&&(tab==='Convo'||tab==='News'||tab==='noReply'))?tabBadge(tab):0;
             return <button key={tab} onClick={()=>setContactTab(tab)}
               className={`convooz-contact-tab flex-1 text-xs py-1 rounded transition-colors ${active?'bg-indigo-50 text-indigo-700 font-semibold':'text-gray-400 hover:text-gray-600'}`}>
               {tab}{badge>0&&<span className="ml-0.5 opacity-70">({badge})</span>}
@@ -4105,7 +4130,7 @@ function LeftColumn({contactMeta, archivedContacts, selectedId, mergeId, onSelec
           <div className="flex-1 overflow-y-auto scroll">
             {!(dataLoading && contactMeta.length===0) && (<>
               {activeContacts.length===0&&<div className="px-3 py-3 text-xs text-gray-300 italic">
-                {contactTab==='News'?'No newsletter contacts':contactTab==='Vendors'?'No vendors':contactTab==='Archive'?'No archived contacts':'No contacts'}
+                {contactTab==='News'?'No newsletter contacts':contactTab==='noReply'?'No noReply contacts':contactTab==='Archive'?'No archived contacts':'No contacts'}
               </div>}
               {activeContacts.map(({contact,unread,hasR2m,r2mCount})=><ContactRow key={contact.id} contact={contact} unread={unread} hasR2m={hasR2m} r2mCount={r2mCount}/>)}
             </>)}
@@ -6179,6 +6204,26 @@ function App({userId, onSignOut}) {
     // No toast — the banner disappearing is feedback enough.
     persistSeen(id);
   }
+  // Bulk variant for the "All Seen" button on the actionable-alert above
+  // a contact's thread. Flips read/r2m flags in one optimistic state
+  // update, then fires the per-id persist call so the IMAP \Seen flag
+  // and any active revert2me both land on the server. Toast carries the
+  // count so the action is visible (no per-mail "Seen" toast spam).
+  function handleMarkManyRead(ids){
+    if (!Array.isArray(ids) || ids.length === 0) return;
+    const idSet = new Set(ids);
+    setMessageList(prev => prev.map(m =>
+      idSet.has(m.id) ? { ...m, read: true, revert2me: false, r2mArmed: false } : m,
+    ));
+    setActionToast(`Marked ${ids.length} mails as seen`);
+    for (const id of ids) {
+      const msg = messageList.find(m => m.id === id);
+      // Incoming unread → \Seen via persistSeen. Outgoing armed-r2m →
+      // dismiss via persistR2m. Both signal "I've handled this".
+      if (msg && msg.dir === 'in' && !msg.read) persistSeen(id);
+      else persistR2m(id, { dismiss: true });
+    }
+  }
   function handleSnoozeMsg(id){ gateOnSnoozeOnboarding(() => doSnoozeMsg(id)); }
   function doSnoozeMsg(id){
     captureAlert(id);
@@ -6456,7 +6501,7 @@ function App({userId, onSignOut}) {
         refreshData();
       });
   }
-  // Switching tabs in the left column (Convo / News / Vendors / Archive)
+  // Switching tabs in the left column (Convo / News / noReply / Archive)
   // shows a different contact subset, so the currently-open contact + mail
   // detail should empty out — they may not even live in the new tab.
   function handleContactTabChange() {
@@ -6522,7 +6567,7 @@ function App({userId, onSignOut}) {
     apiFetch(`/contacts/${id}`, { method:'PATCH', body: JSON.stringify({ [bodyKey]: newVal }) })
       .catch(e => {
         setContactList(prev => prev.map(c => c.id===id ? {...c, [flag]: wasOn} : c));
-        setActionToast((flag==='isNews'?'News':'Vendor') + ' toggle failed: ' + e.message);
+        setActionToast((flag==='isNews'?'News':'noReply') + ' toggle failed: ' + e.message);
       });
   }
   function handleToggleEmailFlag(id, email, flag){
@@ -6814,6 +6859,7 @@ function App({userId, onSignOut}) {
       onToggleFlag={handleToggleContactFlag}
       savedFilter={contactFilter}
       onFilterChange={handleContactFilterChange}
+      onMarkManyRead={handleMarkManyRead}
       mobileBack={()=>setMobileCol(0)}/>;
   }
 
