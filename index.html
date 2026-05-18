@@ -184,7 +184,7 @@
        polish change is picked up by every browser as soon as the version
        is bumped — no manual cache-busters needed. Keep ?v= here in sync
        with APP_VERSION below at every deploy. -->
-  <link rel="stylesheet" href="polish.css?v=0.0.166"/>
+  <link rel="stylesheet" href="polish.css?v=0.0.167"/>
 </head>
 <body>
 <div id="root">
@@ -199,7 +199,7 @@ const { useState, useMemo, useRef, useEffect, useCallback } = React;
 
 // ─── Constants ───────────────────────────────────────────────────────────────
 
-const APP_VERSION = "0.0.166"; // bumped on every deploy — keep in sync with version.json AND with the ?v= on polish.css above
+const APP_VERSION = "0.0.167"; // bumped on every deploy — keep in sync with version.json AND with the ?v= on polish.css above
 
 // ─── Backend + Supabase config ───────────────────────────────────────────────
 const SUPABASE_URL = "https://oyrlzqbjcsliesvunbwj.supabase.co";
@@ -3144,7 +3144,12 @@ function ThreadColumn({contact,allMsgs,deletedIds,selectedMsgId,msgTags,onSelect
   // The background is forced via inline style because polish.css rewrites
   // .bg-gray-50 inside column 2 to pure white (so contact thread cards
   // stay white-on-canvas) — the alert wants the column-3 banner tint.
-  const actionableAlert = actionableInThread.length > 5 ? (
+  // Only surface on Now / All — those are the filters where reading
+  // through the pile makes sense. On In / Out / Draft / Deleted the
+  // user is already in a specific scope and a global "mark everything
+  // seen" would feel like a side-effect outside of view.
+  const actionableAlertEligibleFilter = filter === 'now' || filter === 'all';
+  const actionableAlert = (actionableAlertEligibleFilter && actionableInThread.length > 5) ? (
     <div className="mx-4 mt-3 px-3 py-2 rounded border border-gray-200 flex items-center gap-2 text-xs text-gray-600 flex-shrink-0"
       style={{backgroundColor: 'var(--bg-card-soft)'}}>
       <span><span className="font-semibold text-gray-800">{actionableInThread.length}</span> actionable mails</span>
@@ -3208,7 +3213,7 @@ function ThreadColumn({contact,allMsgs,deletedIds,selectedMsgId,msgTags,onSelect
               </button>
               {flagsOpen&&(
                 <div className="absolute right-0 top-full mt-1 z-20 bg-white border border-gray-200 rounded-lg shadow-lg overflow-hidden" style={{minWidth:140}}>
-                  {[['News','isNews'],['Noreply','isNoReply'],['Muted','isMuted']].map(([label,key])=>{
+                  {[['News','isNews'],['Noreply','isNoReply'],['Mute','isMuted']].map(([label,key])=>{
                     const checked=!!contact[key];
                     return <button key={label} onClick={()=>onToggleFlag?.(contact.id,key)}
                       className="w-full flex items-center gap-2 px-3 py-2 text-sm text-gray-700 hover:bg-gray-50">
@@ -3310,7 +3315,7 @@ function ThreadColumn({contact,allMsgs,deletedIds,selectedMsgId,msgTags,onSelect
                   <PencilIcon size={11}/>
                 </span>
               </div>
-              {[['News','isNews'],['Noreply','isNoReply'],['Muted','isMuted']].map(([label,key])=>{
+              {[['News','isNews'],['Noreply','isNoReply'],['Mute','isMuted']].map(([label,key])=>{
                 const on=!!contact[key];
                 const cls=on?'bg-indigo-50 border-indigo-300 text-indigo-600'
                   :'border-gray-200 text-gray-300 hover:border-gray-300 hover:text-gray-500';
@@ -6680,7 +6685,7 @@ function App({userId, onSignOut}) {
                   : 'is_muted';
     const labelForToast = flag === 'isNews' ? 'News'
                         : flag === 'isNoReply' ? 'Noreply'
-                        : 'Muted';
+                        : 'Mute';
     apiFetch(`/contacts/${id}`, { method:'PATCH', body: JSON.stringify({ [bodyKey]: newVal }) })
       .catch(e => {
         setContactList(prev => prev.map(c => c.id===id ? {...c, [flag]: wasOn} : c));
