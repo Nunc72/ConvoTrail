@@ -184,7 +184,7 @@
        polish change is picked up by every browser as soon as the version
        is bumped — no manual cache-busters needed. Keep ?v= here in sync
        with APP_VERSION below at every deploy. -->
-  <link rel="stylesheet" href="polish.css?v=0.0.181"/>
+  <link rel="stylesheet" href="polish.css?v=0.0.182"/>
 </head>
 <body>
 <div id="root">
@@ -199,7 +199,7 @@ const { useState, useMemo, useRef, useEffect, useCallback } = React;
 
 // ─── Constants ───────────────────────────────────────────────────────────────
 
-const APP_VERSION = "0.0.181"; // bumped on every deploy — keep in sync with version.json AND with the ?v= on polish.css above
+const APP_VERSION = "0.0.182"; // bumped on every deploy — keep in sync with version.json AND with the ?v= on polish.css above
 
 // ─── Backend + Supabase config ───────────────────────────────────────────────
 const SUPABASE_URL = "https://oyrlzqbjcsliesvunbwj.supabase.co";
@@ -6191,6 +6191,66 @@ function App({userId, onSignOut}) {
   }, [selContact, selMsg]);
 
   // ── Handlers ──
+  // Lazy-fetch mails for a contact whose messages aren't in messageList
+  // yet (because they fell below the /bootstrap top-500 cutoff). Raw
+  // rows from /messages-for-contact go through a minimal shape locally
+  // and merge into messageList. revert2me / r2mArmed default to false
+  // for these — they're older mails, the active r2m alerts live in the
+  // top-500 anyway. body/bodyHtml are left undefined so MessageDetail
+  // fires its existing on-demand /body fetch on first click.
+  async function lazyFetchContactMessages(contactId) {
+    try {
+      const r = await apiFetch(`/messages-for-contact?contact=${encodeURIComponent(contactId)}`);
+      const rows = r?.messages || [];
+      if (rows.length === 0) return;
+      const accountEmailById = new Map(mailAccounts.map(a => [a.id, (a.email || '').toLowerCase()]));
+      const accountById = new Map(mailAccounts.map(a => [a.id, a]));
+      const shaped = rows.map(m => {
+        const accountEmail = accountEmailById.get(m.mail_account_id) ?? '';
+        const allRecipients = Array.isArray(m.to_emails) ? m.to_emails : [];
+        const toList = allRecipients.filter(e => (e.role || 'to') === 'to').map(e => e.email).filter(Boolean);
+        const ccList = allRecipients.filter(e => e.role === 'cc').map(e => e.email).filter(Boolean);
+        let sender = null;
+        if (m.direction === 'out') {
+          const acc = accountById.get(m.mail_account_id);
+          const name = acc?.display_name || acc?.email || accountEmail || 'Me';
+          sender = { name, emails: [accountEmail], avatar: initialsOf(name), color: acc?.color || '#6366f1', portrait: null };
+        }
+        return {
+          id: m.id, accountId: m.mail_account_id, accountEmail, contactId,
+          dir: m.direction,
+          subject: m.subject || '(no subject)',
+          from: m.from_email || '',
+          to: toList[0] || allRecipients[0]?.email || '',
+          toList, ccList,
+          date: m.date,
+          read: !!m.flags?.seen,
+          revert2me: false,
+          r2mArmed: false,
+          draft: !!m.flags?.draft,
+          body: undefined,
+          bodyHtml: undefined,
+          snippet: m.snippet || '',
+          hasAttachments: !!m.has_attachments,
+          attachmentsMeta: Array.isArray(m.attachments_meta) ? m.attachments_meta : null,
+          spam: !!m.spam,
+          unsubscribeUrl: m.unsubscribe_url || null,
+          unsubscribeOneClick: !!m.unsubscribe_one_click,
+          sender,
+        };
+      });
+      setMessageList(prev => {
+        // Avoid duplicating ids that might already be in messageList
+        // (e.g. a thread that crosses the top-500 boundary).
+        const have = new Set(prev.map(m => m.id));
+        const fresh = shaped.filter(m => !have.has(m.id));
+        if (fresh.length === 0) return prev;
+        return [...prev, ...fresh];
+      });
+    } catch (e) {
+      console.warn('[Convooz] lazy-fetch contact messages failed:', e?.message || e);
+    }
+  }
   function handleSelectContact(id,e){
     if(e?.shiftKey&&selContact!==null&&selContact!==id){setMergeContact(id);setShowCompose(false);setSelMsg(null);return;}
     // Any plain tap clears the pending swipe-merge marker. The user can
@@ -6199,6 +6259,14 @@ function App({userId, onSignOut}) {
     setSelContact(id);setMergeContact(null);setSelTag(null);
     setShowCompose(false);setReplyTo(null);setReplyKind(null);setComposeContact(null);setComposeDraft(null);setEditingContact(null);
     setSearchQuery('');setSearchScope('all');
+    // Lazy-fetch contact mails if messageList carries nothing for this
+    // contact yet. Happens when the contact's mails sit below the
+    // bootstrap top-500 cutoff (older relationships, low-volume sender).
+    // Fire-and-forget: the setMessageList in the handler triggers a
+    // re-render so the thread populates as soon as the request lands.
+    if (!messageList.some(m => m.contactId === id)) {
+      lazyFetchContactMessages(id);
+    }
     if(isMobile) { setMobileCol(1); setSelMsg(null); return; }
     // We only pick a message that's actually visible in the current
     // ThreadColumn filter tab — otherwise col 3 would show a mail that

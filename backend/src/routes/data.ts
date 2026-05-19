@@ -277,4 +277,59 @@ export async function registerDataRoutes(app: FastifyInstance) {
     if (error) return reply.internalServerError(error.message);
     return { messages: data };
   });
+
+  // ─── Messages for one contact (lazy load) ───────────────────────────────
+  // Bootstrap caps at the 500 most-recent mails. Contacts whose mails
+  // sit below that cutoff (older relationships, low-volume senders)
+  // still appear in the contact list — via the contact_account_emails
+  // map — but the FE messageList has nothing for them. Clicking the
+  // contact would otherwise show an empty thread. This endpoint pulls
+  // every message that involves the contact (from_email OR any
+  // recipient in to_emails matches one of the contact's emails). The
+  // FE merges the result into messageList.
+  app.get<{ Querystring: { contact?: string; limit?: string } }>(
+    "/messages-for-contact",
+    auth,
+    async (req, reply) => {
+      const contactId = (req.query.contact || "").trim();
+      if (!contactId) return reply.badRequest("contact required");
+      const limit = Math.min(Number(req.query.limit) || 300, 1000);
+
+      const pool = requirePool();
+      const userId = req.authUser!.id;
+
+      // Resolve the contact's emails, scoped to this user.
+      const ce = await pool.query<{ email: string }>(
+        `SELECT email FROM contact_emails
+          WHERE contact_id = $1 AND user_id = $2`,
+        [contactId, userId],
+      );
+      if (ce.rows.length === 0) return { messages: [] };
+      const emails = ce.rows.map(r => r.email.toLowerCase());
+
+      // ANY-of array match on from_email OR any to_emails entry. Same
+      // shape as /bootstrap.messages so the FE can apply its existing
+      // shaping logic without case-splitting.
+      const r = await pool.query(
+        `SELECT m.id, m.mail_account_id, m.folder, m.uid, m.message_id, m.thread_id,
+                m.from_email, m.from_name, m.to_emails,
+                m.subject, m.snippet, m.date, m.flags, m.direction,
+                m.deleted_at, m.spam, m.has_attachments, m.attachments_meta,
+                m.unsubscribe_url, m.unsubscribe_one_click
+           FROM messages m
+          WHERE m.user_id = $1
+            AND (
+              LOWER(m.from_email) = ANY($2::text[])
+              OR EXISTS (
+                SELECT 1 FROM jsonb_array_elements(COALESCE(m.to_emails, '[]'::jsonb)) te
+                 WHERE LOWER(te->>'email') = ANY($2::text[])
+              )
+            )
+          ORDER BY m.date DESC
+          LIMIT $3`,
+        [userId, emails, limit],
+      );
+      return { messages: r.rows };
+    },
+  );
 }
