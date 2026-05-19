@@ -228,6 +228,37 @@ export async function syncAccount(accountId: string): Promise<SyncResult> {
       contactsCreated = await upsertContacts(userId, allExtractedAddrs);
     }
 
+    // 3a) Vangnet voor "wees" mails — distinct from_emails in DB die
+    // (om welke reden dan ook) géén contact_emails row hebben. Kon
+    // gebeuren als een eerdere sync een race had, een insert faalde,
+    // of de upsert-pad simpelweg overgeslagen werd doordat de UID al
+    // bekend was. Elke sync-run vult eventuele gaten op.
+    try {
+      const orphans = await pool.query<{ from_email: string }>(
+        `SELECT DISTINCT m.from_email
+           FROM messages m
+          WHERE m.user_id = $1
+            AND m.from_email IS NOT NULL AND m.from_email <> ''
+            AND NOT EXISTS (
+              SELECT 1 FROM contact_emails ce
+               WHERE ce.user_id = m.user_id
+                 AND LOWER(ce.email) = LOWER(m.from_email)
+            )`,
+        [userId],
+      );
+      if (orphans.rows.length > 0) {
+        const orphanMap = new Map<string, string | null>();
+        for (const r of orphans.rows) orphanMap.set(r.from_email, null);
+        orphanMap.delete(userEmail);
+        if (orphanMap.size > 0) {
+          contactsCreated += await upsertContacts(userId, orphanMap);
+        }
+      }
+    } catch {
+      // Non-fatal — main sync already succeeded; orphan cleanup
+      // retries on the next sync run.
+    }
+
     // 3.5) Auto-tag newsletter contacts. For each sender that had a
     // List-Unsubscribe header in this sync, flip is_news = true — but
     // ONLY when the user hasn't already toggled News themselves

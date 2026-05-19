@@ -135,6 +135,82 @@ export async function registerDataRoutes(app: FastifyInstance) {
       req.log.warn({ err: e }, "bootstrap: contact↔account mapping failed (non-fatal)");
     }
 
+    // Per-contact aggregate stats over ALL messages, so the FE can
+    // sort the contact list (and show badges) without depending on
+    // whatever happens to be in the top-500 messages payload. Three
+    // numbers per contact:
+    //   latest_date  — newest non-deleted, non-draft message that
+    //                  involves the contact (sender OR recipient)
+    //   unread       — incoming non-deleted, non-draft, !seen mails
+    //   r2m          — outgoing mails with an armed (not dismissed)
+    //                  r2m_state row
+    // Each runs as its own query; merged client-side. Non-fatal if
+    // any of them fails — FE drops back to message-derived metrics.
+    let contactStats: Record<string, { latest_date: string | null; unread: number; r2m: number }> = {};
+    try {
+      const pool = requirePool();
+      // Distinct (contact_id, message) pairs across from/to matches —
+      // a single physical mail counts once per contact involvement.
+      const baseCte = `
+        WITH per_msg AS (
+          SELECT ce.contact_id, m.id, m.date, m.flags, m.direction, m.deleted_at
+            FROM messages m
+            JOIN contact_emails ce ON LOWER(ce.email) = LOWER(m.from_email)
+           WHERE m.user_id = $1
+          UNION
+          SELECT ce.contact_id, m.id, m.date, m.flags, m.direction, m.deleted_at
+            FROM messages m
+            CROSS JOIN LATERAL jsonb_array_elements(COALESCE(m.to_emails, '[]'::jsonb)) te
+            JOIN contact_emails ce ON LOWER(ce.email) = LOWER(te->>'email')
+           WHERE m.user_id = $1
+        )
+      `;
+      const statsRes = await pool.query<{ contact_id: string; latest_date: string | null; unread: string; r2m: string }>(
+        baseCte + `
+        SELECT
+          contact_id,
+          MAX(date) FILTER (WHERE deleted_at IS NULL AND NOT COALESCE((flags->>'draft')::bool, false)) AS latest_date,
+          COUNT(*) FILTER (
+            WHERE deleted_at IS NULL
+              AND direction = 'in'
+              AND NOT COALESCE((flags->>'seen')::bool, false)
+              AND NOT COALESCE((flags->>'draft')::bool, false)
+          )::text AS unread,
+          0::text AS r2m
+          FROM per_msg
+         GROUP BY contact_id
+        `,
+        [req.authUser!.id],
+      );
+      // r2m: outgoing mail to a contact with an active r2m_state row.
+      const r2mRes = await pool.query<{ contact_id: string; r2m: string }>(
+        `WITH per_msg AS (
+          SELECT ce.contact_id, m.id
+            FROM messages m
+            CROSS JOIN LATERAL jsonb_array_elements(COALESCE(m.to_emails, '[]'::jsonb)) te
+            JOIN contact_emails ce ON LOWER(ce.email) = LOWER(te->>'email')
+           WHERE m.user_id = $1
+             AND m.direction = 'out'
+             AND m.deleted_at IS NULL
+         )
+         SELECT pm.contact_id, COUNT(*)::text AS r2m
+           FROM per_msg pm
+           JOIN r2m_state rs ON rs.message_id = pm.id
+          WHERE rs.dismissed_at IS NULL
+          GROUP BY pm.contact_id`,
+        [req.authUser!.id],
+      );
+      const r2mByContact = new Map<string, number>();
+      for (const r of r2mRes.rows) r2mByContact.set(r.contact_id, Number(r.r2m));
+      contactStats = Object.fromEntries(statsRes.rows.map(r => [r.contact_id, {
+        latest_date: r.latest_date,
+        unread: Number(r.unread),
+        r2m: r2mByContact.get(r.contact_id) ?? 0,
+      }]));
+    } catch (e) {
+      req.log.warn({ err: e }, "bootstrap: contact_stats failed (non-fatal)");
+    }
+
     // Phase 2: collect bodies for the "actionable" subset only — unread
     // incoming + active r2m, so the mails the user is most likely to
     // open are instant. The previous version also packed in the 300
@@ -207,6 +283,7 @@ export async function registerDataRoutes(app: FastifyInstance) {
       draft_attachments: draftAttsRes.data,
       message_count_by_account: messageCountByAccount,
       contact_account_emails: contactAccountEmails,
+      contact_stats: contactStats,
     };
   });
 

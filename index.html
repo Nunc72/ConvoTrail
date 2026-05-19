@@ -184,7 +184,7 @@
        polish change is picked up by every browser as soon as the version
        is bumped — no manual cache-busters needed. Keep ?v= here in sync
        with APP_VERSION below at every deploy. -->
-  <link rel="stylesheet" href="polish.css?v=0.0.182"/>
+  <link rel="stylesheet" href="polish.css?v=0.0.183"/>
 </head>
 <body>
 <div id="root">
@@ -199,7 +199,7 @@ const { useState, useMemo, useRef, useEffect, useCallback } = React;
 
 // ─── Constants ───────────────────────────────────────────────────────────────
 
-const APP_VERSION = "0.0.182"; // bumped on every deploy — keep in sync with version.json AND with the ?v= on polish.css above
+const APP_VERSION = "0.0.183"; // bumped on every deploy — keep in sync with version.json AND with the ?v= on polish.css above
 
 // ─── Backend + Supabase config ───────────────────────────────────────────────
 const SUPABASE_URL = "https://oyrlzqbjcsliesvunbwj.supabase.co";
@@ -3096,7 +3096,7 @@ const FILTER_TABS = ["Now","All","In","Out","Draft","Deleted"];
 function ThreadColumn({contact,allMsgs,deletedIds,selectedMsgId,msgTags,onSelect,onSelectDraft,onNewMsg,onEditContact,
                        contactTags,allTags,onAddContactTag,onRemoveContactTag,
                        emailFlags,archivedContacts,onToggleFlag,
-                       savedFilter,onFilterChange,onMarkManyRead,mobileBack}) {
+                       savedFilter,onFilterChange,onMarkManyRead,lazyFetching,mobileBack}) {
   const isMobile = typeof window !== 'undefined' && window.innerWidth < 768;
   const [nameHover,setNameHover]=useState(false);
   const [flagsOpen,setFlagsOpen]=useState(false);
@@ -3260,7 +3260,12 @@ function ThreadColumn({contact,allMsgs,deletedIds,selectedMsgId,msgTags,onSelect
         {actionableAlert}
         {/* Messages */}
         <div ref={listRef} className="flex-shrink-0 bg-white">
-          {msgs.length===0&&<div className="text-center text-gray-300 text-sm mt-10">No messages</div>}
+          {msgs.length===0&&(lazyFetching
+              ? <div className="flex flex-col items-center justify-center gap-2 text-gray-400 text-sm mt-10">
+                  <Spinner size={16}/>
+                  <span>Loading messages…</span>
+                </div>
+              : <div className="text-center text-gray-300 text-sm mt-10">No messages</div>)}
           {msgs.map(msg=>{
             const isSel=msg.id===selectedMsgId, isDel=deletedIds.includes(msg.id), isDraft=!!msg.draft&&!isDel;
             const isOut=msg.dir==="out"||isDraft;
@@ -3357,7 +3362,12 @@ function ThreadColumn({contact,allMsgs,deletedIds,selectedMsgId,msgTags,onSelect
       {actionableAlert}
       {/* Messages */}
       <div ref={listRef} className="flex-1 overflow-y-auto scroll">
-        {msgs.length===0&&<div className="text-center text-gray-300 text-sm mt-10">No messages</div>}
+        {msgs.length===0&&(lazyFetching
+              ? <div className="flex flex-col items-center justify-center gap-2 text-gray-400 text-sm mt-10">
+                  <Spinner size={16}/>
+                  <span>Loading messages…</span>
+                </div>
+              : <div className="text-center text-gray-300 text-sm mt-10">No messages</div>)}
         {msgs.map(msg=>{
           const isSel=msg.id===selectedMsgId, isDel=deletedIds.includes(msg.id), isDraft=!!msg.draft&&!isDel;
           const isOut=msg.dir==="out"||isDraft;
@@ -5117,6 +5127,16 @@ function App({userId, onSignOut}) {
   // and overwrites these once it completes.
   const [mailAccounts, setMailAccounts] = useState(()=>bootstrapCache?.mailAccounts ?? []);
   const [contactList,  setContactList]  = useState(()=>bootstrapCache?.contactList ?? []);
+  // Per-contact aggregate stats from /bootstrap, computed server-side
+  // over ALL messages (not just the top-500 messageList). Used as the
+  // SORT key for the contact list so it doesn't reshuffle while
+  // lazy-fetched messages stream in. Shape: { [contactId]: { latest_date, unread, r2m } }
+  const [contactStats, setContactStats] = useState(()=>bootstrapCache?.contactStats ?? {});
+  // Tracks which contactId currently has a lazy-fetch in flight; the
+  // ThreadColumn shows a spinner instead of "Select a contact" while
+  // the network round-trip is pending and messageList still has no
+  // rows for the selected contact.
+  const [lazyFetchingContactId, setLazyFetchingContactId] = useState(null);
   // messageList hydration drops rows that reference a mail-account id
   // the cache no longer knows about. That keeps the first paint
   // consistent with the cached mailAccounts list: if the user deleted
@@ -5155,7 +5175,7 @@ function App({userId, onSignOut}) {
       setDataError('');
       setBootstrapFetching(true);
       try {
-        const { mail_accounts: rawAccounts, contacts, messages, drafts, tags, message_tags, r2m_state, signatures: sigs, account_signatures: accSigs, draft_attachments: draftAtts, message_count_by_account, contact_account_emails } = await apiFetch('/bootstrap?limit=500');
+        const { mail_accounts: rawAccounts, contacts, messages, drafts, tags, message_tags, r2m_state, signatures: sigs, account_signatures: accSigs, draft_attachments: draftAtts, message_count_by_account, contact_account_emails, contact_stats } = await apiFetch('/bootstrap?limit=500');
         // Pin the per-account synced count onto each mailAccount object so
         // the user-menu progress widget can read mailAccount.messages_count
         // / mailAccount.sync_known_uids without a separate state slice.
@@ -5478,6 +5498,7 @@ function App({userId, onSignOut}) {
         setMailAccounts(mail_accounts);
         setContactList(shapedContacts);
         setMessageList(combinedMessages);
+        setContactStats(contact_stats || {});
         setTagList(tagList);
         setTagIdByName(idByName);
         setMsgTags(mt);
@@ -6004,25 +6025,33 @@ function App({userId, onSignOut}) {
         // bullet anywhere, so it shouldn't inflate the badge either.
         const unread=active.filter(m=>!m.read&&m.dir==='in').length;
         const newestUnread=unread>0?active.filter(m=>!m.read&&m.dir==='in').reduce((a,b)=>a.date>b.date?a:b).date:'';
-        const lastDate=active.length>0?active.reduce((a,b)=>a.date>b.date?a:b).date:(all.length>0?all.reduce((a,b)=>a.date>b.date?a:b).date:"");
+        const localLastDate=active.length>0?active.reduce((a,b)=>a.date>b.date?a:b).date:(all.length>0?all.reduce((a,b)=>a.date>b.date?a:b).date:"");
         const r2mMsgs=active.filter(m=>m.revert2me&&m.dir==="out");
         const hasR2m=r2mMsgs.length>0;
         const r2mCount=r2mMsgs.length;
         const newestR2m=hasR2m?r2mMsgs.reduce((a,b)=>a.date>b.date?a:b).date:'';
-        // Surface "actionable" contacts (anything new for the user to deal
-        // with: an unread incoming or an outgoing without a reply yet) to
-        // the top of the list, sorted by the freshest of those two signals
-        // so the most-recent thing-needing-attention is right at the top.
-        const newestActionable=newestUnread>newestR2m?newestUnread:newestR2m;
-        return{contact,unread,newestUnread,lastDate,hasR2m,r2mCount,newestActionable};
+        // Sort-stable signals from the server (computed over ALL messages,
+        // not just the top-500 in messageList). Used as the sort key so a
+        // lazy-fetch landing more messages for this contact doesn't
+        // re-sort the entire list. Local message-derived counts above are
+        // still used for the visible badge — they reflect the user's
+        // current account-selector scope and react instantly to local
+        // mark-read / snooze / delete actions.
+        const stats = contactStats[contact.id];
+        const sortLastDate = (stats?.latest_date) || localLastDate;
+        const sortIsActionable = stats
+          ? (stats.unread > 0 || stats.r2m > 0)
+          : (unread > 0 || hasR2m);
+        return{contact,unread,newestUnread,lastDate:localLastDate,hasR2m,r2mCount,newestActionable:newestUnread>newestR2m?newestUnread:newestR2m,sortLastDate,sortIsActionable};
       })
       .sort((a,b)=>{
-        const aa=a.unread>0||a.hasR2m, ba=b.unread>0||b.hasR2m;
-        if(aa&&!ba)return-1;if(!aa&&ba)return 1;
-        if(aa&&ba)return b.newestActionable.localeCompare(a.newestActionable);
-        return b.lastDate.localeCompare(a.lastDate);
+        if (a.sortIsActionable && !b.sortIsActionable) return -1;
+        if (!a.sortIsActionable && b.sortIsActionable) return 1;
+        // Within each group, sort by the server-side latest-message
+        // date so additions from lazy-fetch don't reshuffle anything.
+        return (b.sortLastDate || '').localeCompare(a.sortLastDate || '');
       });
-  },[contactList,messageList,deletedIds,selAccounts]);
+  },[contactList,messageList,contactStats,deletedIds,selAccounts]);
 
   // Actionable-count badge for the account selector: how many "things to
   // deal with" exist across the user's accounts (unread incoming + active
@@ -6199,6 +6228,7 @@ function App({userId, onSignOut}) {
   // top-500 anyway. body/bodyHtml are left undefined so MessageDetail
   // fires its existing on-demand /body fetch on first click.
   async function lazyFetchContactMessages(contactId) {
+    setLazyFetchingContactId(contactId);
     try {
       const r = await apiFetch(`/messages-for-contact?contact=${encodeURIComponent(contactId)}`);
       const rows = r?.messages || [];
@@ -6249,6 +6279,10 @@ function App({userId, onSignOut}) {
       });
     } catch (e) {
       console.warn('[Convooz] lazy-fetch contact messages failed:', e?.message || e);
+    } finally {
+      // Clear only if we're still the latest fetch in flight; a faster
+      // subsequent click on a different contact may have overwritten us.
+      setLazyFetchingContactId(curr => curr === contactId ? null : curr);
     }
   }
   function handleSelectContact(id,e){
@@ -7150,6 +7184,7 @@ function App({userId, onSignOut}) {
       savedFilter={contactFilter}
       onFilterChange={handleContactFilterChange}
       onMarkManyRead={handleMarkManyRead}
+      lazyFetching={lazyFetchingContactId === selContact}
       mobileBack={()=>setMobileCol(0)}/>;
   }
 
