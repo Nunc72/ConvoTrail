@@ -184,7 +184,7 @@
        polish change is picked up by every browser as soon as the version
        is bumped — no manual cache-busters needed. Keep ?v= here in sync
        with APP_VERSION below at every deploy. -->
-  <link rel="stylesheet" href="polish.css?v=0.0.176"/>
+  <link rel="stylesheet" href="polish.css?v=0.0.177"/>
 </head>
 <body>
 <div id="root">
@@ -199,7 +199,7 @@ const { useState, useMemo, useRef, useEffect, useCallback } = React;
 
 // ─── Constants ───────────────────────────────────────────────────────────────
 
-const APP_VERSION = "0.0.176"; // bumped on every deploy — keep in sync with version.json AND with the ?v= on polish.css above
+const APP_VERSION = "0.0.177"; // bumped on every deploy — keep in sync with version.json AND with the ?v= on polish.css above
 
 // ─── Backend + Supabase config ───────────────────────────────────────────────
 const SUPABASE_URL = "https://oyrlzqbjcsliesvunbwj.supabase.co";
@@ -6579,33 +6579,6 @@ function App({userId, onSignOut}) {
     if (reply_to_id) {
       setMessageList(prev => prev.map(m => m.id === reply_to_id ? { ...m, read: true } : m));
       persistSeen(reply_to_id);
-    }
-    // Sending a follow-up to a contact also counts as "I've acted on this
-    // thread": any earlier outgoing mail to the same recipient that's
-    // still armed with revert2me should be dismissed. Without this the
-    // amber r2m alert stuck around even after the user explicitly typed
-    // a new message — the bootstrap auto-dismiss only triggers on an
-    // INCOMING reply from the contact, not on an outgoing follow-up
-    // from the user.
-    const firstToEmail = (to || '').toLowerCase().split(',')[0].trim();
-    const recipientContact = firstToEmail
-      ? contactList.find(c => (c.emails || []).some(e => (e || '').toLowerCase() === firstToEmail))
-      : null;
-    if (recipientContact) {
-      const armedR2mIds = messageList
-        .filter(m => m.contactId === recipientContact.id
-          && m.dir === 'out'
-          && m.revert2me
-          && !deletedIds.includes(m.id))
-        .map(m => m.id);
-      if (armedR2mIds.length > 0) {
-        setMessageList(prev => prev.map(m =>
-          armedR2mIds.includes(m.id)
-            ? { ...m, revert2me: false, r2mArmed: false }
-            : m,
-        ));
-        for (const id of armedR2mIds) persistR2m(id, { dismiss: true });
-      }
     }
     handleCloseCompose();
     setActionToast(result.warning || 'Message sent');
