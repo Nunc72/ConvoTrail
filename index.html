@@ -184,7 +184,7 @@
        polish change is picked up by every browser as soon as the version
        is bumped — no manual cache-busters needed. Keep ?v= here in sync
        with APP_VERSION below at every deploy. -->
-  <link rel="stylesheet" href="polish.css?v=0.0.183"/>
+  <link rel="stylesheet" href="polish.css?v=0.0.184"/>
 </head>
 <body>
 <div id="root">
@@ -199,7 +199,7 @@ const { useState, useMemo, useRef, useEffect, useCallback } = React;
 
 // ─── Constants ───────────────────────────────────────────────────────────────
 
-const APP_VERSION = "0.0.183"; // bumped on every deploy — keep in sync with version.json AND with the ?v= on polish.css above
+const APP_VERSION = "0.0.184"; // bumped on every deploy — keep in sync with version.json AND with the ?v= on polish.css above
 
 // ─── Backend + Supabase config ───────────────────────────────────────────────
 const SUPABASE_URL = "https://oyrlzqbjcsliesvunbwj.supabase.co";
@@ -4935,7 +4935,7 @@ const RETENTION_OPTIONS = [
 // to 1 makes existing caches readable again. The clearBootstrapCache
 // hook in refreshData below catches future account deletes; that's
 // the real fix, the schema bump never should have shipped.
-const BOOTSTRAP_CACHE_SCHEMA = 2;
+const BOOTSTRAP_CACHE_SCHEMA = 3;
 function bootstrapCacheKey(uid) { return `convooz:bootstrap:${uid}:s${BOOTSTRAP_CACHE_SCHEMA}`; }
 function readBootstrapCache(uid) {
   if (!uid) { console.log('[cache] read skipped: no userId'); return null; }
@@ -5516,6 +5516,7 @@ function App({userId, onSignOut}) {
           mailAccounts: mail_accounts,
           contactList: shapedContacts,
           messageList: combinedMessages,
+          contactStats: contact_stats || {},
           tagList,
           tagIdByName: idByName,
           msgTags: mt,
