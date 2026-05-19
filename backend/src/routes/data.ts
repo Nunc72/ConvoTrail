@@ -211,6 +211,49 @@ export async function registerDataRoutes(app: FastifyInstance) {
       req.log.warn({ err: e }, "bootstrap: contact_stats failed (non-fatal)");
     }
 
+    // Pull every actionable mail (unread incoming OR armed-r2m outgoing)
+    // regardless of where they sit on the date axis, and merge them on
+    // top of the date-desc top-`limit` slice. Without this, a contact
+    // whose unread mail happens to be older than ~3-4 weeks back would
+    // need a lazy-fetch on click before the unread badge / banner
+    // appeared, contradicting the contract that "all new mail shows up
+    // in the contact list immediately". Same column shape as the main
+    // messages query so the existing FE shape logic handles them
+    // identically; dedup on id keeps the top-`limit` rows authoritative.
+    let extraActionableRows: Record<string, unknown>[] = [];
+    try {
+      const pool = requirePool();
+      const extraRes = await pool.query(
+        `SELECT m.id, m.mail_account_id, m.folder, m.uid, m.message_id, m.thread_id,
+                m.from_email, m.from_name, m.to_emails,
+                m.subject, m.snippet, m.date, m.flags, m.direction,
+                m.deleted_at, m.spam, m.has_attachments, m.attachments_meta,
+                m.unsubscribe_url, m.unsubscribe_one_click
+           FROM messages m
+          WHERE m.user_id = $1
+            AND m.deleted_at IS NULL
+            AND NOT COALESCE((m.flags->>'draft')::bool, false)
+            AND (
+              (m.direction = 'in' AND NOT COALESCE((m.flags->>'seen')::bool, false))
+              OR EXISTS (
+                SELECT 1 FROM r2m_state rs
+                 WHERE rs.message_id = m.id AND rs.dismissed_at IS NULL
+              )
+            )
+          ORDER BY m.date DESC`,
+        [req.authUser!.id],
+      );
+      extraActionableRows = extraRes.rows as unknown as Record<string, unknown>[];
+    } catch (e) {
+      req.log.warn({ err: e }, "bootstrap: extra actionable fetch failed (non-fatal)");
+    }
+    const baseMessages = (messagesRes.data ?? []) as unknown as Record<string, unknown>[];
+    const mergedMessages = (() => {
+      const have = new Set(baseMessages.map(m => (m as { id: string }).id));
+      const extras = extraActionableRows.filter(r => !have.has((r as { id: string }).id));
+      return [...baseMessages, ...extras];
+    })();
+
     // Phase 2: collect bodies for the "actionable" subset only — unread
     // incoming + active r2m, so the mails the user is most likely to
     // open are instant. The previous version also packed in the 300
@@ -228,7 +271,7 @@ export async function registerDataRoutes(app: FastifyInstance) {
     type MsgMeta = { id: string; direction: string; flags: Record<string, unknown> | null; mail_account_id: string };
     type BodyRow = { id: string; body_text: string | null; body_html: string | null };
     const r2mRows = (r2mRes.data ?? []) as unknown as R2mRow[];
-    const messagesRows = (messagesRes.data ?? []) as unknown as MsgMeta[];
+    const messagesRows = mergedMessages as unknown as MsgMeta[];
     const r2mActiveIds = new Set(
       r2mRows.filter(r => r.dismissed_at === null).map(r => r.message_id),
     );
