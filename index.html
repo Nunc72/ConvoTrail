@@ -184,7 +184,7 @@
        polish change is picked up by every browser as soon as the version
        is bumped — no manual cache-busters needed. Keep ?v= here in sync
        with APP_VERSION below at every deploy. -->
-  <link rel="stylesheet" href="polish.css?v=0.0.184"/>
+  <link rel="stylesheet" href="polish.css?v=0.0.185"/>
 </head>
 <body>
 <div id="root">
@@ -199,7 +199,7 @@ const { useState, useMemo, useRef, useEffect, useCallback } = React;
 
 // ─── Constants ───────────────────────────────────────────────────────────────
 
-const APP_VERSION = "0.0.184"; // bumped on every deploy — keep in sync with version.json AND with the ?v= on polish.css above
+const APP_VERSION = "0.0.185"; // bumped on every deploy — keep in sync with version.json AND with the ?v= on polish.css above
 
 // ─── Backend + Supabase config ───────────────────────────────────────────────
 const SUPABASE_URL = "https://oyrlzqbjcsliesvunbwj.supabase.co";
@@ -5598,12 +5598,19 @@ function App({userId, onSignOut}) {
   // from, so "no rows visible in col 2" exactly means "should reset".
   useEffect(() => {
     if (selContact === null) return;
+    // Don't yank the selection while a lazy-fetch for this contact is
+    // still in flight — messageList will only get populated after the
+    // network round-trip lands. Without this, clicking a contact whose
+    // mails sit below the bootstrap cutoff (Marco, Dave, …) triggered
+    // an immediate setSelContact(null) and the column-2 spinner never
+    // got a chance to render.
+    if (lazyFetchingContactId === selContact) return;
     const hasMailInSelection = messageList.some(m =>
       m.contactId === selContact &&
       (!m.accountEmail || selAccounts.includes(m.accountEmail))
     );
     if (!hasMailInSelection) { setSelContact(null); setSelMsg(null); }
-  }, [selAccounts, messageList, selContact]);
+  }, [selAccounts, messageList, selContact, lazyFetchingContactId]);
   const [selTag,       setSelTag]       = useState(null);
   const [editingContact,setEditingContact]=useState(null);
   const [archivedContacts, setArchivedContacts] = useState(()=>bootstrapCache?.archivedContacts ?? new Set());
@@ -7076,6 +7083,11 @@ function App({userId, onSignOut}) {
   const selectedContact = (() => {
     const c = contactList.find(x => x.id === selContact);
     if (!c) return null;
+    // While a lazy-fetch is mid-flight for this contact, return c even
+    // though messageList has nothing yet — the ThreadColumn then gets
+    // a real contact prop and can render its spinner empty-state. The
+    // useEffect above keeps selContact set until the fetch completes.
+    if (lazyFetchingContactId === selContact) return c;
     const hasMailInScope = messageList.some(m =>
       m.contactId === selContact &&
       (!m.accountEmail || selAccounts.includes(m.accountEmail))
