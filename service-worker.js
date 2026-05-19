@@ -20,7 +20,12 @@
 // over the page on activation, so a deploy reaches the running tab on the
 // next reload, no extra refresh needed.
 
-const SHELL_CACHE = 'convooz-shell-v1';
+// Bump the cache key whenever we want to force every client to drop
+// stale shell entries on the next activate (see the cleanup loop in
+// the activate handler below). v2 was rolled to break out of a
+// "service-worker keeps serving an old index.html → infinite auto-
+// update redirect" loop that hit users with very old SW installs.
+const SHELL_CACHE = 'convooz-shell-v2';
 const SHELL_FILES = ['./', './index.html', './polish.css', './manifest.json', './version.json'];
 
 self.addEventListener('install', (event) => {

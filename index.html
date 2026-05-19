@@ -184,7 +184,7 @@
        polish change is picked up by every browser as soon as the version
        is bumped — no manual cache-busters needed. Keep ?v= here in sync
        with APP_VERSION below at every deploy. -->
-  <link rel="stylesheet" href="polish.css?v=0.0.173"/>
+  <link rel="stylesheet" href="polish.css?v=0.0.174"/>
 </head>
 <body>
 <div id="root">
@@ -199,7 +199,7 @@ const { useState, useMemo, useRef, useEffect, useCallback } = React;
 
 // ─── Constants ───────────────────────────────────────────────────────────────
 
-const APP_VERSION = "0.0.173"; // bumped on every deploy — keep in sync with version.json AND with the ?v= on polish.css above
+const APP_VERSION = "0.0.174"; // bumped on every deploy — keep in sync with version.json AND with the ?v= on polish.css above
 
 // ─── Backend + Supabase config ───────────────────────────────────────────────
 const SUPABASE_URL = "https://oyrlzqbjcsliesvunbwj.supabase.co";
@@ -7485,13 +7485,40 @@ function Root() {
   // it until they manually click the version row. Fetching version.json
   // with cache:'no-store' and redirecting to ?v=<new> on a mismatch
   // forces a fresh HTML download exactly once per upgrade.
+  //
+  // Redirect-loop guard: if the service worker is misbehaving and keeps
+  // serving the same old index.html no matter what we do, blindly
+  // redirecting on every mount would leave the user stuck on a perma-
+  // spinner. sessionStorage gets us a 10s cooldown so the FIRST redirect
+  // still fires, but a second mismatch within 10 seconds skips the
+  // redirect and triggers a service-worker rescue: unregister every SW
+  // for this origin and reload, which forces a network-first fetch of
+  // the fresh HTML on the next load.
   useEffect(() => {
     let cancelled = false;
     fetch('version.json?t=' + Date.now(), { cache: 'no-store' })
       .then(r => r.ok ? r.json() : null)
       .then(j => {
         if (cancelled || !j?.version || j.version === APP_VERSION) return;
+        const lastRedirect = parseInt(sessionStorage.getItem('convooz-update-redirect-at') || '0', 10);
+        const recentlyRedirected = Date.now() - lastRedirect < 10_000;
+        if (recentlyRedirected) {
+          console.warn('[auto-update] still on old code after redirect → unregistering service worker(s) and reloading');
+          if ('serviceWorker' in navigator) {
+            navigator.serviceWorker.getRegistrations()
+              .then(rs => Promise.all(rs.map(r => r.unregister())))
+              .then(() => caches?.keys?.().then(keys => Promise.all(keys.map(k => caches.delete(k)))))
+              .finally(() => {
+                sessionStorage.removeItem('convooz-update-redirect-at');
+                window.location.reload();
+              });
+          } else {
+            window.location.reload();
+          }
+          return;
+        }
         console.log('[auto-update] version.json says', j.version, '— reloading');
+        sessionStorage.setItem('convooz-update-redirect-at', String(Date.now()));
         window.location.replace(window.location.pathname + '?v=' + j.version);
       })
       .catch(() => {});
