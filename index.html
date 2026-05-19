@@ -184,7 +184,7 @@
        polish change is picked up by every browser as soon as the version
        is bumped — no manual cache-busters needed. Keep ?v= here in sync
        with APP_VERSION below at every deploy. -->
-  <link rel="stylesheet" href="polish.css?v=0.0.179"/>
+  <link rel="stylesheet" href="polish.css?v=0.0.180"/>
 </head>
 <body>
 <div id="root">
@@ -199,7 +199,7 @@ const { useState, useMemo, useRef, useEffect, useCallback } = React;
 
 // ─── Constants ───────────────────────────────────────────────────────────────
 
-const APP_VERSION = "0.0.179"; // bumped on every deploy — keep in sync with version.json AND with the ?v= on polish.css above
+const APP_VERSION = "0.0.180"; // bumped on every deploy — keep in sync with version.json AND with the ?v= on polish.css above
 
 // ─── Backend + Supabase config ───────────────────────────────────────────────
 const SUPABASE_URL = "https://oyrlzqbjcsliesvunbwj.supabase.co";
@@ -5155,7 +5155,7 @@ function App({userId, onSignOut}) {
       setDataError('');
       setBootstrapFetching(true);
       try {
-        const { mail_accounts: rawAccounts, contacts, messages, drafts, tags, message_tags, r2m_state, signatures: sigs, account_signatures: accSigs, draft_attachments: draftAtts, message_count_by_account } = await apiFetch('/bootstrap?limit=500');
+        const { mail_accounts: rawAccounts, contacts, messages, drafts, tags, message_tags, r2m_state, signatures: sigs, account_signatures: accSigs, draft_attachments: draftAtts, message_count_by_account, contact_account_emails } = await apiFetch('/bootstrap?limit=500');
         // Pin the per-account synced count onto each mailAccount object so
         // the user-menu progress widget can read mailAccount.messages_count
         // / mailAccount.sync_known_uids without a separate state slice.
@@ -5379,12 +5379,28 @@ function App({userId, onSignOut}) {
         }).filter(m => m.contactId !== null);
 
         // Per-contact: which account-emails have we seen activity from/to?
+        // Authoritative source is the backend's contact_account_emails map,
+        // which is computed over every message in the DB — not just the
+        // top-500 that ride along in this /bootstrap. The message-derived
+        // computation was missing contacts (e.g. Marco, Dave) whose mails
+        // happened to fall below the bootstrap window. Drafts are still
+        // merged in client-side since they aren't in the backend map.
         const contactAccounts = new Map(); // contact_id → Set<accountEmail>
-        for (const m of shapedMessages) {
-          if (!m.accountEmail) continue;
-          let s = contactAccounts.get(m.contactId);
-          if (!s) { s = new Set(); contactAccounts.set(m.contactId, s); }
-          s.add(m.accountEmail);
+        for (const [cid, emails] of Object.entries(contact_account_emails || {})) {
+          if (Array.isArray(emails) && emails.length > 0) {
+            contactAccounts.set(cid, new Set(emails));
+          }
+        }
+        // Belt-and-braces fallback: if the backend map was unavailable
+        // (logged-warn case), still build from shapedMessages so the FE
+        // doesn't ship a totally-empty contact list.
+        if (contactAccounts.size === 0) {
+          for (const m of shapedMessages) {
+            if (!m.accountEmail) continue;
+            let s = contactAccounts.get(m.contactId);
+            if (!s) { s = new Set(); contactAccounts.set(m.contactId, s); }
+            s.add(m.accountEmail);
+          }
         }
         for (const d of shapedDrafts) {
           if (!d.accountEmail) continue;

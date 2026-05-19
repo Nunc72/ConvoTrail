@@ -93,6 +93,46 @@ export async function registerDataRoutes(app: FastifyInstance) {
       req.log.warn({ err: e }, "bootstrap: per-account count failed (non-fatal)");
     }
 
+    // Per-contact: which mail_accounts has the user seen mail involving
+    // this contact in (sender OR recipient). Computed over EVERY message
+    // in the DB so contacts whose mails happen to fall outside the top-
+    // 500 bootstrap window still get a populated accountEmails list on
+    // the FE. Without this the left-column contact filter
+    // `contact.accountEmails.some(ae => selAccounts.includes(ae))` hid
+    // valid contacts (Marco, Dave, …) whose mails sat below the
+    // bootstrap cutoff.
+    let contactAccountEmails: Record<string, string[]> = {};
+    try {
+      const pool = requirePool();
+      const cae = await pool.query<{ contact_id: string; account_emails: string[] }>(
+        `WITH per_msg AS (
+           SELECT ma.email AS account_email, ce.contact_id
+             FROM messages m
+             JOIN mail_accounts ma ON ma.id = m.mail_account_id
+             JOIN contact_emails ce ON ce.email = m.from_email::citext
+            WHERE m.user_id = $1
+            UNION ALL
+           SELECT ma.email AS account_email, ce.contact_id
+             FROM messages m
+             JOIN mail_accounts ma ON ma.id = m.mail_account_id
+             CROSS JOIN LATERAL jsonb_array_elements(COALESCE(m.to_emails, '[]'::jsonb)) te
+             JOIN contact_emails ce ON ce.email = (te->>'email')::citext
+            WHERE m.user_id = $1
+         )
+         SELECT contact_id, ARRAY_AGG(DISTINCT account_email) AS account_emails
+           FROM per_msg
+          GROUP BY contact_id`,
+        [req.authUser!.id],
+      );
+      contactAccountEmails = Object.fromEntries(
+        cae.rows.map(r => [r.contact_id, r.account_emails]),
+      );
+    } catch (e) {
+      // Non-fatal: FE falls back to the message-derived computation
+      // (top-500 only), which is what the app did before this query.
+      req.log.warn({ err: e }, "bootstrap: contact↔account mapping failed (non-fatal)");
+    }
+
     // Phase 2: collect bodies for the "actionable" subset only — unread
     // incoming + active r2m, so the mails the user is most likely to
     // open are instant. The previous version also packed in the 300
@@ -164,6 +204,7 @@ export async function registerDataRoutes(app: FastifyInstance) {
       account_signatures: accSigsRes.data,
       draft_attachments: draftAttsRes.data,
       message_count_by_account: messageCountByAccount,
+      contact_account_emails: contactAccountEmails,
     };
   });
 
