@@ -184,7 +184,7 @@
        polish change is picked up by every browser as soon as the version
        is bumped — no manual cache-busters needed. Keep ?v= here in sync
        with APP_VERSION below at every deploy. -->
-  <link rel="stylesheet" href="polish.css?v=0.0.178"/>
+  <link rel="stylesheet" href="polish.css?v=0.0.179"/>
 </head>
 <body>
 <div id="root">
@@ -199,7 +199,7 @@ const { useState, useMemo, useRef, useEffect, useCallback } = React;
 
 // ─── Constants ───────────────────────────────────────────────────────────────
 
-const APP_VERSION = "0.0.178"; // bumped on every deploy — keep in sync with version.json AND with the ?v= on polish.css above
+const APP_VERSION = "0.0.179"; // bumped on every deploy — keep in sync with version.json AND with the ?v= on polish.css above
 
 // ─── Backend + Supabase config ───────────────────────────────────────────────
 const SUPABASE_URL = "https://oyrlzqbjcsliesvunbwj.supabase.co";
@@ -5941,17 +5941,21 @@ function App({userId, onSignOut}) {
   // ── Known email autocomplete pool ──
   // Powers the auto-complete dropdown on To/CC/BCC in ComposePane. Every
   // email the user has ever seen — both from contacts (with name) and
-  // from raw mail rows (loose senders / recipients). The user's OWN
-  // addresses are excluded; you don't want to mail yourself by accident.
+  // from raw mail rows (loose senders / recipients), including the
+  // user's own IMAP-account addresses (legitimate self-mail flow).
   // Sort order: contacts (named) first, then loose mails, alphabetical
   // within each group. Recomputed when contacts or messages change.
   const allKnownEmails = useMemo(() => {
-    const myEmailSet = new Set(mailAccounts.map(a => (a.email || '').toLowerCase()).filter(Boolean));
+    // No special handling for the user's own IMAP-account addresses:
+    // sending from one own mailbox to another is a legitimate flow, so
+    // those addresses appear in autocomplete alongside any other known
+    // contact. Dedupe is on lowercased email; named-contact entries
+    // beat unnamed loose-mail entries for the same address.
     const seen = new Map(); // lowercased email → { email, name }
     for (const c of contactList) {
       for (const e of (c.emails || [])) {
         const low = (e || '').toLowerCase();
-        if (!low || myEmailSet.has(low) || seen.has(low)) continue;
+        if (!low || seen.has(low)) continue;
         seen.set(low, { email: e, name: c.name || '' });
       }
     }
@@ -5960,7 +5964,7 @@ function App({userId, onSignOut}) {
       for (const e of candidates) {
         if (!e) continue;
         const low = e.toLowerCase();
-        if (myEmailSet.has(low) || seen.has(low)) continue;
+        if (seen.has(low)) continue;
         seen.set(low, { email: e, name: '' });
       }
     }
@@ -5969,7 +5973,7 @@ function App({userId, onSignOut}) {
       if (aHas !== bHas) return aHas ? -1 : 1;
       return a.email.localeCompare(b.email);
     });
-  }, [contactList, messageList, mailAccounts]);
+  }, [contactList, messageList]);
 
   // ── Contact metadata ──
   const contactMeta=useMemo(()=>{
