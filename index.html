@@ -184,7 +184,7 @@
        polish change is picked up by every browser as soon as the version
        is bumped — no manual cache-busters needed. Keep ?v= here in sync
        with APP_VERSION below at every deploy. -->
-  <link rel="stylesheet" href="polish.css?v=0.0.174"/>
+  <link rel="stylesheet" href="polish.css?v=0.0.175"/>
 </head>
 <body>
 <div id="root">
@@ -199,7 +199,7 @@ const { useState, useMemo, useRef, useEffect, useCallback } = React;
 
 // ─── Constants ───────────────────────────────────────────────────────────────
 
-const APP_VERSION = "0.0.174"; // bumped on every deploy — keep in sync with version.json AND with the ?v= on polish.css above
+const APP_VERSION = "0.0.175"; // bumped on every deploy — keep in sync with version.json AND with the ?v= on polish.css above
 
 // ─── Backend + Supabase config ───────────────────────────────────────────────
 const SUPABASE_URL = "https://oyrlzqbjcsliesvunbwj.supabase.co";
@@ -6486,9 +6486,17 @@ function App({userId, onSignOut}) {
   // account settings, signatures.
   useEffect(() => {
     let debounce;
+    // Longer debounce coalesces bursts of Realtime events (e.g. a merge
+    // touches contacts + contact_emails + messages in one transaction)
+    // into a single bootstrap. The 1.5s window is large enough that a
+    // typical "click → optimistic update → write → echo" cycle fires
+    // exactly once per logical user action, dramatically cutting the
+    // egress bill on Supabase's free tier. Cross-device sync feels the
+    // same in practice — the user doesn't perceive the extra ~1s
+    // between phone-A action and phone-B catching up.
     const triggerRefresh = () => {
       clearTimeout(debounce);
-      debounce = setTimeout(() => refreshData(), 400);
+      debounce = setTimeout(() => refreshData(), 1500);
     };
     const tables = [
       'contacts', 'contact_emails', 'tags', 'message_tags',

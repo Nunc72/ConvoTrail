@@ -93,14 +93,19 @@ export async function registerDataRoutes(app: FastifyInstance) {
       req.log.warn({ err: e }, "bootstrap: per-account count failed (non-fatal)");
     }
 
-    // Phase 2: collect bodies for two sets so the client has them ready:
-    //   (a) the "actionable" subset — unread incoming + active r2m, so
-    //       the mails the user is most likely to open are instant;
-    //   (b) the 300 newest messages by date, so client-side search
-    //       covers ~3-4 weeks of recent mail without a network round
-    //       trip. Anything older still searches via /search.
-    // RLS constrains the query to the user's own rows.
-    const RECENT_BODY_LIMIT = 300;
+    // Phase 2: collect bodies for the "actionable" subset only — unread
+    // incoming + active r2m, so the mails the user is most likely to
+    // open are instant. The previous version also packed in the 300
+    // newest bodies for client-side full-text search, which pushed
+    // every /bootstrap to ~20MB for active accounts. With Supabase
+    // free-tier egress at 5 GB/month and Realtime triggering a refresh
+    // on each cross-device change, that easily burned the monthly
+    // quota in a couple of days. Bodies are still cached per-message in
+    // pg (attachments_meta path in /body, since v0.0.154), so the second
+    // click on any mail is < 50 ms — same UX, ~40x less egress. Search
+    // still works: snippet + subject + headers travel in this bootstrap;
+    // bodies older than that route through /search server-side.
+    const RECENT_BODY_LIMIT = 0;
     type R2mRow = { message_id: string; dismissed_at: string | null };
     type MsgMeta = { id: string; direction: string; flags: Record<string, unknown> | null; mail_account_id: string };
     type BodyRow = { id: string; body_text: string | null; body_html: string | null };
