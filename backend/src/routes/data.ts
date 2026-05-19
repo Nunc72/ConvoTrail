@@ -104,19 +104,21 @@ export async function registerDataRoutes(app: FastifyInstance) {
     let contactAccountEmails: Record<string, string[]> = {};
     try {
       const pool = requirePool();
+      // email columns are TEXT (not citext — extension isn't installed),
+      // so we lowercase both sides for case-insensitive matching.
       const cae = await pool.query<{ contact_id: string; account_emails: string[] }>(
         `WITH per_msg AS (
            SELECT ma.email AS account_email, ce.contact_id
              FROM messages m
              JOIN mail_accounts ma ON ma.id = m.mail_account_id
-             JOIN contact_emails ce ON ce.email = m.from_email::citext
+             JOIN contact_emails ce ON LOWER(ce.email) = LOWER(m.from_email)
             WHERE m.user_id = $1
             UNION ALL
            SELECT ma.email AS account_email, ce.contact_id
              FROM messages m
              JOIN mail_accounts ma ON ma.id = m.mail_account_id
              CROSS JOIN LATERAL jsonb_array_elements(COALESCE(m.to_emails, '[]'::jsonb)) te
-             JOIN contact_emails ce ON ce.email = (te->>'email')::citext
+             JOIN contact_emails ce ON LOWER(ce.email) = LOWER(te->>'email')
             WHERE m.user_id = $1
          )
          SELECT contact_id, ARRAY_AGG(DISTINCT account_email) AS account_emails
