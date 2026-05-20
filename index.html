@@ -184,7 +184,7 @@
        polish change is picked up by every browser as soon as the version
        is bumped — no manual cache-busters needed. Keep ?v= here in sync
        with APP_VERSION below at every deploy. -->
-  <link rel="stylesheet" href="polish.css?v=0.0.186"/>
+  <link rel="stylesheet" href="polish.css?v=0.0.187"/>
 </head>
 <body>
 <div id="root">
@@ -199,7 +199,7 @@ const { useState, useMemo, useRef, useEffect, useCallback } = React;
 
 // ─── Constants ───────────────────────────────────────────────────────────────
 
-const APP_VERSION = "0.0.186"; // bumped on every deploy — keep in sync with version.json AND with the ?v= on polish.css above
+const APP_VERSION = "0.0.187"; // bumped on every deploy — keep in sync with version.json AND with the ?v= on polish.css above
 
 // ─── Backend + Supabase config ───────────────────────────────────────────────
 const SUPABASE_URL = "https://oyrlzqbjcsliesvunbwj.supabase.co";
@@ -5590,27 +5590,30 @@ function App({userId, onSignOut}) {
   }, [selAccounts, messageList, selMsg]);
   // Same idea for selContact: when the user switches the account selector
   // away from any account this contact has mail in, col 2 (thread) and
-  // col 3 (detail) should both empty out together. Earlier code looked
-  // at contact.accountEmails, which is computed at bootstrap time and
-  // can drift (e.g. after deletes, or because the v0.0.124 self-mail
-  // anchoring populates it from the OTHER mailbox). Check messageList
-  // directly instead — that's the same source the thread list reads
-  // from, so "no rows visible in col 2" exactly means "should reset".
+  // col 3 (detail) should both empty out together. We mirror the same
+  // visibility rule LeftColumn uses — contact.accountEmails overlap with
+  // selAccounts — instead of probing messageList. Earlier we checked
+  // messageList, which silently broke for cold contacts: a Frank with a
+  // single bootstrap-top-500 mail in account B but selAccounts={A} would
+  // (1) show in LeftColumn (server-side accountEmails has both A and B),
+  // (2) skip lazy-fetch (messageList.some returns true), and (3) blow
+  // away the selection here because the B-mail fails the selAccounts
+  // filter. Result: a "Select a contact" empty-state right after click.
+  // contact.accountEmails is the same map LeftColumn renders from, so
+  // staying consistent guarantees: if the user could see the row, the
+  // selection sticks. If the thread genuinely has nothing in the active
+  // filter tab, ThreadColumn shows "No messages" instead of yanking us
+  // back to the welcome screen.
   useEffect(() => {
     if (selContact === null) return;
-    // Don't yank the selection while a lazy-fetch for this contact is
-    // still in flight — messageList will only get populated after the
-    // network round-trip lands. Without this, clicking a contact whose
-    // mails sit below the bootstrap cutoff (Marco, Dave, …) triggered
-    // an immediate setSelContact(null) and the column-2 spinner never
-    // got a chance to render.
+    // Still guard against lazy-fetch interleavings: don't even touch
+    // the selection while the network round-trip is in flight.
     if (lazyFetchingContactId === selContact) return;
-    const hasMailInSelection = messageList.some(m =>
-      m.contactId === selContact &&
-      (!m.accountEmail || selAccounts.includes(m.accountEmail))
-    );
-    if (!hasMailInSelection) { setSelContact(null); setSelMsg(null); }
-  }, [selAccounts, messageList, selContact, lazyFetchingContactId]);
+    const c = contactList.find(x => x.id === selContact);
+    if (!c) return;
+    const visibleInSelAccounts = (c.accountEmails || []).some(ae => selAccounts.includes(ae));
+    if (!visibleInSelAccounts) { setSelContact(null); setSelMsg(null); }
+  }, [selAccounts, contactList, selContact, lazyFetchingContactId]);
   const [selTag,       setSelTag]       = useState(null);
   const [editingContact,setEditingContact]=useState(null);
   const [archivedContacts, setArchivedContacts] = useState(()=>bootstrapCache?.archivedContacts ?? new Set());
@@ -6301,12 +6304,17 @@ function App({userId, onSignOut}) {
     setSelContact(id);setMergeContact(null);setSelTag(null);
     setShowCompose(false);setReplyTo(null);setReplyKind(null);setComposeContact(null);setComposeDraft(null);setEditingContact(null);
     setSearchQuery('');setSearchScope('all');
-    // Lazy-fetch contact mails if messageList carries nothing for this
-    // contact yet. Happens when the contact's mails sit below the
-    // bootstrap top-500 cutoff (older relationships, low-volume sender).
+    // Lazy-fetch contact mails if messageList has nothing visible for
+    // this contact under the current selAccounts scope. Happens when
+    // the contact's mails sit below the bootstrap top-500 cutoff
+    // (older relationships, low-volume sender), or when the only
+    // bootstrap mails we have are from accounts not currently in
+    // selAccounts. The selAccounts filter mirrors what the ThreadColumn
+    // will actually render — fetching otherwise leaves the user staring
+    // at "No messages" while plenty of in-scope mails sit in the DB.
     // Fire-and-forget: the setMessageList in the handler triggers a
     // re-render so the thread populates as soon as the request lands.
-    if (!messageList.some(m => m.contactId === id)) {
+    if (!messageList.some(m => m.contactId === id && (!m.accountEmail || selAccounts.includes(m.accountEmail)))) {
       lazyFetchContactMessages(id);
     }
     if(isMobile) { setMobileCol(1); setSelMsg(null); return; }
@@ -7083,16 +7091,16 @@ function App({userId, onSignOut}) {
   const selectedContact = (() => {
     const c = contactList.find(x => x.id === selContact);
     if (!c) return null;
-    // While a lazy-fetch is mid-flight for this contact, return c even
-    // though messageList has nothing yet — the ThreadColumn then gets
-    // a real contact prop and can render its spinner empty-state. The
-    // useEffect above keeps selContact set until the fetch completes.
-    if (lazyFetchingContactId === selContact) return c;
-    const hasMailInScope = messageList.some(m =>
-      m.contactId === selContact &&
-      (!m.accountEmail || selAccounts.includes(m.accountEmail))
-    );
-    return hasMailInScope ? c : null;
+    // Mirror LeftColumn's visibility rule: if the user could see the
+    // contact row to click it, the selection should stick. Don't probe
+    // messageList — a cold contact (no mails in top-500) or one whose
+    // only bootstrap mails sit outside selAccounts would otherwise show
+    // the "Select a contact" welcome screen right after click, even
+    // though the lazy-fetch is fetching or has just landed mails. The
+    // ThreadColumn renders its own empty-state ("No messages") when the
+    // active filter tab is empty, which is the correct UX here.
+    if (!(c.accountEmails || []).some(ae => selAccounts.includes(ae))) return null;
+    return c;
   })();
   const mergeContactObj=contactList.find(c=>c.id===mergeContact)||null;
   const selectedMsg = (() => {
