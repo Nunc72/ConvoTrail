@@ -184,7 +184,7 @@
        polish change is picked up by every browser as soon as the version
        is bumped — no manual cache-busters needed. Keep ?v= here in sync
        with APP_VERSION below at every deploy. -->
-  <link rel="stylesheet" href="polish.css?v=0.0.193"/>
+  <link rel="stylesheet" href="polish.css?v=0.0.194"/>
 </head>
 <body>
 <div id="root">
@@ -199,7 +199,7 @@ const { useState, useMemo, useRef, useEffect, useCallback } = React;
 
 // ─── Constants ───────────────────────────────────────────────────────────────
 
-const APP_VERSION = "0.0.193"; // bumped on every deploy — keep in sync with version.json AND with the ?v= on polish.css above
+const APP_VERSION = "0.0.194"; // bumped on every deploy — keep in sync with version.json AND with the ?v= on polish.css above
 
 // ─── Backend + Supabase config ───────────────────────────────────────────────
 const SUPABASE_URL = "https://oyrlzqbjcsliesvunbwj.supabase.co";
@@ -2710,7 +2710,7 @@ function fibSnoozeDays(count) {
   return b;
 }
 
-function MessageDetail({message,contact,isDeleted,msgTags,allTags,onReply,onReplyAll,onForward,onDelete,onRecover,onDismissR2m,onR2mSeen,onR2mSnooze,onMarkRead,onSnooze,onSpam,onUnsubscribe,snoozeCount=0,onAddTag,onRemoveTag,selAccounts=[],fadeOut=false,fadeOutFast=false,slideIn=false,slideOut=false,fadingAlert=null,onHeaderHeight,mobileBack,mobileBackLabel}) {
+function MessageDetail({message,contact,isDeleted,msgTags,allTags,onReply,onReplyAll,onForward,onDelete,onRecover,onDismissR2m,onR2mSeen,onR2mSnooze,onMarkRead,onSnooze,onSpam,onUnsubscribe,snoozeCount=0,onAddTag,onRemoveTag,onSelectContact,selAccounts=[],fadeOut=false,fadeOutFast=false,slideIn=false,slideOut=false,fadingAlert=null,onHeaderHeight,mobileBack,mobileBackLabel}) {
   const isMobile = typeof window !== 'undefined' && window.innerWidth < 768;
   const headerRef = useRef(null);
   const [headerH, setHeaderH] = useState(0);
@@ -2892,30 +2892,57 @@ function MessageDetail({message,contact,isDeleted,msgTags,allTags,onReply,onRepl
           <div className="font-semibold text-gray-900 leading-snug">{message.subject}</div>
           <MsgLabel dir={message.dir} isDraft={isDraft} isDeleted={isDeleted} isSpam={!!message.spam}/>
         </div>
-        <div className="flex items-start gap-3">
-          <Avatar contact={senderPerson} size={36}/>
-          <div className="flex-1 min-w-0">
-            <div className="flex items-center justify-between gap-2">
-              <span className="text-sm font-medium text-gray-800 truncate">{senderPerson.name}</span>
-              <span className="text-xs text-gray-400 flex-shrink-0 whitespace-nowrap">
-                {isMobile ? (() => {
-                  const d = new Date(message.date);
-                  return d.toLocaleDateString("nl-NL",{day:"numeric",month:"short"}) + ' ' + d.toLocaleTimeString("nl-NL",{hour:"2-digit",minute:"2-digit"});
-                })() : formatFull(message.date)}
-              </span>
+        {/* The contact row at the top is a navigation target: clicking
+            it swaps col 2 over to this contact's full thread (the
+            ContactCard + filter tabs + mail list) without disturbing
+            the open mail in col 3. Most useful when you reached the
+            mail via global search or a tag view and want to jump into
+            the conversation context. The whole row (avatar + name +
+            date + From/To/Cc) is the click target so it's easy to
+            hit; a subtle hover background telegraphs that it's
+            interactive. Disabled when contact is null (orphan mail
+            with no contactId match). */}
+        {(() => {
+          const navigable = !!(contact?.id && onSelectContact);
+          const inner = (
+            <>
+              <Avatar contact={senderPerson} size={36}/>
+              <div className="flex-1 min-w-0">
+                <div className="flex items-center justify-between gap-2">
+                  <span className="text-sm font-medium text-gray-800 truncate">{senderPerson.name}</span>
+                  <span className="text-xs text-gray-400 flex-shrink-0 whitespace-nowrap">
+                    {isMobile ? (() => {
+                      const d = new Date(message.date);
+                      return d.toLocaleDateString("nl-NL",{day:"numeric",month:"short"}) + ' ' + d.toLocaleTimeString("nl-NL",{hour:"2-digit",minute:"2-digit"});
+                    })() : formatFull(message.date)}
+                  </span>
+                </div>
+                <div className="text-xs text-gray-400 mt-0.5">
+                  {message.dir==="in"
+                    ? <><span className="text-gray-500">From:</span> {message.from}
+                        <br/><span className="text-gray-500">To:</span> {message.toList?.length ? message.toList.join(', ') : message.to}
+                        {message.ccList?.length > 0 && <><br/><span className="text-gray-500">Cc:</span> {message.ccList.join(', ')}</>}
+                      </>
+                    : <><span className="text-gray-500">To:</span> {message.to}
+                        {selAccounts.length > 1 && <><br/><span className="text-gray-500">From:</span> {message.from}</>}
+                      </>}
+                </div>
+              </div>
+            </>
+          );
+          if (!navigable) {
+            return <div className="flex items-start gap-3">{inner}</div>;
+          }
+          return (
+            <div className="flex items-start gap-3 -mx-2 px-2 py-1 -my-1 rounded cursor-pointer hover:bg-gray-50"
+              role="button" tabIndex={0}
+              onClick={() => onSelectContact(contact.id)}
+              onKeyDown={e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onSelectContact(contact.id); } }}
+              title={`Open gesprek met ${contact.name}`}>
+              {inner}
             </div>
-            <div className="text-xs text-gray-400 mt-0.5">
-              {message.dir==="in"
-                ? <><span className="text-gray-500">From:</span> {message.from}
-                    <br/><span className="text-gray-500">To:</span> {message.toList?.length ? message.toList.join(', ') : message.to}
-                    {message.ccList?.length > 0 && <><br/><span className="text-gray-500">Cc:</span> {message.ccList.join(', ')}</>}
-                  </>
-                : <><span className="text-gray-500">To:</span> {message.to}
-                    {selAccounts.length > 1 && <><br/><span className="text-gray-500">From:</span> {message.from}</>}
-                  </>}
-            </div>
-          </div>
-        </div>
+          );
+        })()}
         {/* Tags on message */}
         <div className="mt-2">
           <TagPicker current={msgTags} suggestions={allTags}
@@ -6457,6 +6484,40 @@ function App({userId, onSignOut}) {
     setArrowFocus('mails');
     if(isMobile) setMobileCol(2);
   }
+  // Click target: the avatar + name row at the top of a MessageDetail.
+  // Swaps col 2 over to the contact's full thread (the ContactCard +
+  // mail list everyone is used to from LeftColumn clicks) while
+  // KEEPING the currently-open mail in col 3. Different from
+  // handleSelectContact in that respect — that one picks a fresh mail
+  // for the contact based on the active filter, which would yank col
+  // 3 out from under the user mid-read.
+  // Useful when you're staring at a mail you reached via tag view or
+  // global search: one click jumps you into the conversation context
+  // without losing your place. selTag / search are cleared (same as
+  // handleSelectContact) so col 2 actually switches over to the
+  // thread view rather than staying on TagView/SearchResults.
+  function handleNavigateToContactFromMessage(contactId){
+    if (!contactId) return;
+    setArrowFocus('contacts');
+    setSelContact(contactId);
+    setSelTag(null);
+    setMergeContact(null);
+    setShowCompose(false);
+    setReplyTo(null); setReplyKind(null);
+    setComposeContact(null); setComposeDraft(null);
+    setEditingContact(null);
+    setSearchQuery(''); setSearchScope('all');
+    // Lazy-fetch if this contact has no in-scope mails in messageList
+    // yet (cold contact reached via search). Same guard as
+    // handleSelectContact's body.
+    if (!messageList.some(m => m.contactId === contactId && (!m.accountEmail || selAccounts.includes(m.accountEmail)))) {
+      lazyFetchContactMessages(contactId);
+    }
+    // On mobile col 2 is hidden behind the back-stack; surface it so
+    // the user sees the thread they just navigated to. selMsg stays
+    // intact — col 3 stays on the mail they were reading.
+    if (isMobile) setMobileCol(1);
+  }
   async function handleMerge(keep,discard,emails){
     // Optimistic local merge so the UI responds instantly; server truth loads via refreshData
     setContactList(prev=>prev.map(c=>c.id===keep.id?{...c,emails}:c).filter(c=>c.id!==discard.id));
@@ -7652,6 +7713,7 @@ function App({userId, onSignOut}) {
                     onMarkRead={handleMarkRead} onSnooze={handleSnoozeMsg} onSpam={handleSpam} onUnsubscribe={handleUnsubscribe}
                     snoozeCount={msgSnoozeCounts[selMsg]||0}
                     onAddTag={handleAddMsgTag} onRemoveTag={handleRemoveMsgTag}
+                    onSelectContact={handleNavigateToContactFromMessage}
                     fadeOut={fadingOut} fadeOutFast={fadingOutFast} slideIn={slidingIn} slideOut={slidingOut} fadingAlert={fadingAlert}
                     onHeaderHeight={setDetailHeaderH}
                     mobileBack={()=>setMobileCol(1)}
@@ -7714,6 +7776,7 @@ function App({userId, onSignOut}) {
                   onMarkRead={handleMarkRead} onSnooze={handleSnoozeMsg} onSpam={handleSpam} onUnsubscribe={handleUnsubscribe}
                   snoozeCount={msgSnoozeCounts[selMsg]||0}
                   onAddTag={handleAddMsgTag} onRemoveTag={handleRemoveMsgTag}
+                  onSelectContact={handleNavigateToContactFromMessage}
                   fadeOut={fadingOut} fadeOutFast={fadingOutFast} slideIn={slidingIn} slideOut={slidingOut} fadingAlert={fadingAlert}
                   onHeaderHeight={setDetailHeaderH}/>
               )}
