@@ -90,11 +90,70 @@ export async function syncAccount(accountId: string): Promise<SyncResult> {
   try {
     await client.connect();
 
-    // 2) Discover folders via SPECIAL-USE
+    // 2) Discover folders via SPECIAL-USE.
+    //
+    // Strategy depends on whether the server exposes the \All special-use
+    // folder (RFC 6154). On Gmail / Google Workspace this is "All Mail"
+    // — a virtual folder that contains every message exactly once, no
+    // matter which labels it carries (INBOX, Sent, custom labels, or
+    // none of the above for archived mail). Syncing \All gives us full
+    // mailbox coverage in a single pass without per-folder duplicates,
+    // which is what Rik asked for: see all custom-labelled and archived
+    // Gmail mail, not just what's still in INBOX.
+    //
+    // For providers without \All (typical IMAP4: Oxilion, FastMail, etc.)
+    // we keep the previous INBOX + Sent pair — those are two distinct
+    // folders with no overlap, so per-folder sync works fine.
     const mailboxes = await client.list();
-    const inbox = mailboxes.find(m => m.specialUse === "\\Inbox") || mailboxes.find(m => m.path.toUpperCase() === "INBOX");
-    const sent  = mailboxes.find(m => m.specialUse === "\\Sent");
-    const targets = [inbox, sent].filter(Boolean) as { path: string }[];
+    const allMail = mailboxes.find(m => m.specialUse === "\\All");
+    let targets: { path: string }[];
+    if (allMail) {
+      targets = [allMail];
+    } else {
+      const inbox = mailboxes.find(m => m.specialUse === "\\Inbox") || mailboxes.find(m => m.path.toUpperCase() === "INBOX");
+      const sent  = mailboxes.find(m => m.specialUse === "\\Sent");
+      targets = [inbox, sent].filter(Boolean) as { path: string }[];
+    }
+
+    // First-run migration to All Mail: prior syncs may have written
+    // INBOX / Sent rows under different folder names. We delete those
+    // (FK CASCADE drops the matching r2m_state + message_tags rows)
+    // and the main fetch below repopulates from All Mail. To avoid
+    // losing user-armed state we snapshot r2m_state and message_tags
+    // by their messages.message_id (RFC header) first, then restore
+    // them after the new rows land, matching new UUID via RFC id.
+    // The block is idempotent: once every row lives under allMail.path
+    // the delete affects 0 rows and the snapshot stays empty.
+    let r2mSnap: Array<{ rfc_message_id: string; dismissed_at: string | null; snooze_until: string | null; snooze_count: number }> = [];
+    let tagSnap: Array<{ rfc_message_id: string; tag_id: string }> = [];
+    if (allMail) {
+      const r1 = await pool.query<{ rfc_message_id: string | null; dismissed_at: string | null; snooze_until: string | null; snooze_count: number }>(
+        `SELECT m.message_id AS rfc_message_id, rs.dismissed_at, rs.snooze_until, rs.snooze_count
+           FROM r2m_state rs
+           JOIN messages m ON m.id = rs.message_id
+          WHERE m.mail_account_id = $1
+            AND m.folder <> $2
+            AND m.message_id IS NOT NULL`,
+        [acc.id, allMail.path],
+      );
+      r2mSnap = r1.rows.filter(r => !!r.rfc_message_id) as typeof r2mSnap;
+      const r2 = await pool.query<{ rfc_message_id: string | null; tag_id: string }>(
+        `SELECT m.message_id AS rfc_message_id, mt.tag_id
+           FROM message_tags mt
+           JOIN messages m ON m.id = mt.message_id
+          WHERE m.mail_account_id = $1
+            AND m.folder <> $2
+            AND m.message_id IS NOT NULL`,
+        [acc.id, allMail.path],
+      );
+      tagSnap = r2.rows.filter(r => !!r.rfc_message_id) as typeof tagSnap;
+      const { error: delErr } = await supabaseAdmin
+        .from("messages")
+        .delete()
+        .eq("mail_account_id", acc.id)
+        .neq("folder", allMail.path);
+      if (delErr) throw new Error(`messages migration delete: ${delErr.message}`);
+    }
 
     const since = new Date(Date.now() - SINCE_DAYS * 86400_000);
     const allExtractedAddrs = new Map<string, string | null>(); // email → name
@@ -235,6 +294,54 @@ export async function syncAccount(accountId: string): Promise<SyncResult> {
         lock.release();
       }
       folderStats.push(stat);
+    }
+
+    // Restore r2m_state + message_tags that we snapshotted before the
+    // All Mail migration delete above. Match by RFC message_id → new
+    // message UUID. Snoozes / dismissed-at / snooze_count survive.
+    // Tag links survive. A message that hasn't been re-fetched yet
+    // (older than PER_FOLDER_CAP, will land in a future sync) is just
+    // silently skipped this round; the snapshot, however, lives only
+    // inside this run, so its state is then permanently lost. That's
+    // a known trade-off — the alternative (a persistent pending table)
+    // adds DB schema we don't need for a one-time migration affecting
+    // a handful of rows on Rik's Gmail accounts.
+    if (allMail && (r2mSnap.length > 0 || tagSnap.length > 0)) {
+      for (const r of r2mSnap) {
+        const m = await pool.query<{ id: string }>(
+          `SELECT id FROM messages
+            WHERE mail_account_id = $1 AND message_id = $2
+            LIMIT 1`,
+          [acc.id, r.rfc_message_id],
+        );
+        if (m.rows[0]) {
+          await pool.query(
+            `INSERT INTO r2m_state (message_id, dismissed_at, snooze_until, snooze_count)
+                  VALUES ($1, $2, $3, $4)
+             ON CONFLICT (message_id) DO UPDATE SET
+               dismissed_at = EXCLUDED.dismissed_at,
+               snooze_until = EXCLUDED.snooze_until,
+               snooze_count = EXCLUDED.snooze_count`,
+            [m.rows[0].id, r.dismissed_at, r.snooze_until, r.snooze_count],
+          );
+        }
+      }
+      for (const t of tagSnap) {
+        const m = await pool.query<{ id: string }>(
+          `SELECT id FROM messages
+            WHERE mail_account_id = $1 AND message_id = $2
+            LIMIT 1`,
+          [acc.id, t.rfc_message_id],
+        );
+        if (m.rows[0]) {
+          await pool.query(
+            `INSERT INTO message_tags (message_id, tag_id)
+                  VALUES ($1, $2)
+             ON CONFLICT DO NOTHING`,
+            [m.rows[0].id, t.tag_id],
+          );
+        }
+      }
     }
 
     // 3) Auto-extract contacts (filter out the user's own address)
