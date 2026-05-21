@@ -184,7 +184,7 @@
        polish change is picked up by every browser as soon as the version
        is bumped — no manual cache-busters needed. Keep ?v= here in sync
        with APP_VERSION below at every deploy. -->
-  <link rel="stylesheet" href="polish.css?v=0.0.192"/>
+  <link rel="stylesheet" href="polish.css?v=0.0.193"/>
 </head>
 <body>
 <div id="root">
@@ -199,7 +199,7 @@ const { useState, useMemo, useRef, useEffect, useCallback } = React;
 
 // ─── Constants ───────────────────────────────────────────────────────────────
 
-const APP_VERSION = "0.0.192"; // bumped on every deploy — keep in sync with version.json AND with the ?v= on polish.css above
+const APP_VERSION = "0.0.193"; // bumped on every deploy — keep in sync with version.json AND with the ?v= on polish.css above
 
 // ─── Backend + Supabase config ───────────────────────────────────────────────
 const SUPABASE_URL = "https://oyrlzqbjcsliesvunbwj.supabase.co";
@@ -3121,7 +3121,7 @@ const FILTER_TABS = [
 function ThreadColumn({contact,allMsgs,deletedIds,selectedMsgId,msgTags,onSelect,onSelectDraft,onNewMsg,onEditContact,
                        contactTags,allTags,onAddContactTag,onRemoveContactTag,
                        emailFlags,archivedContacts,onToggleFlag,
-                       savedFilter,onFilterChange,onMarkManyRead,lazyFetching,mobileBack}) {
+                       savedFilter,onFilterChange,onMarkManyRead,lazyFetching,arrowFocus,mobileBack}) {
   const isMobile = typeof window !== 'undefined' && window.innerWidth < 768;
   const [nameHover,setNameHover]=useState(false);
   const [flagsOpen,setFlagsOpen]=useState(false);
@@ -3155,15 +3155,18 @@ function ThreadColumn({contact,allMsgs,deletedIds,selectedMsgId,msgTags,onSelect
   },[allMsgs,filter,deletedIds]);
 
   // Arrow up / arrow down: walk through the visible (already-filtered
-  // + sorted) thread. No wrap-around — feels jarring when the list is
-  // long. Skipped while a text field has focus so the user can still
-  // navigate inside the compose box, the search bar, etc. Modifier
-  // keys are passed through too (Cmd+Arrow / Shift+Arrow stay as the
-  // browser's word/selection shortcuts). When the user lands on a
-  // draft row we route through onSelectDraft to open the compose pane
-  // instead of the read-only detail.
+  // + sorted) thread. Only fires when arrowFocus === 'mails' so the
+  // contact-list arrow-nav in LeftColumn doesn't double-handle. No
+  // wrap-around — feels jarring when the list is long. Skipped while
+  // a text field has focus so the user can still navigate inside the
+  // compose box, the search bar, etc. Modifier keys are passed
+  // through too (Cmd+Arrow / Shift+Arrow stay as the browser's
+  // word/selection shortcuts). When the user lands on a draft row we
+  // route through onSelectDraft to open the compose pane instead of
+  // the read-only detail.
   useEffect(()=>{
     function onKey(e){
+      if(arrowFocus!=='mails') return;
       if(e.key!=='ArrowDown'&&e.key!=='ArrowUp') return;
       if(e.metaKey||e.ctrlKey||e.altKey||e.shiftKey) return;
       const el=document.activeElement;
@@ -3181,7 +3184,7 @@ function ThreadColumn({contact,allMsgs,deletedIds,selectedMsgId,msgTags,onSelect
     }
     document.addEventListener('keydown',onKey);
     return ()=>document.removeEventListener('keydown',onKey);
-  },[msgs,selectedMsgId,onSelect,onSelectDraft]);
+  },[msgs,selectedMsgId,onSelect,onSelectDraft,arrowFocus]);
 
   // Actionable = unread incoming + outgoing with armed revert2me. Same
   // definition as the "Now" filter and the left-column actionable badge.
@@ -3800,6 +3803,7 @@ function LeftColumn({contactMeta, archivedContacts, selectedId, mergeId, onSelec
                      actionableCounts={total:0, inSel:0},
                      onContactTabChange,
                      pendingMergeId=null, onSwipeMerge,
+                     arrowFocus='contacts',
                      dataLoading=false}) {
   const [accDropOpen, setAccDropOpen] = useState(false);
   const [contactTab,  setContactTabRaw] = useState('Convo');
@@ -3859,6 +3863,41 @@ function LeftColumn({contactMeta, archivedContacts, selectedId, mergeId, onSelec
       if((ba>0)!==(bb>0)) return ba>0 ? -1 : 1;
       return 0;
     });
+  // Hold the latest activeContacts in a ref so the keydown handler can
+  // read the freshest list without us re-binding the document listener
+  // on every render. activeContacts is recomputed each render (new
+  // array reference); if we put it in the useEffect deps we'd churn
+  // through addEventListener/removeEventListener at the same cadence.
+  const activeContactsRef = useRef([]);
+  activeContactsRef.current = activeContacts;
+  // Arrow up / arrow down: walk through the contact list currently
+  // visible under the active contact tab + archive toggle. Only fires
+  // when arrowFocus === 'contacts' so the thread-list arrow-nav in
+  // ThreadColumn doesn't double-handle. Modifier keys and text-field
+  // focus are passed through, same rule as the thread-list handler.
+  // onSelect receives an empty event object so handleSelectContact's
+  // shift-merge path stays inactive — a keyboard arrow shouldn't start
+  // a merge.
+  useEffect(()=>{
+    function onKey(e){
+      if(arrowFocus!=='contacts') return;
+      if(e.key!=='ArrowDown'&&e.key!=='ArrowUp') return;
+      if(e.metaKey||e.ctrlKey||e.altKey||e.shiftKey) return;
+      const el=document.activeElement;
+      if(el&&(el.tagName==='INPUT'||el.tagName==='TEXTAREA'||el.isContentEditable)) return;
+      const list=activeContactsRef.current;
+      if(list.length===0) return;
+      e.preventDefault();
+      const currIdx=selectedId?list.findIndex(c=>c.contact.id===selectedId):-1;
+      let nextIdx;
+      if(e.key==='ArrowDown') nextIdx=currIdx<0?0:Math.min(currIdx+1,list.length-1);
+      else                    nextIdx=currIdx<=0?0:currIdx-1;
+      const next=list[nextIdx];
+      if(next) onSelect?.(next.contact.id,{});
+    }
+    document.addEventListener('keydown',onKey);
+    return ()=>document.removeEventListener('keydown',onKey);
+  },[selectedId,onSelect,arrowFocus]);
   const activeTags      = usedTags.filter(t=>!archivedTags.has(t));
   const archiveTags     = usedTags.filter(t=>archivedTags.has(t));
   function tabBadge(tab){
@@ -5829,6 +5868,14 @@ function App({userId, onSignOut}) {
   const [signatures,       setSignatures]       = useState(()=>bootstrapCache?.signatures ?? []);
   const [accountSigs,      setAccountSigs]      = useState(()=>bootstrapCache?.accountSigs ?? {});
   const [contactFilter,    setContactFilter]    = useState('all');
+  // Which list responds to plain ArrowUp / ArrowDown — col 1 (contacts)
+  // or col 2 (mails). Updated on row clicks: clicking a contact gives
+  // arrows to col 1; clicking a mail row gives them to col 2. Default
+  // is 'contacts' so a fresh load starts with up/down walking through
+  // the contact list. Filter-tab clicks and similar non-row taps don't
+  // change focus — the user is interacting with the same column they
+  // were already in.
+  const [arrowFocus,       setArrowFocus]       = useState('contacts');
   const [tagFilter,        setTagFilter]        = useState('all');
   const [msgSnoozeCounts,  setMsgSnoozeCounts]  = useState(()=>bootstrapCache?.msgSnoozeCounts ?? {});
   const [actionToast,      setActionToast]      = useState(null);
@@ -6362,6 +6409,7 @@ function App({userId, onSignOut}) {
     // Any plain tap clears the pending swipe-merge marker. The user can
     // explicitly cancel the merge flow this way without finishing it.
     if (pendingMergeId !== null) { setPendingMergeId(null); setActionToast(null); }
+    setArrowFocus('contacts');
     setSelContact(id);setMergeContact(null);setSelTag(null);
     setShowCompose(false);setReplyTo(null);setReplyKind(null);setComposeContact(null);setComposeDraft(null);setEditingContact(null);
     setSearchQuery('');setSearchScope('all');
@@ -6406,6 +6454,7 @@ function App({userId, onSignOut}) {
   }
   function handleSelectMsg(id){
     setSelMsg(id);setShowCompose(false);setReplyTo(null);setReplyKind(null);setComposeContact(null);setComposeDraft(null);
+    setArrowFocus('mails');
     if(isMobile) setMobileCol(2);
   }
   async function handleMerge(keep,discard,emails){
@@ -6735,7 +6784,7 @@ function App({userId, onSignOut}) {
     didOnboardRef.current = true;
     if (mailAccounts.length === 0) setSettingsTab('accounts');
   }, [dataLoading, mailAccounts]);
-  function handleSelectDraft(msg){setComposeDraft(msg);setReplyTo(null);setReplyKind(null);setComposeContact(null);setShowCompose(true);setMergeContact(null);setSelMsg(null);if(isMobile)setMobileCol(2);}
+  function handleSelectDraft(msg){setComposeDraft(msg);setReplyTo(null);setReplyKind(null);setComposeContact(null);setShowCompose(true);setMergeContact(null);setSelMsg(null);setArrowFocus('mails');if(isMobile)setMobileCol(2);}
   function handleCloseCompose(){
     const origin = composeOrigin;
     setShowCompose(false);setReplyTo(null);setReplyKind(null);setComposeContact(null);setComposeDraft(null);setTagComposeInit(null);
@@ -7277,6 +7326,7 @@ function App({userId, onSignOut}) {
       onFilterChange={handleContactFilterChange}
       onMarkManyRead={handleMarkManyRead}
       lazyFetching={lazyFetchingContactId === selContact}
+      arrowFocus={arrowFocus}
       mobileBack={()=>setMobileCol(0)}/>;
   }
 
@@ -7563,6 +7613,7 @@ function App({userId, onSignOut}) {
                 actionableCounts={actionableCounts}
                 onContactTabChange={handleContactTabChange}
                 pendingMergeId={pendingMergeId} onSwipeMerge={handleSwipeMerge}
+                arrowFocus={arrowFocus}
                 dataLoading={dataLoading}/>
             </div>
             {/* Mobile Col 2 */}
@@ -7626,6 +7677,7 @@ function App({userId, onSignOut}) {
                 actionableCounts={actionableCounts}
                 onContactTabChange={handleContactTabChange}
                 pendingMergeId={pendingMergeId} onSwipeMerge={handleSwipeMerge}
+                arrowFocus={arrowFocus}
                 dataLoading={dataLoading}/>
             </div>
 
