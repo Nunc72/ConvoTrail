@@ -184,7 +184,7 @@
        polish change is picked up by every browser as soon as the version
        is bumped — no manual cache-busters needed. Keep ?v= here in sync
        with APP_VERSION below at every deploy. -->
-  <link rel="stylesheet" href="polish.css?v=0.0.195"/>
+  <link rel="stylesheet" href="polish.css?v=0.0.196"/>
 </head>
 <body>
 <div id="root">
@@ -199,7 +199,7 @@ const { useState, useMemo, useRef, useEffect, useCallback } = React;
 
 // ─── Constants ───────────────────────────────────────────────────────────────
 
-const APP_VERSION = "0.0.195"; // bumped on every deploy — keep in sync with version.json AND with the ?v= on polish.css above
+const APP_VERSION = "0.0.196"; // bumped on every deploy — keep in sync with version.json AND with the ?v= on polish.css above
 
 // ─── Backend + Supabase config ───────────────────────────────────────────────
 const SUPABASE_URL = "https://oyrlzqbjcsliesvunbwj.supabase.co";
@@ -7295,8 +7295,20 @@ function App({userId, onSignOut}) {
     if (selContact != null && !msgMatchesThreadFilter(m, contactFilter, deletedIds)) return null;
     return m;
   })();
-  // When in tag view, derive the detail contact from the message itself
-  const detailContact = selectedContact || (selectedMsg?contactList.find(c=>c.id===selectedMsg.contactId)||null:null);
+  // The header in col 3 shows the contact tied to the OPEN MAIL.
+  // selectedContact reflects the "active thread" in col 2 — usually
+  // these match, but they diverge whenever the user opens a row that
+  // doesn't belong to the currently selected contact (search result,
+  // tag-view row, or simply a different contact's mail before they've
+  // re-clicked col 1). Prefer the mail's own contactId so the header
+  // never lags behind: Rik hit this by selecting contact A, running a
+  // search, opening contact B's mail — the avatar / name stayed on A.
+  // Fall back to selectedContact when the mail's contactId can't be
+  // resolved (orphan rows), and fall back to selectedContact entirely
+  // when no mail is open at all.
+  const detailContact = selectedMsg
+    ? (contactList.find(c => c.id === selectedMsg.contactId) || selectedContact || null)
+    : selectedContact;
   const allContactMsgs=selContact?messageList
     .filter(m=>m.contactId===selContact)
     .filter(m=>!m.accountEmail||selAccounts.includes(m.accountEmail))
