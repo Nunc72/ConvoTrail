@@ -184,7 +184,7 @@
        polish change is picked up by every browser as soon as the version
        is bumped — no manual cache-busters needed. Keep ?v= here in sync
        with APP_VERSION below at every deploy. -->
-  <link rel="stylesheet" href="polish.css?v=0.0.194"/>
+  <link rel="stylesheet" href="polish.css?v=0.0.195"/>
 </head>
 <body>
 <div id="root">
@@ -199,7 +199,7 @@ const { useState, useMemo, useRef, useEffect, useCallback } = React;
 
 // ─── Constants ───────────────────────────────────────────────────────────────
 
-const APP_VERSION = "0.0.194"; // bumped on every deploy — keep in sync with version.json AND with the ?v= on polish.css above
+const APP_VERSION = "0.0.195"; // bumped on every deploy — keep in sync with version.json AND with the ?v= on polish.css above
 
 // ─── Backend + Supabase config ───────────────────────────────────────────────
 const SUPABASE_URL = "https://oyrlzqbjcsliesvunbwj.supabase.co";
@@ -3134,11 +3134,11 @@ function MessageDetail({message,contact,isDeleted,msgTags,allTags,onReply,onRepl
 // filter id (kept as 'now' so msgMatchesThreadFilter and any other
 // downstream check don't need a rename). New default for both
 // thread view and search is "All" — first position, no surprise pile
-// of just unread mail when you open a contact. "Unseen" sits in the
+// of just unread mail when you open a contact. "Now" sits in the
 // second slot for users who want to scope to actionable.
 const FILTER_TABS = [
   { label: "All",     key: "all" },
-  { label: "Unseen",  key: "now" },
+  { label: "Now",     key: "now" },
   { label: "In",      key: "in" },
   { label: "Out",     key: "out" },
   { label: "Draft",   key: "draft" },
@@ -3700,7 +3700,7 @@ function TagEditForm({tag, emailRoles, involvedEmails, contacts, isArchived, onS
 
 const SEARCH_FILTER_TABS = [
   { label: "All",     key: "all" },
-  { label: "Unseen",  key: "now" },
+  { label: "Now",     key: "now" },
   { label: "In",      key: "in" },
   { label: "Out",     key: "out" },
   { label: "Draft",   key: "draft" },
