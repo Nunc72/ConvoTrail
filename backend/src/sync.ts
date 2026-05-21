@@ -138,12 +138,27 @@ export async function syncAccount(accountId: string): Promise<SyncResult> {
           try {
             const row = await buildMessageRow(msg, acc.id, userId, box.path, uidvalidity, userEmail);
             rows.push(row);
-            // collect addresses for contact extraction
+            // Collect addresses for contact extraction. Rule:
+            //   • Incoming mail → only the SENDER (from_email) becomes a
+            //     contact. The to/cc list on an incoming mail is just
+            //     "other people who also got this", not anyone the user
+            //     has a real relationship with. Earlier code extracted
+            //     to/cc here too, which polluted the contact list with
+            //     ~10% spurious rows (calendar-invite co-recipients,
+            //     forward CCs, *@privaterelay.appleid.com aliases, etc.)
+            //     that the user never sent to or received from.
+            //   • Outgoing mail → the sender is the user (skipped via
+            //     allExtractedAddrs.delete(userEmail) below), but every
+            //     to/cc address is someone the user explicitly emailed
+            //     and therefore a real contact.
             const parsed = msg.source ? await simpleParser(msg.source) : null;
             if (parsed) {
-              for (const a of addrList(parsed.from)) allExtractedAddrs.set(a.email, a.name);
-              for (const a of addrList(parsed.to))   allExtractedAddrs.set(a.email, a.name);
-              for (const a of addrList(parsed.cc))   allExtractedAddrs.set(a.email, a.name);
+              if (row.direction === 'in') {
+                for (const a of addrList(parsed.from)) allExtractedAddrs.set(a.email, a.name);
+              } else {
+                for (const a of addrList(parsed.to)) allExtractedAddrs.set(a.email, a.name);
+                for (const a of addrList(parsed.cc)) allExtractedAddrs.set(a.email, a.name);
+              }
             }
             // Newsletter detection: incoming mail with a List-Unsubscribe
             // header. The sender becomes a candidate for the News flag.
