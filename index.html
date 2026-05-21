@@ -184,7 +184,7 @@
        polish change is picked up by every browser as soon as the version
        is bumped — no manual cache-busters needed. Keep ?v= here in sync
        with APP_VERSION below at every deploy. -->
-  <link rel="stylesheet" href="polish.css?v=0.0.190"/>
+  <link rel="stylesheet" href="polish.css?v=0.0.191"/>
 </head>
 <body>
 <div id="root">
@@ -199,7 +199,7 @@ const { useState, useMemo, useRef, useEffect, useCallback } = React;
 
 // ─── Constants ───────────────────────────────────────────────────────────────
 
-const APP_VERSION = "0.0.190"; // bumped on every deploy — keep in sync with version.json AND with the ?v= on polish.css above
+const APP_VERSION = "0.0.191"; // bumped on every deploy — keep in sync with version.json AND with the ?v= on polish.css above
 
 // ─── Backend + Supabase config ───────────────────────────────────────────────
 const SUPABASE_URL = "https://oyrlzqbjcsliesvunbwj.supabase.co";
@@ -481,6 +481,24 @@ function formatTime(s) {
 }
 function formatFull(s) {
   return new Date(s).toLocaleString("nl-NL",{day:"numeric",month:"long",year:"numeric",hour:"2-digit",minute:"2-digit"});
+}
+// Used in the revert-to-me alert banners to tell the user at a glance
+// how long the outgoing mail has been sitting without a reply. Counts
+// whole calendar days from message.date until "now". Rolls up into
+// weeks past 14 days and months past 8 weeks so the chip stays short
+// on long-lingering r2m's ("no reply for 14 weeks" beats "98 days").
+function formatR2mDuration(dateStr) {
+  if (!dateStr) return 'no reply yet';
+  const days = Math.floor((Date.now() - new Date(dateStr).getTime()) / 86400000);
+  if (days < 1)  return 'no reply yet';
+  if (days === 1) return 'no reply for 1 day';
+  if (days < 14)  return `no reply for ${days} days`;
+  const weeks = Math.floor(days / 7);
+  if (weeks < 8)  return `no reply for ${weeks} weeks`;
+  const months = Math.floor(days / 30);
+  if (months < 12) return `no reply for ${months} months`;
+  const years = Math.floor(days / 365);
+  return `no reply for ${years} year${years === 1 ? '' : 's'}`;
 }
 function quoteHeader(msg) {
   const d=new Date(msg.date);
@@ -2849,7 +2867,7 @@ function MessageDetail({message,contact,isDeleted,msgTags,allTags,onReply,onRepl
         zIndex: 20,
       }}>
       <span className="text-xs font-medium flex-1 truncate">
-        {showAmberBanner ? 'Revert-to-me: no reply yet.' : 'New message: not read.'}
+        {showAmberBanner ? `Revert-to-me: ${formatR2mDuration(message.date)}.` : 'New message: not read.'}
       </span>
       <div className="flex gap-1.5 flex-shrink-0">
         {showAmberBanner ? (<>
@@ -2915,7 +2933,7 @@ function MessageDetail({message,contact,isDeleted,msgTags,allTags,onReply,onRepl
       <div className="relative flex-shrink-0">
         {showAmberBanner&&(
           <div className="mx-4 mt-3 px-3 py-2 rounded bg-amber-50 border border-amber-200 flex items-center gap-2 text-xs text-amber-700">
-            <span><strong>Revert2Me:</strong> no reply</span>
+            <span><strong>Revert2Me:</strong> {formatR2mDuration(message.date)}</span>
             <div className="ml-auto flex gap-2">
               <button onClick={()=>onR2mSnooze?.(message.id)}
                 className="px-2 py-0.5 rounded bg-amber-100 hover:bg-amber-200 font-medium">Snooze</button>
