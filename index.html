@@ -184,7 +184,7 @@
        polish change is picked up by every browser as soon as the version
        is bumped — no manual cache-busters needed. Keep ?v= here in sync
        with APP_VERSION below at every deploy. -->
-  <link rel="stylesheet" href="polish.css?v=0.0.189"/>
+  <link rel="stylesheet" href="polish.css?v=0.0.190"/>
 </head>
 <body>
 <div id="root">
@@ -199,7 +199,7 @@ const { useState, useMemo, useRef, useEffect, useCallback } = React;
 
 // ─── Constants ───────────────────────────────────────────────────────────────
 
-const APP_VERSION = "0.0.189"; // bumped on every deploy — keep in sync with version.json AND with the ?v= on polish.css above
+const APP_VERSION = "0.0.190"; // bumped on every deploy — keep in sync with version.json AND with the ?v= on polish.css above
 
 // ─── Backend + Supabase config ───────────────────────────────────────────────
 const SUPABASE_URL = "https://oyrlzqbjcsliesvunbwj.supabase.co";
@@ -3091,7 +3091,20 @@ function MessageDetail({message,contact,isDeleted,msgTags,allTags,onReply,onRepl
 
 // ─── Thread Column ────────────────────────────────────────────────────────────
 
-const FILTER_TABS = ["Now","All","In","Out","Draft","Deleted"];
+// { label, key } — label is what the user sees, key is the internal
+// filter id (kept as 'now' so msgMatchesThreadFilter and any other
+// downstream check don't need a rename). New default for both
+// thread view and search is "All" — first position, no surprise pile
+// of just unread mail when you open a contact. "Unseen" sits in the
+// second slot for users who want to scope to actionable.
+const FILTER_TABS = [
+  { label: "All",     key: "all" },
+  { label: "Unseen",  key: "now" },
+  { label: "In",      key: "in" },
+  { label: "Out",     key: "out" },
+  { label: "Draft",   key: "draft" },
+  { label: "Deleted", key: "deleted" },
+];
 
 function ThreadColumn({contact,allMsgs,deletedIds,selectedMsgId,msgTags,onSelect,onSelectDraft,onNewMsg,onEditContact,
                        contactTags,allTags,onAddContactTag,onRemoveContactTag,
@@ -3108,7 +3121,7 @@ function ThreadColumn({contact,allMsgs,deletedIds,selectedMsgId,msgTags,onSelect
     return()=>document.removeEventListener("mousedown",h);
   },[flagsOpen]);
   const listRef=useRef(null);
-  const filter = savedFilter||"now";
+  const filter = savedFilter||"all";
   const setFilterAndSave = f=>onFilterChange?.(f);
   useEffect(()=>{
     if(!selectedMsgId||!listRef.current) return;
@@ -3128,6 +3141,35 @@ function ThreadColumn({contact,allMsgs,deletedIds,selectedMsgId,msgTags,onSelect
     const sortKey=x=>x.draft?(x.modifiedAt||x.date):x.date;
     return [...m].sort((a,b)=>sortKey(b).localeCompare(sortKey(a)));
   },[allMsgs,filter,deletedIds]);
+
+  // Arrow up / arrow down: walk through the visible (already-filtered
+  // + sorted) thread. No wrap-around — feels jarring when the list is
+  // long. Skipped while a text field has focus so the user can still
+  // navigate inside the compose box, the search bar, etc. Modifier
+  // keys are passed through too (Cmd+Arrow / Shift+Arrow stay as the
+  // browser's word/selection shortcuts). When the user lands on a
+  // draft row we route through onSelectDraft to open the compose pane
+  // instead of the read-only detail.
+  useEffect(()=>{
+    function onKey(e){
+      if(e.key!=='ArrowDown'&&e.key!=='ArrowUp') return;
+      if(e.metaKey||e.ctrlKey||e.altKey||e.shiftKey) return;
+      const el=document.activeElement;
+      if(el&&(el.tagName==='INPUT'||el.tagName==='TEXTAREA'||el.isContentEditable)) return;
+      if(msgs.length===0) return;
+      e.preventDefault();
+      const currIdx=selectedMsgId?msgs.findIndex(m=>m.id===selectedMsgId):-1;
+      let nextIdx;
+      if(e.key==='ArrowDown') nextIdx=currIdx<0?0:Math.min(currIdx+1,msgs.length-1);
+      else                    nextIdx=currIdx<=0?0:currIdx-1;
+      const next=msgs[nextIdx];
+      if(!next) return;
+      if(next.draft) onSelectDraft?.(next);
+      else           onSelect?.(next.id);
+    }
+    document.addEventListener('keydown',onKey);
+    return ()=>document.removeEventListener('keydown',onKey);
+  },[msgs,selectedMsgId,onSelect,onSelectDraft]);
 
   // Actionable = unread incoming + outgoing with armed revert2me. Same
   // definition as the "Now" filter and the left-column actionable badge.
@@ -3245,14 +3287,14 @@ function ThreadColumn({contact,allMsgs,deletedIds,selectedMsgId,msgTags,onSelect
         {/* Sticky filter tabs — colored active states, bg matches card above */}
         <div className="bg-gray-50 border-b border-gray-200 flex-shrink-0 px-5 py-2" style={{position:'sticky',top:0,zIndex:10,overscrollBehavior:'none'}}>
           <div className="flex gap-0.5 flex-wrap">
-            {FILTER_TABS.map(f=>{
-              const k=f.toLowerCase(), active=filter===k;
+            {FILTER_TABS.map(({label, key:k})=>{
+              const active=filter===k;
               const style=active?{now:"bg-indigo-100 text-indigo-700 font-semibold",all:"bg-gray-200 text-gray-700 font-semibold",
                 in:"bg-sky-100 text-sky-700 font-semibold",out:"bg-emerald-100 text-emerald-700 font-semibold",
                 draft:"bg-gray-100 text-gray-600 font-semibold",deleted:"bg-red-100 text-red-600 font-semibold"}[k]
                 :"text-gray-400 hover:text-gray-600";
-              return <button key={f} onClick={()=>setFilterAndSave(k)}
-                className={`convooz-thread-filter-tab px-2.5 py-0.5 text-xs rounded-full transition-colors ${style}`}>{f}</button>;
+              return <button key={k} onClick={()=>setFilterAndSave(k)}
+                className={`convooz-thread-filter-tab px-2.5 py-0.5 text-xs rounded-full transition-colors ${style}`}>{label}</button>;
             })}
           </div>
         </div>
@@ -3348,14 +3390,14 @@ function ThreadColumn({contact,allMsgs,deletedIds,selectedMsgId,msgTags,onSelect
         </div>
         {/* Filter tabs */}
         <div className="flex gap-0.5 flex-wrap mt-1">
-          {FILTER_TABS.map(f=>{
-            const k=f.toLowerCase(), active=filter===k;
+          {FILTER_TABS.map(({label, key:k})=>{
+            const active=filter===k;
             const style=active?{now:"bg-indigo-100 text-indigo-700 font-semibold",all:"bg-gray-200 text-gray-700 font-semibold",
               in:"bg-sky-100 text-sky-700 font-semibold",out:"bg-emerald-100 text-emerald-700 font-semibold",
               draft:"bg-gray-100 text-gray-600 font-semibold",deleted:"bg-red-100 text-red-600 font-semibold"}[k]
               :"text-gray-400 hover:text-gray-600";
-            return <button key={f} onClick={()=>setFilterAndSave(k)}
-              className={`convooz-thread-filter-tab px-2.5 py-0.5 text-xs rounded-full transition-colors ${style}`}>{f}</button>;
+            return <button key={k} onClick={()=>setFilterAndSave(k)}
+              className={`convooz-thread-filter-tab px-2.5 py-0.5 text-xs rounded-full transition-colors ${style}`}>{label}</button>;
           })}
         </div>
       </div>
@@ -3614,7 +3656,14 @@ function TagEditForm({tag, emailRoles, involvedEmails, contacts, isArchived, onS
 
 // ─── Global Search Results ───────────────────────────────────────────────────
 
-const SEARCH_FILTER_TABS = ["Now","All","In","Out","Draft","Deleted"];
+const SEARCH_FILTER_TABS = [
+  { label: "All",     key: "all" },
+  { label: "Unseen",  key: "now" },
+  { label: "In",      key: "in" },
+  { label: "Out",     key: "out" },
+  { label: "Draft",   key: "draft" },
+  { label: "Deleted", key: "deleted" },
+];
 
 function GlobalSearchResults({messages, contacts, deletedIds, msgTags, msgMatchesSearch, selectedMsgId, onSelectMsg, onSelectDraft, serverHits=[], serverSearching=false}) {
   const [filter, setFilter] = useState('all');
@@ -3652,14 +3701,14 @@ function GlobalSearchResults({messages, contacts, deletedIds, msgTags, msgMatche
     <div className="flex flex-col h-full bg-white">
       {/* Filter bar */}
       <div className="flex gap-0.5 px-3 py-2 border-b border-gray-200 flex-shrink-0 bg-gray-50">
-        {SEARCH_FILTER_TABS.map(f=>{
-          const k=f.toLowerCase(), active=filter===k;
+        {SEARCH_FILTER_TABS.map(({label, key:k})=>{
+          const active=filter===k;
           const style=active?{now:"bg-indigo-100 text-indigo-700 font-semibold",all:"bg-gray-200 text-gray-700 font-semibold",
             in:"bg-sky-100 text-sky-700 font-semibold",out:"bg-emerald-100 text-emerald-700 font-semibold",
             draft:"bg-gray-100 text-gray-600 font-semibold",deleted:"bg-red-100 text-red-600 font-semibold"}[k]
             :"text-gray-400 hover:text-gray-600";
-          return <button key={f} onClick={()=>setFilter(k)}
-            className={`convooz-thread-filter-tab px-2.5 py-0.5 text-xs rounded-full transition-colors ${style}`}>{f}</button>;
+          return <button key={k} onClick={()=>setFilter(k)}
+            className={`convooz-thread-filter-tab px-2.5 py-0.5 text-xs rounded-full transition-colors ${style}`}>{label}</button>;
         })}
       </div>
       {/* Results list */}
@@ -5767,7 +5816,7 @@ function App({userId, onSignOut}) {
   const userMenuRef = useRef(null);
   const [signatures,       setSignatures]       = useState(()=>bootstrapCache?.signatures ?? []);
   const [accountSigs,      setAccountSigs]      = useState(()=>bootstrapCache?.accountSigs ?? {});
-  const [contactFilter,    setContactFilter]    = useState('now');
+  const [contactFilter,    setContactFilter]    = useState('all');
   const [tagFilter,        setTagFilter]        = useState('all');
   const [msgSnoozeCounts,  setMsgSnoozeCounts]  = useState(()=>bootstrapCache?.msgSnoozeCounts ?? {});
   const [actionToast,      setActionToast]      = useState(null);
@@ -6874,12 +6923,21 @@ function App({userId, onSignOut}) {
   }
   // Toggle a contact-level flag (isNews | isNoReply | isMuted | archive).
   // Optimistic flip then PATCH /contacts/:id — revert + toast on failure.
+  //
+  // Side-effect: any flag toggle resets the active selection (col 2 +
+  // col 3 → empty state). Rationale: toggling a flag moves the contact
+  // to a different LeftColumn tab (Convo ↔ Noreply / News / Muted /
+  // Archive). Without the reset the user would still see the open
+  // thread for a contact that's just disappeared from the visible
+  // list — confusing. The user's mental model is "I'm done with this
+  // contact, file it away", so we honour that by clearing the view.
   function handleToggleContactFlag(id, flag){
     const contact = contactList.find(c=>c.id===id);
     if (!contact) return;
     if (flag === 'archive') {
       const wasArchived = archivedContacts.has(id);
       setArchivedContacts(prev=>{const n=new Set(prev);wasArchived?n.delete(id):n.add(id);return n;});
+      if (selContact === id) { setSelContact(null); setSelMsg(null); }
       apiFetch(`/contacts/${id}`, { method:'PATCH', body: JSON.stringify({ archived: !wasArchived }) })
         .catch(e => {
           setArchivedContacts(prev=>{const n=new Set(prev);wasArchived?n.add(id):n.delete(id);return n;});
@@ -6896,6 +6954,7 @@ function App({userId, onSignOut}) {
       const reasonChange = flag === 'isMuted' && !newVal ? { muteReason: null } : {};
       return { ...c, [flag]: newVal, ...reasonChange };
     }));
+    if (selContact === id) { setSelContact(null); setSelMsg(null); }
     const bodyKey = flag === 'isNews' ? 'is_news'
                   : flag === 'isNoReply' ? 'is_no_reply'
                   : 'is_muted';
