@@ -184,7 +184,7 @@
        polish change is picked up by every browser as soon as the version
        is bumped — no manual cache-busters needed. Keep ?v= here in sync
        with APP_VERSION below at every deploy. -->
-  <link rel="stylesheet" href="polish.css?v=0.0.200"/>
+  <link rel="stylesheet" href="polish.css?v=0.0.201"/>
 </head>
 <body>
 <div id="root">
@@ -199,7 +199,7 @@ const { useState, useMemo, useRef, useEffect, useCallback } = React;
 
 // ─── Constants ───────────────────────────────────────────────────────────────
 
-const APP_VERSION = "0.0.200"; // bumped on every deploy — keep in sync with version.json AND with the ?v= on polish.css above
+const APP_VERSION = "0.0.201"; // bumped on every deploy — keep in sync with version.json AND with the ?v= on polish.css above
 
 // ─── Backend + Supabase config ───────────────────────────────────────────────
 const SUPABASE_URL = "https://oyrlzqbjcsliesvunbwj.supabase.co";
@@ -417,32 +417,17 @@ const INIT_MESSAGES = [
   { id: 2601, contactId: 26, dir: "in",  subject: "Statikbericht liegt vor",                     from: "h.kruse@kruse-bau.de",       to: "q@yvilik.com",    date: "2026-04-08T09:00:00", read: false, revert2me: false, body: "Guten Morgen,\n\nder Statikbericht liegt nun vor. Bitte prüfen Sie die Unterlagen und geben Sie uns Rückmeldung.\n\nMit freundlichen Grüßen,\nHanna Kruse" },
 ];
 
-const INIT_DELETED  = [801, 106, 503, 902];
-// Initial tags per message
-const INIT_MSG_TAGS = { 101: ["Aanbouw Amersfoort"], 102: ["Aanbouw Amersfoort"], 103: ["Aanbouw Amersfoort"], 201: ["Gevelstudie Amstelveenseweg"], 202: ["Gevelstudie Amstelveenseweg"], 220: ["Gevelstudie Amstelveenseweg"], 601: ["Aanbesteding woongroep Sleuteldorp"], 603: ["Aanbesteding woongroep Sleuteldorp"] };
-// Initial tags per contact (internal only)
-const INIT_CON_TAGS = { 1: ["Aanbouw Amersfoort"], 2: ["Gevelstudie Amstelveenseweg"], 6: ["Aanbesteding woongroep Sleuteldorp"] };
-// Initial email flags (news=true for newsletter contacts 10–21)
-const INIT_EMAIL_FLAGS = {
-  10: { "newsletter@architizer.com":            { news:true } },
-  11: { "daily@dezeen.com":                     { news:true } },
-  12: { "newsletter@archdaily.com":             { news:true } },
-  13: { "newsletter@frameweb.com":              { news:true } },
-  14: { "newsletter@wallpaper.com":             { news:true } },
-  15: { "newsletter@domusweb.it":               { news:true } },
-  16: { "newsletter@bdonline.co.uk":            { news:true } },
-  17: { "hello@thespaces.com":                  { news:true } },
-  18: { "newsletter@metropolismag.com":         { news:true } },
-  19: { "newsletter@azuremagazine.com":         { news:true } },
-  20: { "newsletter@architecturaldigest.com":   { news:true } },
-  21: { "newsletter@iconeye.com":               { news:true } },
-};
-// Initial email roles per tag
-const INIT_TAG_EMAIL_ROLES = {
-  "Aanbouw Amersfoort":              { "sophie@vandenBerg.nl":"To", "s.vdberg@work.com":"CC" },
-  "Gevelstudie Amstelveenseweg":     { "thomas.degroot@gmail.com":"To" },
-  "Aanbesteding woongroep Sleuteldorp": { "m.willemsen@bedrijf.nl":"To" },
-};
+// Initial state for the per-user collections that the bootstrap fills
+// in from Postgres. Empty defaults so a brand-new tester doesn't see
+// leftover dummy data from the mock-data era leak into the UI — the
+// Amersfoort / Amstelveenseweg / Sleuteldorp tag names used to show
+// up in autocomplete + suggestion lists for every user post-onboarding
+// because INIT_CON_TAGS values were merged into allKnownTags.
+const INIT_DELETED  = [];
+const INIT_MSG_TAGS = {};
+const INIT_CON_TAGS = {};
+const INIT_EMAIL_FLAGS = {};
+const INIT_TAG_EMAIL_ROLES = {};
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
