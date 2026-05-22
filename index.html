@@ -184,7 +184,7 @@
        polish change is picked up by every browser as soon as the version
        is bumped — no manual cache-busters needed. Keep ?v= here in sync
        with APP_VERSION below at every deploy. -->
-  <link rel="stylesheet" href="polish.css?v=0.0.197"/>
+  <link rel="stylesheet" href="polish.css?v=0.0.198"/>
 </head>
 <body>
 <div id="root">
@@ -199,7 +199,7 @@ const { useState, useMemo, useRef, useEffect, useCallback } = React;
 
 // ─── Constants ───────────────────────────────────────────────────────────────
 
-const APP_VERSION = "0.0.197"; // bumped on every deploy — keep in sync with version.json AND with the ?v= on polish.css above
+const APP_VERSION = "0.0.198"; // bumped on every deploy — keep in sync with version.json AND with the ?v= on polish.css above
 
 // ─── Backend + Supabase config ───────────────────────────────────────────────
 const SUPABASE_URL = "https://oyrlzqbjcsliesvunbwj.supabase.co";
@@ -3867,12 +3867,15 @@ function LeftColumn({contactMeta, archivedContacts, selectedId, mergeId, onSelec
     // when the Archive toggle is on, so we surface them via a synthetic
     // "Archive" tab name that the renderer treats specially.
     if (archivedContacts.has(id)) return 'Archive';
-    // Muted wins over noReply (spam path forces is_muted=true; the user
-    // might also have set is_no_reply for a previous interaction). News
-    // is the lowest-priority "still wants this in the timeline" flag.
+    // Muted wins over everything (spam path forces is_muted=true). After
+    // that, News beats Noreply per Rik's spec: a noreply@-style address
+    // that also ships a List-Unsubscribe header (typical newsletter
+    // pattern) should land in News, not Noreply — News is the more
+    // informative bucket. The auto-tagger in sync.ts sets both flags
+    // independently; this is where the tie-break gets resolved.
     if (c.isMuted)   return 'Muted';
-    if (c.isNoReply) return 'Noreply';
     if (c.isNews)    return 'News';
+    if (c.isNoReply) return 'Noreply';
     return 'Convo';
   }
   // When Archive toggle is on, the tab filter is replaced by "is archived"

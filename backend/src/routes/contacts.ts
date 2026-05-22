@@ -28,7 +28,13 @@ export async function registerContactsRoutes(app: FastifyInstance) {
       // the sync's auto-tag-newsletter logic must not flip it back.
       patch.is_news_user_set = true;
     }
-    if (typeof b.is_no_reply === "boolean") patch.is_no_reply = b.is_no_reply;
+    if (typeof b.is_no_reply === "boolean") {
+      patch.is_no_reply = b.is_no_reply;
+      // Mirror of is_news_user_set: once the user has explicitly toggled
+      // Noreply (either direction), the sync's auto-tag-noreply logic
+      // must not flip it back on the next pass.
+      patch.is_no_reply_user_set = true;
+    }
     if (typeof b.is_muted    === "boolean") {
       patch.is_muted = b.is_muted;
       // Clear the reason on un-mute so the next mute (e.g. manual) doesn't

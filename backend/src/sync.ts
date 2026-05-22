@@ -457,6 +457,13 @@ export async function syncAccount(accountId: string): Promise<SyncResult> {
       }
     }
 
+    // (Noreply auto-tag is applied at contact-creation time inside
+    // upsertContacts so only new contacts get tagged. Existing
+    // contacts are intentionally left alone — Rik prefers manual
+    // control there. The FE tab logic (getTab in index.html) gives
+    // News priority over Noreply when both flags happen to be set on
+    // the same contact.)
+
     // 4) Update last_sync_at, sync_known_uids, clear last_error
     await supabaseAdmin.from("mail_accounts")
       .update({
@@ -613,12 +620,23 @@ async function upsertContacts(userId: string, addrs: Map<string, string | null>)
   const toCreate = emails.filter(e => !have.has(e));
   if (toCreate.length === 0) return 0;
 
-  // Create contacts in batch
-  const contactRows = toCreate.map(email => ({
-    user_id: userId,
-    name: guessNameFromEmail(email, addrs.get(email) ?? null),
-    primary_email: email,
-  }));
+  // Create contacts in batch. New contacts whose email has "noreply"
+  // or "no-reply" in the local part are tagged is_no_reply=true on
+  // creation — same auto-tagging spirit as the existing newsletter
+  // detection, but applied immediately at contact birth so we don't
+  // touch any existing contacts after the fact. The FE LeftColumn
+  // tab logic puts them under the Noreply tab (News still wins if a
+  // later sync also sets is_news from a List-Unsubscribe header).
+  const NOREPLY_LOCAL_RE = /(noreply|no-reply)/i;
+  const contactRows = toCreate.map(email => {
+    const localPart = email.split("@")[0] ?? "";
+    return {
+      user_id: userId,
+      name: guessNameFromEmail(email, addrs.get(email) ?? null),
+      primary_email: email,
+      is_no_reply: NOREPLY_LOCAL_RE.test(localPart),
+    };
+  });
   const { data: created, error: cErr } = await supabaseAdmin.from("contacts").insert(contactRows).select("id, primary_email");
   if (cErr || !created) throw new Error(`contacts insert: ${cErr?.message}`);
   const emailRows = created.map(c => ({ contact_id: c.id, user_id: userId, email: c.primary_email as string }));
