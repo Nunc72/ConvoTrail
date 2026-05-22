@@ -193,7 +193,7 @@
        polish change is picked up by every browser as soon as the version
        is bumped — no manual cache-busters needed. Keep ?v= here in sync
        with APP_VERSION below at every deploy. -->
-  <link rel="stylesheet" href="polish.css?v=0.0.205"/>
+  <link rel="stylesheet" href="polish.css?v=0.0.206"/>
 </head>
 <body>
 <div id="root">
@@ -423,7 +423,7 @@ window.CONVOOZ_CRYPTO = CONVOOZ_CRYPTO;
 
 // ─── Constants ───────────────────────────────────────────────────────────────
 
-const APP_VERSION = "0.0.205"; // bumped on every deploy — keep in sync with version.json AND with the ?v= on polish.css above
+const APP_VERSION = "0.0.206"; // bumped on every deploy — keep in sync with version.json AND with the ?v= on polish.css above
 
 // ─── Backend + Supabase config ───────────────────────────────────────────────
 const SUPABASE_URL = "https://oyrlzqbjcsliesvunbwj.supabase.co";
@@ -3563,8 +3563,16 @@ function ThreadColumn({contact,allMsgs,deletedIds,selectedMsgId,msgTags,onSelect
             const isSel=msg.id===selectedMsgId, isDel=deletedIds.includes(msg.id), isDraft=!!msg.draft&&!isDel;
             const isOut=msg.dir==="out"||isDraft;
             const dt=isDraft?formatTime(msg.modifiedAt||msg.date):formatTime(msg.date);
+            // Outgoing CC/BCC recipients see the same mail in their thread
+            // with a role-prefix on the date so they can tell at a glance
+            // whether they were the primary addressee. "30 april" → "CC
+            // 30 april" / "BCC 30 april". Skip for plain To (or null role
+            // on incoming) so primary threads stay visually clean.
+            const dtPrefix = msg.dir === 'out' && (msg.role === 'cc' || msg.role === 'bcc')
+              ? (msg.role === 'cc' ? 'CC ' : 'BCC ')
+              : '';
             return (
-              <div key={msg.id} data-msgid={msg.id} onClick={()=>isDraft?onSelectDraft(msg):onSelect(msg.id)}
+              <div key={msg.id+"::"+msg.contactId} data-msgid={msg.id} onClick={()=>isDraft?onSelectDraft(msg):onSelect(msg.id)}
                 className={`py-2.5 border-b border-gray-100 cursor-pointer transition-colors
                   ${isSel?"bg-indigo-50 border-l-2 border-l-indigo-400":"hover:bg-gray-50"}
                   ${isDel?"opacity-60":""}
@@ -3576,7 +3584,7 @@ function ThreadColumn({contact,allMsgs,deletedIds,selectedMsgId,msgTags,onSelect
                     <span className={`text-xs truncate ${(!msg.read&&!isDel&&!isDraft)?"font-semibold text-gray-900":"text-gray-600"}`}>{msg.subject}</span>
                     {msg.hasAttachments&&<svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="text-gray-400 flex-shrink-0" aria-label="has attachment"><path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"/></svg>}
                   </div>
-                  <span className="text-xs text-gray-400 flex-shrink-0">{dt}</span>
+                  <span className="text-xs text-gray-400 flex-shrink-0">{dtPrefix}{dt}</span>
                 </div>
                 <div className="flex items-center gap-1.5 pr-14">
                   {isDraft?<span className="text-xs px-1.5 rounded font-medium bg-gray-100 text-gray-500 flex-shrink-0">Draft</span>
@@ -3665,8 +3673,11 @@ function ThreadColumn({contact,allMsgs,deletedIds,selectedMsgId,msgTags,onSelect
           const isSel=msg.id===selectedMsgId, isDel=deletedIds.includes(msg.id), isDraft=!!msg.draft&&!isDel;
           const isOut=msg.dir==="out"||isDraft;
           const dt=isDraft?formatTime(msg.modifiedAt||msg.date):formatTime(msg.date);
+          const dtPrefix = msg.dir === 'out' && (msg.role === 'cc' || msg.role === 'bcc')
+            ? (msg.role === 'cc' ? 'CC ' : 'BCC ')
+            : '';
           return (
-            <div key={msg.id} data-msgid={msg.id} onClick={()=>isDraft?onSelectDraft(msg):onSelect(msg.id)}
+            <div key={msg.id+"::"+msg.contactId} data-msgid={msg.id} onClick={()=>isDraft?onSelectDraft(msg):onSelect(msg.id)}
               className={`py-2.5 border-b border-gray-100 cursor-pointer transition-colors
                 ${isSel?"bg-indigo-50 border-l-2 border-l-indigo-400":"hover:bg-gray-50"}
                 ${isDel?"opacity-60":""}
@@ -3678,7 +3689,7 @@ function ThreadColumn({contact,allMsgs,deletedIds,selectedMsgId,msgTags,onSelect
                   <span className={`text-xs truncate ${(!msg.read&&!isDel&&!isDraft)?"font-semibold text-gray-900":"text-gray-600"}`}>{msg.subject}</span>
                   {msg.hasAttachments&&<svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="text-gray-400 flex-shrink-0" aria-label="has attachment"><path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"/></svg>}
                 </div>
-                <span className="text-xs text-gray-400 flex-shrink-0">{dt}</span>
+                <span className="text-xs text-gray-400 flex-shrink-0">{dtPrefix}{dt}</span>
               </div>
               <div className="flex items-center gap-1.5 pr-14">
                 {isDraft?<span className="text-xs px-1.5 rounded font-medium bg-gray-100 text-gray-500 flex-shrink-0">Draft</span>
@@ -3706,8 +3717,16 @@ function TagView({tag, messages, contacts, deletedIds, msgTags, emailRoles, myEm
   const tagFilter = savedFilter||'all';
   const setTagFilterAndSave = f=>onFilterChange?.(f);
   const tagSortKey=x=>x.draft?(x.modifiedAt||x.date):x.date;
-  const allTaggedMsgs = messages.filter(m=>(msgTags[m.id]||[]).includes(tag))
-    .sort((a,b)=>tagSortKey(b).localeCompare(tagSortKey(a)));
+  // Tag-view doesn't have a per-contact lens, so duplicate shape-entries
+  // (same mail under multiple recipient contacts) would render multiple
+  // identical rows. Dedup by id — keep the first one we see.
+  const allTaggedMsgsRaw = messages.filter(m=>(msgTags[m.id]||[]).includes(tag));
+  const _seenTagIds = new Set();
+  const allTaggedMsgs = allTaggedMsgsRaw.filter(m => {
+    if (_seenTagIds.has(m.id)) return false;
+    _seenTagIds.add(m.id);
+    return true;
+  }).sort((a,b)=>tagSortKey(b).localeCompare(tagSortKey(a)));
   const searchFn = msgMatchesSearch || (()=>true);
   const taggedMsgs = allTaggedMsgs.filter(m=>{
     if(!searchFn(m)) return false;
@@ -3928,7 +3947,17 @@ function GlobalSearchResults({messages, contacts, deletedIds, msgTags, msgMatche
     else if(filter==='draft')   m = m.filter(x=>x.draft&&!del(x));
     else if(filter==='deleted') m = m.filter(x=>del(x));
     else m = m.filter(x=>!del(x));
-    return [...m].sort((a,b)=>filter==='draft'?(b.modifiedAt||b.date).localeCompare(a.modifiedAt||a.date):b.date.localeCompare(a.date));
+    // Global search spans every contact thread, so it picks up every
+    // shape-entry of a mail (one per recipient for outgoing). Dedup by
+    // id so the result list shows each matching mail exactly once.
+    const seenIds = new Set();
+    const deduped = [];
+    for (const x of m) {
+      if (seenIds.has(x.id)) continue;
+      seenIds.add(x.id);
+      deduped.push(x);
+    }
+    return deduped.sort((a,b)=>filter==='draft'?(b.modifiedAt||b.date).localeCompare(a.modifiedAt||a.date):b.date.localeCompare(a.date));
   },[messages,deletedIds,filter,msgMatchesSearch]);
 
   // "Older mail" section: server-search hits that aren't already in the
@@ -5601,34 +5630,38 @@ function App({userId, onSignOut}) {
         const __dbgOut = messages.filter(m => m.direction === 'out').length;
         console.log('[Convooz bootstrap] messages from API — in:', __dbgIn, 'out:', __dbgOut, 'drafts:', (drafts||[]).length, 'contacts:', contacts.length);
         const __dbgDroppedOut = [];
-        // Standard anchoring works for self-mails too: each copy goes
-        // under the "other party" of the conversation, regardless of
-        // whether that other party happens to be one of the user's own
-        // accounts. Concretely for werk@ → prive@:
-        //   INBOX copy in prive@'s inbox  (dir=in)  → contact werk@ (sender)
-        //   SENT copy in werk@'s sent     (dir=out) → contact prive@ (recipient)
-        // The same self-mail therefore appears twice across two contact
-        // threads, mirroring how the user thinks about it: the werk@
-        // contact thread shows it as "incoming on werk@", the prive@
-        // thread shows it as "outgoing from prive@". (Earlier code added
-        // a special-case that anchored both copies to one side, hiding
-        // half the picture.)
-        const shapedMessages = messages.map(m => {
+        // Attribution rules (same for bootstrap + lazy-fetch — see
+        // shape-helper just below in lazyFetchContactMessages):
+        //   • Incoming: one shape-entry, attributed to the sender's
+        //     contact. CC'd contacts don't get a copy in their thread
+        //     (this was Rik's bug-5: the Trillen mail was incorrectly
+        //     showing under the projectlinnaeus contact because the
+        //     lazy-fetch path attributed it to the clicked contact).
+        //   • Outgoing: one shape-entry PER recipient (To/CC/BCC) that
+        //     maps to a known contact. So a mail with To=A, CC=B, BCC=C
+        //     produces three entries — A's thread shows "30 april",
+        //     B's thread shows "CC 30 april", C's thread shows "BCC
+        //     30 april". The role field drives that prefix in the
+        //     ThreadColumn list row.
+        //   • Self-mails fall out of the same logic: a mail werk@→prive@
+        //     keeps producing two entries (one INBOX dir=in copy
+        //     attributed to werk@, one SENT dir=out copy attributed to
+        //     prive@) because they're two separate DB rows.
+        //
+        // Multi-entry consequences elsewhere:
+        //   – messageList may contain multiple rows with the same id
+        //     (different contactId per row). All operations that key off
+        //     just m.id (mark-read, delete, etc.) already map over every
+        //     matching row, so the underlying DB row's state stays in
+        //     sync across entries.
+        //   – Counts that should be per-mail (totalR2m, actionable
+        //     counts, tag-view list) explicitly dedup by id where they
+        //     iterate over messageList. See those callsites.
+        const shapedMessages = messages.flatMap(m => {
           const accountEmail = accountEmailById.get(m.mail_account_id) ?? '';
           const fromEmail = (m.from_email || '').toLowerCase();
-          const firstTo = (m.to_emails?.[0]?.email || '').toLowerCase();
-          const otherEmail = m.direction === 'in' ? fromEmail : firstTo;
-          const contactId = emailToContactId.get(otherEmail) ?? null;
-          if (m.direction === 'out' && contactId === null) {
-            __dbgDroppedOut.push({ id: m.id, to: otherEmail, subject: m.subject });
-          }
           const r2mRow = r2mByMsg.get(m.id);
-          // r2m is suppressed as soon as any later incoming message from this
-          // contact exists in the same RFC thread, OR — fallback — with the
-          // same Re-stripped subject after the outgoing date.
-          const r2mActive = isR2mActive(r2mRow) && !hasReply(m, contactId);
           // Sender identity for outgoing messages = the sending mail account.
-          // Avatar component wants { name, avatar, color, portrait }.
           let sender = null;
           if (m.direction === 'out') {
             const acc = accountById.get(m.mail_account_id);
@@ -5641,26 +5674,15 @@ function App({userId, onSignOut}) {
               portrait: null,
             };
           }
-          // Recipient breakdown: the to_emails JSONB carries {email, role} for
-          // each addressee. Reply-all needs both lists independently.
           const allRecipients = Array.isArray(m.to_emails) ? m.to_emails : [];
           const toList = allRecipients.filter(e => (e.role || 'to') === 'to').map(e => e.email).filter(Boolean);
           const ccList = allRecipients.filter(e => e.role === 'cc').map(e => e.email).filter(Boolean);
-          // body_text / body_html are only present on the bootstrap payload
-          // for "actionable" messages (unread incoming + active r2m); the
-          // backend strips them from the rest to keep the response small
-          // and the messageList footprint manageable. Treat undefined as
-          // "not loaded yet" — MessageDetail fires GET /messages/:id/body
-          // on demand for those, and renders a brief spinner in the
-          // meantime. The list-row preview uses `snippet` instead of body
-          // so every row still shows a one-line teaser.
           const hasBodyText = typeof m.body_text === 'string';
           const hasBodyHtml = typeof m.body_html === 'string';
-          return {
+          const baseFields = {
             id: m.id,
             accountId: m.mail_account_id,
             accountEmail,
-            contactId,
             dir: m.direction,
             subject: m.subject || '(no subject)',
             from: m.from_email || '',
@@ -5669,7 +5691,6 @@ function App({userId, onSignOut}) {
             ccList,
             date: m.date,
             read: !!m.flags?.seen,
-            revert2me: r2mActive,
             r2mArmed: !!r2mRow && !r2mRow.dismissed_at,
             draft: !!m.flags?.draft,
             body: hasBodyText ? m.body_text : undefined,
@@ -5682,7 +5703,27 @@ function App({userId, onSignOut}) {
             unsubscribeOneClick: !!m.unsubscribe_one_click,
             sender,
           };
-        }).filter(m => m.contactId !== null);
+          if (m.direction === 'in') {
+            const contactId = emailToContactId.get(fromEmail) ?? null;
+            if (contactId === null) return [];
+            const r2mActive = isR2mActive(r2mRow) && !hasReply(m, contactId);
+            return [{ ...baseFields, contactId, role: null, revert2me: r2mActive }];
+          }
+          // Outgoing — fan out across recipients.
+          const entries = [];
+          const seen = new Set();
+          for (const r of allRecipients) {
+            const cid = emailToContactId.get((r.email || '').toLowerCase());
+            if (!cid || seen.has(cid)) continue;
+            seen.add(cid);
+            const r2mActive = isR2mActive(r2mRow) && !hasReply(m, cid);
+            entries.push({ ...baseFields, contactId: cid, role: r.role || 'to', revert2me: r2mActive });
+          }
+          if (entries.length === 0) {
+            __dbgDroppedOut.push({ id: m.id, to: '(no recipient mapped)', subject: m.subject });
+          }
+          return entries;
+        });
         if (__dbgDroppedOut.length) {
           console.warn('[Convooz bootstrap] dropped outgoing rows because recipient is not in contacts:', __dbgDroppedOut);
         }
@@ -6418,13 +6459,21 @@ function App({userId, onSignOut}) {
   const actionableCounts = useMemo(() => {
     const selSet = new Set(selAccounts);
     const deletedSet = new Set(deletedIds);
+    // Dedup by mail id — outgoing mails with multiple recipients now
+    // produce one entry per recipient in messageList, but they're still
+    // a single actionable item. Without this an outgoing r2m sent to
+    // three people would inflate the total + inSel counts threefold.
+    const seenTotal = new Set();
+    const seenInSel = new Set();
     let total = 0, inSel = 0;
     for (const m of messageList) {
       if (m.draft || deletedSet.has(m.id)) continue;
       const isActionable = (!m.read && m.dir === 'in') || m.revert2me;
       if (!isActionable) continue;
-      total++;
-      if (m.accountEmail && selSet.has(m.accountEmail)) inSel++;
+      if (!seenTotal.has(m.id)) { seenTotal.add(m.id); total++; }
+      if (m.accountEmail && selSet.has(m.accountEmail) && !seenInSel.has(m.id)) {
+        seenInSel.add(m.id); inSel++;
+      }
     }
     return { total, inSel };
   }, [messageList, deletedIds, selAccounts]);
@@ -6593,8 +6642,23 @@ function App({userId, onSignOut}) {
       if (rows.length === 0) return;
       const accountEmailById = new Map(mailAccounts.map(a => [a.id, (a.email || '').toLowerCase()]));
       const accountById = new Map(mailAccounts.map(a => [a.id, a]));
-      const shaped = rows.map(m => {
+      // Build emailToContactId from the current contactList so we attribute
+      // each fetched mail by content (sender for incoming, recipients for
+      // outgoing), NOT to the clicked contact. This is the v0.0.206 fix
+      // for Rik's bugs 4+5: previously the lazy-fetch attributed every
+      // returned row to `contactId` (the clicked contact), which let the
+      // Trillen mail (sent by Adriaan, with projectlinnaeus@... in to)
+      // hijack projectlinnaeus's thread the moment that contact was the
+      // first one clicked. Now the FE shape decides per-mail.
+      const emailToContactId = new Map();
+      for (const c of contactList) {
+        for (const e of (c.emails || [])) {
+          if (e) emailToContactId.set(e.toLowerCase(), c.id);
+        }
+      }
+      const shaped = rows.flatMap(m => {
         const accountEmail = accountEmailById.get(m.mail_account_id) ?? '';
+        const fromEmail = (m.from_email || '').toLowerCase();
         const allRecipients = Array.isArray(m.to_emails) ? m.to_emails : [];
         const toList = allRecipients.filter(e => (e.role || 'to') === 'to').map(e => e.email).filter(Boolean);
         const ccList = allRecipients.filter(e => e.role === 'cc').map(e => e.email).filter(Boolean);
@@ -6604,8 +6668,8 @@ function App({userId, onSignOut}) {
           const name = acc?.display_name || acc?.email || accountEmail || 'Me';
           sender = { name, emails: [accountEmail], avatar: initialsOf(name), color: acc?.color || '#6366f1', portrait: null };
         }
-        return {
-          id: m.id, accountId: m.mail_account_id, accountEmail, contactId,
+        const baseFields = {
+          id: m.id, accountId: m.mail_account_id, accountEmail,
           dir: m.direction,
           subject: m.subject || '(no subject)',
           from: m.from_email || '',
@@ -6613,8 +6677,8 @@ function App({userId, onSignOut}) {
           toList, ccList,
           date: m.date,
           read: !!m.flags?.seen,
-          revert2me: false,
-          r2mArmed: false,
+          revert2me: false,   // r2m signals don't survive a lazy-fetch
+          r2mArmed: false,    // — the bootstrap pass is the source of truth
           draft: !!m.flags?.draft,
           body: undefined,
           bodyHtml: undefined,
@@ -6626,12 +6690,27 @@ function App({userId, onSignOut}) {
           unsubscribeOneClick: !!m.unsubscribe_one_click,
           sender,
         };
+        if (m.direction === 'in') {
+          const cid = emailToContactId.get(fromEmail) ?? null;
+          if (cid === null) return [];
+          return [{ ...baseFields, contactId: cid, role: null }];
+        }
+        // outgoing → fan out per recipient
+        const entries = [];
+        const seen = new Set();
+        for (const r of allRecipients) {
+          const cid = emailToContactId.get((r.email || '').toLowerCase());
+          if (!cid || seen.has(cid)) continue;
+          seen.add(cid);
+          entries.push({ ...baseFields, contactId: cid, role: r.role || 'to' });
+        }
+        return entries;
       });
       setMessageList(prev => {
-        // Avoid duplicating ids that might already be in messageList
-        // (e.g. a thread that crosses the top-500 boundary).
-        const have = new Set(prev.map(m => m.id));
-        const fresh = shaped.filter(m => !have.has(m.id));
+        // Dedup by composite (id, contactId) key — a mail with multiple
+        // recipients legitimately lives under multiple contactIds.
+        const haveKeys = new Set(prev.map(m => m.id + '::' + m.contactId));
+        const fresh = shaped.filter(m => !haveKeys.has(m.id + '::' + m.contactId));
         if (fresh.length === 0) return prev;
         return [...prev, ...fresh];
       });
@@ -7525,8 +7604,12 @@ function App({userId, onSignOut}) {
     .filter(m=>m.contactId===selContact)
     .filter(m=>!m.accountEmail||selAccounts.includes(m.accountEmail))
     .filter(msgMatchesSearch):[];
-  const totalUnread=messageList.filter(m=>!m.read&&m.dir==='in'&&!deletedIds.includes(m.id)&&!m.draft&&selAccounts.includes(m.accountEmail)).length;
-  const totalR2m=messageList.filter(m=>m.revert2me&&!deletedIds.includes(m.id)&&!m.draft&&selAccounts.includes(m.accountEmail)).length;
+  // Incoming has one shape-entry per mail so unread is naturally per-mail;
+  // r2m is outgoing-only and now fans out across recipients, so we dedup
+  // by mail id before counting to avoid 3× inflation on a 3-recipient
+  // r2m'd mail.
+  const totalUnread=new Set(messageList.filter(m=>!m.read&&m.dir==='in'&&!deletedIds.includes(m.id)&&!m.draft&&selAccounts.includes(m.accountEmail)).map(m=>m.id)).size;
+  const totalR2m=new Set(messageList.filter(m=>m.revert2me&&!deletedIds.includes(m.id)&&!m.draft&&selAccounts.includes(m.accountEmail)).map(m=>m.id)).size;
 
   function msgMatchesSearch(m) {
     if(!searchQuery) return true;
