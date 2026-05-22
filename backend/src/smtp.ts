@@ -117,18 +117,58 @@ export async function sendMail(input: SendInput): Promise<SendResult> {
   try {
     await client.connect();
     let folder = input.sentFolder || "";
+    let allMailPath: string | null = null;
     if (!folder) {
       const list = await client.list();
       folder = list.find(m => m.specialUse === "\\Sent")?.path || "Sent";
+      // Detect Gmail's "All Mail" so we can re-anchor the DB row to the
+      // canonical folder our sync targets. Without this the row lands
+      // under [Gmail]/Sent Mail and the next sync's All Mail migration
+      // block sweeps it out (it only keeps allMail + trash paths), so
+      // sent mail vanished from the UI minutes after it was sent.
+      allMailPath = list.find(m => m.specialUse === "\\All")?.path || null;
     }
     const res = await client.append(folder, raw, ["\\Seen"]);
-    await client.logout();
     if (res && typeof res.uid === "number" && typeof res.uidValidity !== "undefined") {
+      // Gmail: APPEND to Sent also makes the message appear in All Mail
+      // (with the \Sent label, since they're the same mail under two
+      // labels). Look up the All Mail UID by Message-ID so the DB row
+      // points at the All Mail folder — our sync's canonical target —
+      // and survives the migration sweep. Best-effort: if the search
+      // doesn't land in time we fall back to the Sent uid; next sync
+      // will eventually reconcile.
+      if (allMailPath && messageId) {
+        try {
+          const lock = await client.getMailboxLock(allMailPath);
+          let allMailUid: number | undefined;
+          let allMailUidValidity: number | undefined;
+          try {
+            const mb = client.mailbox as { uidValidity: bigint | number };
+            allMailUidValidity = Number(mb.uidValidity);
+            const cleanMid = messageId.replace(/^<+|>+$/g, "");
+            const matched = (await client.search({ header: { "Message-ID": cleanMid } }, { uid: true })) as number[] | false;
+            if (matched && matched.length > 0) {
+              allMailUid = matched[matched.length - 1];
+            }
+          } finally { lock.release(); }
+          if (typeof allMailUid === "number" && typeof allMailUidValidity === "number") {
+            await client.logout();
+            return {
+              ok: true, messageId,
+              appended: { folder: allMailPath, uid: allMailUid, uidValidity: allMailUidValidity },
+            };
+          }
+        } catch {
+          /* fall through to Sent-folder reference below */
+        }
+      }
+      await client.logout();
       return {
         ok: true, messageId,
         appended: { folder, uid: res.uid, uidValidity: Number(res.uidValidity) },
       };
     }
+    await client.logout();
     // Server doesn't support UIDPLUS — skip DB insert; next sync will pick it up.
     return { ok: true, messageId, appended: null, warning: "Saved to Sent (no UIDPLUS — message will appear after next sync)" };
   } catch (e: unknown) {

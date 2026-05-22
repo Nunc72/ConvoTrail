@@ -56,8 +56,10 @@ export async function syncAccount(accountId: string): Promise<SyncResult> {
   const accR = await pool.query<{
     id: string; user_id: string; email: string;
     imap_host: string; imap_port: number; imap_user: string; imap_cred_enc: Buffer | null;
+    migrated_to_all_mail: boolean;
   }>(
-    `SELECT id, user_id, email, imap_host, imap_port, imap_user, imap_cred_enc
+    `SELECT id, user_id, email, imap_host, imap_port, imap_user, imap_cred_enc,
+            migrated_to_all_mail
        FROM mail_accounts WHERE id = $1`,
     [accountId],
   );
@@ -130,12 +132,18 @@ export async function syncAccount(accountId: string): Promise<SyncResult> {
     // losing user-armed state we snapshot r2m_state and message_tags
     // by their messages.message_id (RFC header) first, then restore
     // them after the new rows land, matching new UUID via RFC id.
-    // The block is idempotent: once every row lives under allMail.path
-    // (or trash.path) the delete affects 0 rows and the snapshot
-    // stays empty.
+    //
+    // Gated on mail_accounts.migrated_to_all_mail — flipped to true at
+    // the end of a successful migration so subsequent syncs SKIP this
+    // block. Without that gate every sync re-deleted any non-AllMail
+    // row, and a freshly-sent mail (DB-inserted with folder=Sent by
+    // the send route before smtp.ts learned to look up the All Mail
+    // UID) was wiped out before the next All Mail fetch could pick it
+    // back up — visible to Rik as "sent mail disappears".
     let r2mSnap: Array<{ rfc_message_id: string; dismissed_at: string | null; snooze_until: string | null; snooze_count: number }> = [];
     let tagSnap: Array<{ rfc_message_id: string; tag_id: string }> = [];
-    if (allMail) {
+    let didMigrate = false;
+    if (allMail && !acc.migrated_to_all_mail) {
       const preservePaths = [allMail.path];
       if (trash) preservePaths.push(trash.path);
       const r1 = await pool.query<{ rfc_message_id: string | null; dismissed_at: string | null; snooze_until: string | null; snooze_count: number }>(
@@ -164,6 +172,7 @@ export async function syncAccount(accountId: string): Promise<SyncResult> {
             AND folder <> ALL($2::text[])`,
         [acc.id, preservePaths],
       );
+      didMigrate = true;
     }
 
     const since = new Date(Date.now() - SINCE_DAYS * 86400_000);
@@ -464,13 +473,18 @@ export async function syncAccount(accountId: string): Promise<SyncResult> {
     // News priority over Noreply when both flags happen to be set on
     // the same contact.)
 
-    // 4) Update last_sync_at, sync_known_uids, clear last_error
+    // 4) Update last_sync_at, sync_known_uids, clear last_error.
+    //    Also flip migrated_to_all_mail = true if this run completed
+    //    the one-time All-Mail consolidation, so future syncs skip the
+    //    delete pass entirely.
+    const accountUpdate: Record<string, unknown> = {
+      last_sync_at: new Date().toISOString(),
+      last_error: null,
+      sync_known_uids: sumKnownUids,
+    };
+    if (didMigrate) accountUpdate.migrated_to_all_mail = true;
     await supabaseAdmin.from("mail_accounts")
-      .update({
-        last_sync_at: new Date().toISOString(),
-        last_error: null,
-        sync_known_uids: sumKnownUids,
-      })
+      .update(accountUpdate)
       .eq("id", acc.id);
 
     return { ok: true, folders: folderStats, contactsCreated, durationMs: Date.now() - started };
