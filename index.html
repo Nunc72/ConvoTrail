@@ -193,7 +193,7 @@
        polish change is picked up by every browser as soon as the version
        is bumped — no manual cache-busters needed. Keep ?v= here in sync
        with APP_VERSION below at every deploy. -->
-  <link rel="stylesheet" href="polish.css?v=0.0.206"/>
+  <link rel="stylesheet" href="polish.css?v=0.0.207"/>
 </head>
 <body>
 <div id="root">
@@ -423,7 +423,7 @@ window.CONVOOZ_CRYPTO = CONVOOZ_CRYPTO;
 
 // ─── Constants ───────────────────────────────────────────────────────────────
 
-const APP_VERSION = "0.0.206"; // bumped on every deploy — keep in sync with version.json AND with the ?v= on polish.css above
+const APP_VERSION = "0.0.207"; // bumped on every deploy — keep in sync with version.json AND with the ?v= on polish.css above
 
 // ─── Backend + Supabase config ───────────────────────────────────────────────
 const SUPABASE_URL = "https://oyrlzqbjcsliesvunbwj.supabase.co";
@@ -3132,7 +3132,9 @@ function MessageDetail({message,contact,isDeleted,msgTags,allTags,onReply,onRepl
                         <br/><span className="text-gray-500">To:</span> {message.toList?.length ? message.toList.join(', ') : message.to}
                         {message.ccList?.length > 0 && <><br/><span className="text-gray-500">Cc:</span> {message.ccList.join(', ')}</>}
                       </>
-                    : <><span className="text-gray-500">To:</span> {message.to}
+                    : <><span className="text-gray-500">To:</span> {message.toList?.length ? message.toList.join(', ') : message.to}
+                        {message.ccList?.length > 0 && <><br/><span className="text-gray-500">Cc:</span> {message.ccList.join(', ')}</>}
+                        {message.bccList?.length > 0 && <><br/><span className="text-gray-500">Bcc:</span> {message.bccList.join(', ')}</>}
                         {selAccounts.length > 1 && <><br/><span className="text-gray-500">From:</span> {message.from}</>}
                       </>}
                 </div>
@@ -5677,6 +5679,7 @@ function App({userId, onSignOut}) {
           const allRecipients = Array.isArray(m.to_emails) ? m.to_emails : [];
           const toList = allRecipients.filter(e => (e.role || 'to') === 'to').map(e => e.email).filter(Boolean);
           const ccList = allRecipients.filter(e => e.role === 'cc').map(e => e.email).filter(Boolean);
+          const bccList = allRecipients.filter(e => e.role === 'bcc').map(e => e.email).filter(Boolean);
           const hasBodyText = typeof m.body_text === 'string';
           const hasBodyHtml = typeof m.body_html === 'string';
           const baseFields = {
@@ -5689,6 +5692,7 @@ function App({userId, onSignOut}) {
             to: toList[0] || allRecipients[0]?.email || '',
             toList,
             ccList,
+            bccList,
             date: m.date,
             read: !!m.flags?.seen,
             r2mArmed: !!r2mRow && !r2mRow.dismissed_at,
@@ -6662,6 +6666,7 @@ function App({userId, onSignOut}) {
         const allRecipients = Array.isArray(m.to_emails) ? m.to_emails : [];
         const toList = allRecipients.filter(e => (e.role || 'to') === 'to').map(e => e.email).filter(Boolean);
         const ccList = allRecipients.filter(e => e.role === 'cc').map(e => e.email).filter(Boolean);
+        const bccList = allRecipients.filter(e => e.role === 'bcc').map(e => e.email).filter(Boolean);
         let sender = null;
         if (m.direction === 'out') {
           const acc = accountById.get(m.mail_account_id);
@@ -6674,7 +6679,7 @@ function App({userId, onSignOut}) {
           subject: m.subject || '(no subject)',
           from: m.from_email || '',
           to: toList[0] || allRecipients[0]?.email || '',
-          toList, ccList,
+          toList, ccList, bccList,
           date: m.date,
           read: !!m.flags?.seen,
           revert2me: false,   // r2m signals don't survive a lazy-fetch
