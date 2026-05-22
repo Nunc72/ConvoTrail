@@ -17,6 +17,7 @@ import { registerR2mRoutes } from "./routes/r2m.js";
 import { registerSignaturesRoutes } from "./routes/signatures.js";
 import { registerInvitesRoutes } from "./routes/invites.js";
 import { registerUserAuthRoutes } from "./routes/userAuth.js";
+import { registerUserCryptoRoutes } from "./routes/userCrypto.js";
 
 const app = Fastify({
   logger: {
@@ -99,6 +100,7 @@ await registerR2mRoutes(app);
 await registerSignaturesRoutes(app);
 await registerInvitesRoutes(app);
 await registerUserAuthRoutes(app);
+await registerUserCryptoRoutes(app);
 
 try {
   await app.listen({ port: config.port, host: config.host });
