@@ -193,7 +193,7 @@
        polish change is picked up by every browser as soon as the version
        is bumped — no manual cache-busters needed. Keep ?v= here in sync
        with APP_VERSION below at every deploy. -->
-  <link rel="stylesheet" href="polish.css?v=0.0.207"/>
+  <link rel="stylesheet" href="polish.css?v=0.0.208"/>
 </head>
 <body>
 <div id="root">
@@ -423,7 +423,7 @@ window.CONVOOZ_CRYPTO = CONVOOZ_CRYPTO;
 
 // ─── Constants ───────────────────────────────────────────────────────────────
 
-const APP_VERSION = "0.0.207"; // bumped on every deploy — keep in sync with version.json AND with the ?v= on polish.css above
+const APP_VERSION = "0.0.208"; // bumped on every deploy — keep in sync with version.json AND with the ?v= on polish.css above
 
 // ─── Backend + Supabase config ───────────────────────────────────────────────
 const SUPABASE_URL = "https://oyrlzqbjcsliesvunbwj.supabase.co";
@@ -5545,7 +5545,7 @@ function App({userId, onSignOut}) {
       setDataError('');
       setBootstrapFetching(true);
       try {
-        const { mail_accounts: rawAccounts, contacts, messages, drafts, tags, message_tags, r2m_state, signatures: sigs, account_signatures: accSigs, draft_attachments: draftAtts, message_count_by_account, contact_account_emails, contact_stats } = await apiFetch('/bootstrap?limit=500');
+        const { mail_accounts: rawAccounts, contacts, messages, drafts, tags, message_tags, r2m_state, signatures: sigs, account_signatures: accSigs, draft_attachments: draftAtts, message_contact_hides: rawHides, message_count_by_account, contact_account_emails, contact_stats } = await apiFetch('/bootstrap?limit=500');
         // Pin the per-account synced count onto each mailAccount object so
         // the user-menu progress widget can read mailAccount.messages_count
         // / mailAccount.sync_known_uids without a separate state slice.
@@ -5659,6 +5659,17 @@ function App({userId, onSignOut}) {
         //   – Counts that should be per-mail (totalR2m, actionable
         //     counts, tag-view list) explicitly dedup by id where they
         //     iterate over messageList. See those callsites.
+        // Per-(message, contact) hides land directly in messageList by
+        // filtering them out of the shape: any (id, contactId) pair the
+        // user has explicitly hidden via the "Only this" delete option
+        // never makes it onto the FE state. Stored as a Set of
+        // "msgId::contactId" strings for O(1) lookup during shape.
+        const hiddenPairsBoot = new Set();
+        for (const h of (rawHides || [])) {
+          if (h && h.message_id && h.contact_id) {
+            hiddenPairsBoot.add(h.message_id + "::" + h.contact_id);
+          }
+        }
         const shapedMessages = messages.flatMap(m => {
           const accountEmail = accountEmailById.get(m.mail_account_id) ?? '';
           const fromEmail = (m.from_email || '').toLowerCase();
@@ -5710,6 +5721,7 @@ function App({userId, onSignOut}) {
           if (m.direction === 'in') {
             const contactId = emailToContactId.get(fromEmail) ?? null;
             if (contactId === null) return [];
+            if (hiddenPairsBoot.has(m.id + '::' + contactId)) return [];
             const r2mActive = isR2mActive(r2mRow) && !hasReply(m, contactId);
             return [{ ...baseFields, contactId, role: null, revert2me: r2mActive }];
           }
@@ -5720,11 +5732,12 @@ function App({userId, onSignOut}) {
             const cid = emailToContactId.get((r.email || '').toLowerCase());
             if (!cid || seen.has(cid)) continue;
             seen.add(cid);
+            if (hiddenPairsBoot.has(m.id + '::' + cid)) continue;
             const r2mActive = isR2mActive(r2mRow) && !hasReply(m, cid);
             entries.push({ ...baseFields, contactId: cid, role: r.role || 'to', revert2me: r2mActive });
           }
           if (entries.length === 0) {
-            __dbgDroppedOut.push({ id: m.id, to: '(no recipient mapped)', subject: m.subject });
+            __dbgDroppedOut.push({ id: m.id, to: '(no recipient mapped or all hidden)', subject: m.subject });
           }
           return entries;
         });
@@ -6163,6 +6176,11 @@ function App({userId, onSignOut}) {
   const [tagFilter,        setTagFilter]        = useState('all');
   const [msgSnoozeCounts,  setMsgSnoozeCounts]  = useState(()=>bootstrapCache?.msgSnoozeCounts ?? {});
   const [actionToast,      setActionToast]      = useState(null);
+  // Confirm-dialog state for the "delete multi-recipient outgoing mail"
+  // flow. null = no dialog open. When set, looks like:
+  //   { messageId, contactId, totalRecipients }
+  // The render block sits below the main column layout (see App return).
+  const [deleteDialog,     setDeleteDialog]     = useState(null);
   useEffect(()=>{
     if(!actionToast) return;
     const t=setTimeout(()=>setActionToast(null), 3000);
@@ -6848,13 +6866,51 @@ function App({userId, onSignOut}) {
       });
   }
   function handleDelete(id){
+    // Outgoing mail with multiple addressees lives under multiple
+    // contact threads now (one entry per To/CC/BCC recipient). Ask
+    // before nuking it everywhere — Rik wanted the choice between
+    // "All addressees" (regular soft-delete) and "Only this one"
+    // (hide just from the current thread, keep visible for others).
+    const msg = messageList.find(m => m.id === id);
+    const totalRecipients = msg
+      ? (msg.toList?.length || 0) + (msg.ccList?.length || 0) + (msg.bccList?.length || 0)
+      : 0;
+    // Only offer the per-thread split when the user is actually looking
+    // at the open contact's thread — selContact === msg.contactId. From
+    // search or a tag view there's no clear "this thread", so we fall
+    // through to the regular delete-all path.
+    if (msg && msg.dir === 'out' && totalRecipients > 1 && msg.contactId && selContact && selContact === msg.contactId) {
+      setDeleteDialog({ messageId: id, contactId: msg.contactId, totalRecipients });
+      return;
+    }
+    doDeleteAll(id);
+  }
+  // "All addressees" branch — original soft-delete + IMAP move-to-trash.
+  function doDeleteAll(id){
     captureAlert(id);
     const {id:nid,alwaysGo,switchTab}=getDestination(id,'delete');
     setDeletedIds(prev=>[...prev,id]);
-
     navigateTo(nid,alwaysGo,'fade-fast');
     setActionToast('Mail was deleted');
     persistDelete(id);
+  }
+  // "Only this" branch — drop the (id, contactId) entry from
+  // messageList (so the current thread loses it) and POST a hide-row.
+  // Other contact threads that share the same mail keep their entry.
+  function doDeleteOnlyThis(id, contactId){
+    captureAlert(id);
+    const {id:nid,alwaysGo,switchTab}=getDestination(id,'delete');
+    setMessageList(prev => prev.filter(m => !(m.id === id && m.contactId === contactId)));
+    navigateTo(nid,alwaysGo,'fade-fast');
+    setActionToast('Hidden from this thread');
+    apiFetch(`/messages/${id}/hide-for-contact`, {
+      method: 'POST',
+      body: JSON.stringify({ contact_id: contactId }),
+    }).catch(e => {
+      setActionToast('Hide failed: ' + e.message);
+      // Best-effort revert: trigger a refresh so the entry comes back.
+      refreshData();
+    });
   }
   function handleRecover(id){
     setDeletedIds(prev=>prev.filter(x=>x!==id));
@@ -7705,6 +7761,40 @@ function App({userId, onSignOut}) {
 
   return (
     <div className={`flex flex-col bg-gray-100 ${activeColDiv!==null||activeRowDiv?"no-select":""}`} style={{height:'100%'}}>
+      {/* Multi-recipient delete confirm dialog. Opens for outgoing mail
+          with >1 addressee — gives the user the choice between deleting
+          for every recipient (regular soft-delete + IMAP Trash) and
+          hiding from just this contact's thread (insert into
+          message_contact_hides; mail stays alive for other recipients
+          + on the server). */}
+      {deleteDialog && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 px-4"
+          onClick={()=>setDeleteDialog(null)}>
+          <div className="bg-white rounded-lg shadow-xl w-full max-w-sm p-5"
+            onClick={e=>e.stopPropagation()}>
+            <div className="font-semibold text-gray-800 text-sm mb-1">Delete mail</div>
+            <p className="text-xs text-gray-600 mb-4 leading-relaxed">
+              This mail has multiple addressees. Do you want to delete it for all addressees or only for this one?
+            </p>
+            <div className="flex justify-end gap-2">
+              <button onClick={()=>setDeleteDialog(null)}
+                className="px-3 py-1.5 text-xs rounded text-gray-500 hover:bg-gray-100 font-medium">Cancel</button>
+              <button onClick={()=>{
+                  const d = deleteDialog;
+                  setDeleteDialog(null);
+                  if (d) doDeleteOnlyThis(d.messageId, d.contactId);
+                }}
+                className="px-3 py-1.5 text-xs rounded bg-gray-100 hover:bg-gray-200 text-gray-700 font-medium">Only this</button>
+              <button onClick={()=>{
+                  const d = deleteDialog;
+                  setDeleteDialog(null);
+                  if (d) doDeleteAll(d.messageId);
+                }}
+                className="px-3 py-1.5 text-xs rounded bg-red-100 hover:bg-red-200 text-red-700 font-medium">All</button>
+            </div>
+          </div>
+        </div>
+      )}
       {currentUser.isTest && (
         <div className="flex-shrink-0 text-center text-xs font-semibold py-1 px-3"
           style={{background:'#fef3c7',color:'#92400e',letterSpacing:'0.04em'}}>

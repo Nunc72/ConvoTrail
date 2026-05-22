@@ -21,7 +21,7 @@ export async function registerDataRoutes(app: FastifyInstance) {
     // to open immediately (unread incoming + active revert-to-me). The
     // detail view falls back to GET /messages/:id/body for everything
     // else, fetched on demand when the user opens a message.
-    const [accountsRes, contactsRes, messagesRes, draftsRes, tagsRes, msgTagsRes, r2mRes, sigsRes, accSigsRes, draftAttsRes] = await Promise.all([
+    const [accountsRes, contactsRes, messagesRes, draftsRes, tagsRes, msgTagsRes, r2mRes, sigsRes, accSigsRes, draftAttsRes, hidesRes] = await Promise.all([
       sb.from("mail_accounts").select(
         "id, email, display_name, provider, last_sync_at, auto_sync, " +
         "retention_deleted_days, retention_spam_days, sync_known_uids",
@@ -50,6 +50,11 @@ export async function registerDataRoutes(app: FastifyInstance) {
       sb.from("account_signatures").select("mail_account_id, signature_id, is_auto"),
       sb.from("draft_attachments").select("id, draft_id, filename, content_type, size, created_at")
         .order("created_at", { ascending: true }),
+      // Per-(message, contact) "Only this" hides — used by the FE to
+      // suppress specific entries in messageList without touching the
+      // global messages.deleted_at. RLS pins these to the caller's
+      // user_id so this query is safe.
+      sb.from("message_contact_hides").select("message_id, contact_id"),
     ]);
     // Any of these can carry a wrapped "fetch failed" or pooler-drop —
     // route through sendTransientOr500 so the client gets a 503 it can
@@ -64,6 +69,7 @@ export async function registerDataRoutes(app: FastifyInstance) {
     if (sigsRes.error)     return sendTransientOr500(reply, sigsRes.error);
     if (accSigsRes.error)  return sendTransientOr500(reply, accSigsRes.error);
     if (draftAttsRes.error) return sendTransientOr500(reply, draftAttsRes.error);
+    if (hidesRes.error)     return sendTransientOr500(reply, hidesRes.error);
 
     // Per-account synced count for the user-menu progress display, via
     // direct pg GROUP BY. This is matched against sync_known_uids (the
@@ -324,6 +330,7 @@ export async function registerDataRoutes(app: FastifyInstance) {
       signatures: sigsRes.data,
       account_signatures: accSigsRes.data,
       draft_attachments: draftAttsRes.data,
+      message_contact_hides: hidesRes.data,
       message_count_by_account: messageCountByAccount,
       contact_account_emails: contactAccountEmails,
       contact_stats: contactStats,

@@ -570,6 +570,58 @@ export async function registerMessagesRoutes(app: FastifyInstance) {
     return reply.code(204).send();
   });
 
+  // ─── Per-contact-thread hide ("Only this") ──────────────────────────────
+  // The multi-recipient delete dialog gives the user two choices:
+  //   • All addressees → fall through to the normal /delete route (IMAP
+  //     move-to-trash + DB deleted_at). Already covered above.
+  //   • Only this one → the mail stays alive everywhere else; we just
+  //     hide it from this specific contact's thread. That's what this
+  //     pair of routes (POST + DELETE) toggles via message_contact_hides.
+  //
+  // The hide is per-(message, contact). FE filters out any messageList
+  // entry whose (id, contactId) is in the hidden set after bootstrap.
+  // RLS pins the row to the caller via user_id.
+  app.post<{ Params: { id: string }; Body: { contact_id: string } }>(
+    "/messages/:id/hide-for-contact", auth, async (req, reply) => {
+      const contactId = (req.body || {}).contact_id;
+      if (!contactId) return reply.badRequest("contact_id required");
+      const pool = requirePool();
+      const userId = req.authUser!.id;
+      const mr = await pool.query<{ user_id: string }>(
+        `SELECT user_id FROM messages WHERE id = $1`, [req.params.id],
+      );
+      if (mr.rows.length === 0) return reply.notFound();
+      if (mr.rows[0].user_id !== userId) return reply.forbidden();
+      const cr = await pool.query<{ user_id: string }>(
+        `SELECT user_id FROM contacts WHERE id = $1`, [contactId],
+      );
+      if (cr.rows.length === 0) return reply.notFound();
+      if (cr.rows[0].user_id !== userId) return reply.forbidden();
+      await pool.query(
+        `INSERT INTO message_contact_hides (message_id, contact_id, user_id)
+              VALUES ($1, $2, $3)
+         ON CONFLICT (message_id, contact_id) DO NOTHING`,
+        [req.params.id, contactId, userId],
+      );
+      return reply.code(204).send();
+    },
+  );
+
+  app.delete<{ Params: { id: string }; Querystring: { contact_id?: string } }>(
+    "/messages/:id/hide-for-contact", auth, async (req, reply) => {
+      const contactId = (req.query || {}).contact_id;
+      if (!contactId) return reply.badRequest("contact_id query param required");
+      const pool = requirePool();
+      const userId = req.authUser!.id;
+      await pool.query(
+        `DELETE FROM message_contact_hides
+          WHERE message_id = $1 AND contact_id = $2 AND user_id = $3`,
+        [req.params.id, contactId, userId],
+      );
+      return reply.code(204).send();
+    },
+  );
+
   // ─── Unsubscribe (server-side POST, RFC 8058 One-Click) ─────────────────
   // The browser can't always POST cross-origin to a sender's unsubscribe
   // URL (CORS, mixed-content), so we proxy the request server-side. The
