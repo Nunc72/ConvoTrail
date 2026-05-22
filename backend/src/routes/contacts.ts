@@ -211,4 +211,72 @@ export async function registerContactsRoutes(app: FastifyInstance) {
       }
     },
   );
+
+  // ─── Soft-delete contact + cascade-soft-delete their mail ───────────────
+  // Rik's item 3: clicking "Delete" on a contact archives them with a
+  // Deleted chip in the FE LeftColumn, and every mail attributed to
+  // them is marked deleted_at so it appears in the contact's Deleted
+  // tab. Single transaction:
+  //   1. contacts.deleted_at = now() (the chip in the FE reads this)
+  //   2. messages.deleted_at = now() for every mail whose from_email
+  //      OR to_emails entry matches one of the contact's contact_emails.
+  //      A mail shared with other contacts also gets the soft-delete
+  //      flag — by design, the user is saying "remove this thread of
+  //      mail from my workflow", and the global soft-delete is the
+  //      simplest way to mirror that across IMAP-trash later.
+  // The mail's IMAP folder is NOT moved here — the user explicitly
+  // wanted that to happen only when the Gmail Trash itself empties
+  // out 30 days later (or whenever the user manually trashes the
+  // mails in their Gmail UI). Our existing permanent-delete detection
+  // in sync.ts + cleanupOrphanContacts will then hard-delete the
+  // contact when its last mail row disappears.
+  app.delete<{ Params: { id: string } }>("/contacts/:id", auth, async (req, reply) => {
+    const pool = requirePool();
+    const userId = req.authUser!.id;
+    const client = await pool.connect();
+    try {
+      await client.query("BEGIN");
+      const owns = await client.query<{ user_id: string; deleted_at: Date | null }>(
+        `SELECT user_id, deleted_at FROM contacts WHERE id = $1 FOR UPDATE`,
+        [req.params.id],
+      );
+      if (owns.rows.length === 0) { await client.query("ROLLBACK"); return reply.notFound(); }
+      if (owns.rows[0].user_id !== userId) { await client.query("ROLLBACK"); return reply.forbidden(); }
+      // 1. Mark the contact as deleted.
+      await client.query(
+        `UPDATE contacts SET deleted_at = now() WHERE id = $1`,
+        [req.params.id],
+      );
+      // 2. Cascade-soft-delete the attributed mails. Skip ones that are
+      //    already deleted_at so a repeat-delete doesn't overwrite the
+      //    original timestamp.
+      const cascade = await client.query<{ id: string }>(
+        `UPDATE messages m
+            SET deleted_at = now()
+          WHERE m.user_id = $1
+            AND m.deleted_at IS NULL
+            AND EXISTS (
+              SELECT 1 FROM contact_emails ce
+               WHERE ce.contact_id = $2
+                 AND (
+                   LOWER(m.from_email) = LOWER(ce.email)
+                   OR EXISTS (
+                     SELECT 1 FROM jsonb_array_elements(COALESCE(m.to_emails, '[]'::jsonb)) te
+                      WHERE LOWER(te->>'email') = LOWER(ce.email)
+                   )
+                 )
+            )
+        RETURNING id`,
+        [userId, req.params.id],
+      );
+      await client.query("COMMIT");
+      return { ok: true, cascadedMessageIds: cascade.rows.map(r => r.id) };
+    } catch (e) {
+      await client.query("ROLLBACK");
+      const msg = e instanceof Error ? e.message : String(e);
+      return reply.internalServerError(msg);
+    } finally {
+      client.release();
+    }
+  });
 }

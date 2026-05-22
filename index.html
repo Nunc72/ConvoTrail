@@ -193,7 +193,7 @@
        polish change is picked up by every browser as soon as the version
        is bumped — no manual cache-busters needed. Keep ?v= here in sync
        with APP_VERSION below at every deploy. -->
-  <link rel="stylesheet" href="polish.css?v=0.0.208"/>
+  <link rel="stylesheet" href="polish.css?v=0.0.209"/>
 </head>
 <body>
 <div id="root">
@@ -423,7 +423,7 @@ window.CONVOOZ_CRYPTO = CONVOOZ_CRYPTO;
 
 // ─── Constants ───────────────────────────────────────────────────────────────
 
-const APP_VERSION = "0.0.208"; // bumped on every deploy — keep in sync with version.json AND with the ?v= on polish.css above
+const APP_VERSION = "0.0.209"; // bumped on every deploy — keep in sync with version.json AND with the ?v= on polish.css above
 
 // ─── Backend + Supabase config ───────────────────────────────────────────────
 const SUPABASE_URL = "https://oyrlzqbjcsliesvunbwj.supabase.co";
@@ -4102,6 +4102,12 @@ function LeftColumn({contactMeta, archivedContacts, selectedId, mergeId, onSelec
   function getTab(id){
     const c = contactMeta.find(m => m.contact.id === id)?.contact;
     if (!c) return 'Convo';
+    // Soft-deleted contacts: same bucket as Archive (Rik's item 3 spec),
+    // but rendered with a red "Deleted" chip on the row so they're easy
+    // to tell apart from regularly-archived contacts. They stay in
+    // Archive until the cleanupOrphanContacts pass eventually hard-
+    // deletes them once their last attributed mail is gone.
+    if (c.deletedAt) return 'Archive';
     // Archive is now its own toggle in the section header (mirrors Tags
     // bar). Archived contacts disappear from the tabs above and only show
     // when the Archive toggle is on, so we surface them via a synthetic
@@ -4312,6 +4318,12 @@ function LeftColumn({contactMeta, archivedContacts, selectedId, mergeId, onSelec
                     tell auto-muted (Spam action) rows apart from manual ones. */}
                 {contact.muteReason === 'spam' && (
                   <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-fuchsia-100 text-fuchsia-700 font-semibold flex-shrink-0 uppercase tracking-wider">Spam</span>
+                )}
+                {/* Red "Deleted" chip on soft-deleted contacts (item 3).
+                    They live in Archive until the cleanup pass removes
+                    them for good. */}
+                {contact.deletedAt && (
+                  <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-red-100 text-red-700 font-semibold flex-shrink-0 uppercase tracking-wider">Deleted</span>
                 )}
                 {isPending
                   ? <span className="text-xs text-violet-600 font-semibold flex-shrink-0">Mergen…</span>
@@ -5849,6 +5861,7 @@ function App({userId, onSignOut}) {
             isMuted: !!c.is_muted,
             muteReason: c.mute_reason || null,
             archivedAt: c.archived_at || null,
+            deletedAt: c.deleted_at || null,          // soft-delete timestamp; FE shows the contact in Archive with a red "Deleted" chip
             accountEmails: accEmails,                 // array of all account-emails this contact has activity in
             account: accEmails[0] || null,            // "primary" account (first seen) — kept for back-compat
           };
@@ -7275,6 +7288,33 @@ function App({userId, onSignOut}) {
     refreshData();
   }
   function handleEditContact(){setEditingContact(selContact);setShowCompose(false);}
+  // Soft-delete a contact (item 3 in Rik's list). Optimistically stamps
+  // contact.deletedAt in local state and adds every attributed mail id
+  // to deletedIds so the FE immediately shows them under the Deleted
+  // tab. Backend route DELETE /contacts/:id does the same in PG inside
+  // a transaction: contacts.deleted_at + messages.deleted_at cascade.
+  // On failure we refresh the bootstrap to recover the pre-delete view.
+  async function handleDeleteContact(id) {
+    if (!id) return;
+    const contact = contactList.find(c => c.id === id);
+    if (!contact) return;
+    const cascadeIds = messageList.filter(m => m.contactId === id).map(m => m.id);
+    // Optimistic local update.
+    setContactList(prev => prev.map(c => c.id === id ? { ...c, deletedAt: new Date().toISOString() } : c));
+    setMessageList(prev => prev.map(m => cascadeIds.includes(m.id) ? { ...m, /* keep entry, deletedIds drives the Deleted tab */ } : m));
+    setDeletedIds(prev => Array.from(new Set([...prev, ...cascadeIds])));
+    setEditingContact(null);
+    setSelContact(null);
+    setSelMsg(null);
+    setActionToast(`Contact "${contact.name}" deleted`);
+    try {
+      await apiFetch(`/contacts/${id}`, { method: 'DELETE' });
+    } catch (e) {
+      setActionToast('Delete failed: ' + (e?.message || e));
+      // Easiest recovery: re-pull bootstrap so the local view matches PG.
+      refreshData();
+    }
+  }
   function handleSaveContact({name,org,primary,r2mDays,tags,archived,isNews,isNoReply,isMuted}){
     const id = editingContact;
     const prevContact = contactList.find(c => c.id === id);
@@ -7706,7 +7746,7 @@ function App({userId, onSignOut}) {
       onToggleEmailFlag={(email,flag)=>handleToggleEmailFlag(selContact,email,flag)}
       onUnmergeEmail={(email)=>handleUnmergeEmail(selContact,email)}
       onSave={handleSaveContact} onCancel={()=>setEditingContact(null)}
-      onDelete={()=>{setContactList(prev=>prev.filter(c=>c.id!==selContact));setSelContact(null);setEditingContact(null);}}/>;
+      onDelete={()=>handleDeleteContact(selContact)}/>;
   } else if(editingTag){
     const myEmailSet = new Set(mailAccounts.map(a => (a.email||'').toLowerCase()));
     const involvedEmails=[...new Set(

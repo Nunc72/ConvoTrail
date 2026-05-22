@@ -27,7 +27,7 @@ export async function registerDataRoutes(app: FastifyInstance) {
         "retention_deleted_days, retention_spam_days, sync_known_uids",
       ).order("created_at", { ascending: true }),
       sb.from("contacts").select(
-        "id, name, org, color, portrait_url, r2m_days, primary_email, archived_at, " +
+        "id, name, org, color, portrait_url, r2m_days, primary_email, archived_at, deleted_at, " +
         "is_news, is_no_reply, is_muted, mute_reason, " +
         "contact_emails(email, is_news, is_no_reply, is_muted)",
       ).order("name", { ascending: true }),
