@@ -35,16 +35,55 @@ function addrList(a: AddressObject | AddressObject[] | undefined): { email: stri
   return out;
 }
 
-// PostgreSQL refuses both text and jsonb input that contains the U+0000
-// NUL byte — even though JSON spec allows \u0000 in strings. Mailparser
-// will happily hand us names, subjects, or body text that came in over
-// IMAP with embedded NULs (some senders' MIME encoding is sloppy). One
-// of Myriam's Gmail mails tripped this on her first sync ("messages
-// insert: invalid input syntax for type json"), so strip the byte
-// defensively before anything reaches PG.
+// PostgreSQL rejects two classes of "valid JSON, invalid UTF-8" input
+// when it coerces text into jsonb (or even text):
+//   1. U+0000 NUL bytes anywhere in a string.
+//   2. Lone UTF-16 surrogate halves — a high surrogate (0xD800-0xDBFF)
+//      not followed by a low surrogate (0xDC00-0xDFFF), or vice versa.
+//      Happens when an emoji or supplementary-plane char gets
+//      truncated mid-pair by an upstream encoder.
+// Both slip past JSON.stringify + supabase-js, then PG's jsonb parser
+// bails with "invalid input syntax for type json" and the whole INSERT
+// batch dies. Myriam's first Gmail sync hit both classes in succession
+// — the v0.0.203 NUL strip was the first half, this surrogate strip is
+// the second. Sanitize every string field before the row reaches PG.
+function sanitizeStringForJsonb(s: string): string {
+  // Fast path: scan once, only allocate when the string is dirty.
+  let dirty = false;
+  for (let i = 0; i < s.length; i++) {
+    const c = s.charCodeAt(i);
+    if (c === 0) { dirty = true; break; }
+    if (c >= 0xD800 && c <= 0xDBFF) {
+      const next = i + 1 < s.length ? s.charCodeAt(i + 1) : 0;
+      if (next < 0xDC00 || next > 0xDFFF) { dirty = true; break; }
+      i++; // valid pair, skip the low half
+    } else if (c >= 0xDC00 && c <= 0xDFFF) {
+      dirty = true; break;
+    }
+  }
+  if (!dirty) return s;
+  let out = "";
+  for (let i = 0; i < s.length; i++) {
+    const c = s.charCodeAt(i);
+    if (c === 0) continue;
+    if (c >= 0xD800 && c <= 0xDBFF) {
+      const next = i + 1 < s.length ? s.charCodeAt(i + 1) : 0;
+      if (next >= 0xDC00 && next <= 0xDFFF) {
+        out += s[i] + s[i + 1];
+        i++;
+      }
+      // lone high surrogate → drop
+    } else if (c >= 0xDC00 && c <= 0xDFFF) {
+      // lone low surrogate → drop
+    } else {
+      out += s[i];
+    }
+  }
+  return out;
+}
 function stripNulBytes<T>(value: T): T {
   if (value === null || value === undefined) return value;
-  if (typeof value === "string") return value.replace(/\u0000/g, "") as T;
+  if (typeof value === "string") return sanitizeStringForJsonb(value) as unknown as T;
   if (Array.isArray(value)) return value.map(stripNulBytes) as unknown as T;
   if (typeof value === "object") {
     const out: Record<string, unknown> = {};
