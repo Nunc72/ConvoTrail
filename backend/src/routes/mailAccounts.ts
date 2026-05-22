@@ -9,6 +9,7 @@ import { requirePool } from "../db.js";
 import { sendMail, splitAddresses } from "../smtp.js";
 import { armR2m } from "../r2m.js";
 import { downloadAttachmentBytes, deleteAttachments } from "../storage.js";
+import { cleanupOrphanContacts } from "../contactCleanup.js";
 
 interface AccountInput {
   email: string;
@@ -155,6 +156,19 @@ export async function registerMailAccountsRoutes(app: FastifyInstance) {
     const sb = supabaseWithJwt(req.authJwt!);
     const { error } = await sb.from("mail_accounts").delete().eq("id", req.params.id);
     if (error) return reply.internalServerError(error.message);
+    // Cascade has wiped this account's messages. Any contact whose last
+    // mail-association lived on this account is now an orphan — clean
+    // those up so the contact list doesn't carry dead rows. Best-effort
+    // (the account itself is already gone, no rollback path); next sync
+    // would retry the same sweep anyway.
+    try {
+      const removed = await cleanupOrphanContacts(req.authUser!.id);
+      if (removed > 0) {
+        req.log.info({ userId: req.authUser!.id, removed }, "orphan contacts removed after mail-account delete");
+      }
+    } catch (e) {
+      req.log.warn({ err: e }, "orphan-contact cleanup after mail-account delete failed (non-fatal)");
+    }
     logAudit(req, "mail_account.delete", { type: "mail_account", id: req.params.id });
     return reply.code(204).send();
   });

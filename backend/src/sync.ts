@@ -3,6 +3,7 @@ import { simpleParser, type ParsedMail, type AddressObject } from "mailparser";
 import { supabaseAdmin } from "./supabase.js";
 import { decrypt } from "./crypto.js";
 import { requirePool } from "./db.js";
+import { cleanupOrphanContacts } from "./contactCleanup.js";
 
 export interface FolderSyncStat {
   folder: string;
@@ -472,6 +473,20 @@ export async function syncAccount(accountId: string): Promise<SyncResult> {
     // control there. The FE tab logic (getTab in index.html) gives
     // News priority over Noreply when both flags happen to be set on
     // the same contact.)
+
+    // 3.7) Orphan-contact sweep. Permanent-delete detection above (and
+    // any account-level cleanup elsewhere) can leave behind contacts
+    // whose only mails just disappeared from the DB. Drop them so the
+    // contact list reflects what's actually fetchable. Best-effort —
+    // a failure here doesn't roll back the sync.
+    try {
+      const removed = await cleanupOrphanContacts(userId);
+      if (removed > 0) {
+        console.log(`[sync] removed ${removed} orphan contacts for user ${userId}`);
+      }
+    } catch (e) {
+      console.warn(`[sync] orphan-contact cleanup failed:`, e instanceof Error ? e.message : e);
+    }
 
     // 4) Update last_sync_at, sync_known_uids, clear last_error.
     //    Also flip migrated_to_all_mail = true if this run completed
