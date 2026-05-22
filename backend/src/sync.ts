@@ -35,6 +35,27 @@ function addrList(a: AddressObject | AddressObject[] | undefined): { email: stri
   return out;
 }
 
+// PostgreSQL refuses both text and jsonb input that contains the U+0000
+// NUL byte — even though JSON spec allows \u0000 in strings. Mailparser
+// will happily hand us names, subjects, or body text that came in over
+// IMAP with embedded NULs (some senders' MIME encoding is sloppy). One
+// of Myriam's Gmail mails tripped this on her first sync ("messages
+// insert: invalid input syntax for type json"), so strip the byte
+// defensively before anything reaches PG.
+function stripNulBytes<T>(value: T): T {
+  if (value === null || value === undefined) return value;
+  if (typeof value === "string") return value.replace(/\u0000/g, "") as T;
+  if (Array.isArray(value)) return value.map(stripNulBytes) as unknown as T;
+  if (typeof value === "object") {
+    const out: Record<string, unknown> = {};
+    for (const [k, v] of Object.entries(value as Record<string, unknown>)) {
+      out[k] = stripNulBytes(v);
+    }
+    return out as T;
+  }
+  return value;
+}
+
 function snippetOf(text: string | undefined, len = 200): string | null {
   if (!text) return null;
   const t = text.replace(/\s+/g, " ").trim();
@@ -555,7 +576,10 @@ async function buildMessageRow(
     }
   }
 
-  return {
+  // Runs everything through stripNulBytes before returning so a sloppy
+  // sender's NUL-laden header / body can't take out the whole INSERT
+  // batch with a "invalid input syntax for type json" error.
+  return stripNulBytes({
     user_id: userId,
     mail_account_id: accountId,
     folder,
@@ -579,7 +603,7 @@ async function buildMessageRow(
     // can target only the unchecked rows.
     unsubscribe_url: unsubscribeUrl ?? '',
     unsubscribe_one_click: unsubscribeOneClick,
-  };
+  });
 }
 
 // Parse the List-Unsubscribe and List-Unsubscribe-Post headers from a
