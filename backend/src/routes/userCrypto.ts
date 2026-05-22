@@ -77,8 +77,8 @@ export async function registerUserCryptoRoutes(app: FastifyInstance) {
         user_id: req.authUser!.id,
         passphrase_salt:    saltBuf,
         wrapped_master_key: wrapBuf,
-        kdf_algorithm:      b.kdf_algorithm    || "argon2id",
-        kdf_params:         b.kdf_params       || { opslimit: 3, memlimit: 67108864 },
+        kdf_algorithm:      b.kdf_algorithm    || "pbkdf2-sha256",
+        kdf_params:         b.kdf_params       || { iterations: 600000, hash: "SHA-256" },
         cipher_algorithm:   b.cipher_algorithm || "aes-256-gcm",
         updated_at:         new Date().toISOString(),
       });

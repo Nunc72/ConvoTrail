@@ -73,11 +73,15 @@
   <script defer src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
   <script defer src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
   <script defer src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
-  <!-- libsodium-wrappers: Argon2id key derivation + secretbox encryption for
-       the Pad A end-to-end-encryption flow. Loaded eagerly because the
-       passphrase-unlock modal runs before any encrypted data is touched.
-       sodium.ready resolves once the WASM module finishes initialising. -->
-  <script defer src="https://cdn.jsdelivr.net/npm/libsodium-wrappers@0.7.13/dist/browsers/sodium.js"></script>
+  <!-- Crypto for Pad A: end-to-end-encryption uses the browser-native
+       Web Crypto API (window.crypto.subtle). No CDN dependency, no WASM
+       loading, no build step needed. PBKDF2-SHA256 (600k iterations)
+       for passphrase derivation, AES-256-GCM for encryption, HMAC-SHA256
+       for the blind-index. Trade-off vs Argon2id: PBKDF2 is less GPU-
+       resistant but FIPS-approved and natively available; at 600k iters
+       it gives a sane defence against offline brute-force given our
+       threat model (DB-read attacker, no live key access). -->
+
   <style>
     * { box-sizing: border-box; }
     html, body {
@@ -189,7 +193,7 @@
        polish change is picked up by every browser as soon as the version
        is bumped — no manual cache-busters needed. Keep ?v= here in sync
        with APP_VERSION below at every deploy. -->
-  <link rel="stylesheet" href="polish.css?v=0.0.203"/>
+  <link rel="stylesheet" href="polish.css?v=0.0.204"/>
 </head>
 <body>
 <div id="root">
@@ -203,167 +207,223 @@
 const { useState, useMemo, useRef, useEffect, useCallback } = React;
 
 // ─── End-to-end-encryption crypto (Pad A) ────────────────────────────────────
-// Thin wrapper around libsodium. The master key for a user is a random
-// 32-byte secret generated on first passphrase setup; everything sensitive
-// (bodies, subjects, addresses, contact cards) gets encrypted with it before
-// landing in Postgres, and the backend never holds the key after a request
-// completes. The wrapped form stored in user_crypto.wrapped_master_key is
-// useless without the passphrase.
+// Built on the browser-native Web Crypto API (window.crypto.subtle). No
+// external library, no CDN, no WASM. The master key for a user is a
+// random 32 bytes generated on first passphrase setup; everything
+// sensitive (bodies, subjects, addresses, contact cards) gets encrypted
+// with it before landing in Postgres, and the backend never holds the
+// key after a request completes. The wrapped form stored in
+// user_crypto.wrapped_master_key is useless without the passphrase.
 //
 // Conventions:
-//   • All encrypt() output and the wrappedKey blob are libsodium's
-//     XChaCha20-Poly1305 "secretbox_easy" layout: [nonce(24B) | cipher+tag].
-//     XChaCha gets us a 24-byte random nonce so we can pick one per call
-//     without coordination — fine for our volume.
-//   • blindIndex() is keyed BLAKE2b-256 (sodium's generic_hash) over the
-//     lowercased plaintext. Deterministic per (user, value): equal
-//     plaintexts produce equal blind-indices, so the backend can match
-//     "from_email" to a contact_emails row by equality without seeing the
-//     address. We derive a separate sub-key for blind-indexing so the
+//   • encrypt() output and the wrappedKey blob both use the layout
+//     [iv (12B) | ciphertext+gcm-tag]. AES-256-GCM with a random 12-byte
+//     IV per call (NIST-permitted at this volume).
+//   • blindIndex() is HMAC-SHA256 over the lowercased plaintext, keyed
+//     by a sub-key derived from the master key with a context tag.
+//     Deterministic per (user, value): equal plaintexts produce equal
+//     blind-indices, so the backend can match "from_email" to a
+//     contact_emails row by equality without seeing the address. The
 //     master key never directly feeds the HMAC — limits damage if the
-//     blind-index key ever leaks.
+//     blind-index sub-key ever leaks (we could rotate it without
+//     re-wrapping the master).
 //   • All public-facing bytes (to/from the backend, into localStorage,
-//     etc.) are base64-encoded strings. Raw Uint8Arrays stay inside this
-//     module.
+//     etc.) are base64-encoded strings. Raw Uint8Arrays stay inside.
 
 const CONVOOZ_CRYPTO = (() => {
-  // sodium is loaded async via the <script> tag in <head>. Callers must
-  // await ready() once before invoking any of the other helpers.
-  let _sodium = null;
-  let _readyPromise = null;
-
-  function ready() {
-    if (_sodium) return Promise.resolve(_sodium);
-    if (!_readyPromise) {
-      _readyPromise = (async () => {
-        // sodium global is created by the libsodium-wrappers script.
-        if (typeof window.sodium === "undefined") {
-          throw new Error("libsodium-wrappers script not loaded");
-        }
-        await window.sodium.ready;
-        _sodium = window.sodium;
-        return _sodium;
-      })();
-    }
-    return _readyPromise;
+  const subtle = (typeof window !== "undefined" && window.crypto && window.crypto.subtle) || null;
+  function requireSubtle() {
+    if (!subtle) throw new Error("Web Crypto API not available (HTTPS context required)");
+    return subtle;
   }
+
+  // Web Crypto is sync-available once the global resolves. ready() exists
+  // for symmetry with the previous libsodium-shaped API and to catch the
+  // (rare) non-secure-context case before the first crypto call.
+  function ready() { requireSubtle(); return Promise.resolve(); }
 
   const b64 = {
-    fromBytes: (u8) => _sodium.to_base64(u8, _sodium.base64_variants.ORIGINAL),
-    toBytes:   (s)  => _sodium.from_base64(s, _sodium.base64_variants.ORIGINAL),
+    fromBytes: (u8) => {
+      const bytes = u8 instanceof Uint8Array ? u8 : new Uint8Array(u8);
+      let s = "";
+      for (let i = 0; i < bytes.length; i++) s += String.fromCharCode(bytes[i]);
+      return btoa(s);
+    },
+    toBytes: (s) => {
+      const bin = atob(s);
+      const out = new Uint8Array(bin.length);
+      for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
+      return out;
+    },
   };
   const utf8 = {
-    fromString: (s) => _sodium.from_string(s),
-    toString:   (u8) => _sodium.to_string(u8),
+    fromString: (s) => new TextEncoder().encode(s ?? ""),
+    toString:   (u8) => new TextDecoder("utf-8").decode(u8 instanceof Uint8Array ? u8 : new Uint8Array(u8)),
   };
 
-  // 32 random bytes → fresh master key.
-  function generateMasterKey() {
-    return _sodium.randombytes_buf(_sodium.crypto_secretbox_KEYBYTES);
-  }
-
-  // 32-byte salt for Argon2id derivation. Stored on the server as
-  // user_crypto.passphrase_salt — not a secret, just anti-rainbow-table.
-  function generateSalt() {
-    return _sodium.randombytes_buf(_sodium.crypto_pwhash_SALTBYTES);
-  }
-
-  // Argon2id over UTF-8 passphrase + salt → 32-byte derived key. Used to
-  // wrap/unwrap the master key, and only that — we never store the
-  // derived key anywhere.
-  function deriveKeyFromPassphrase(passphrase, salt, opts = {}) {
-    const opslimit = opts.opslimit ?? _sodium.crypto_pwhash_OPSLIMIT_MODERATE;
-    const memlimit = opts.memlimit ?? _sodium.crypto_pwhash_MEMLIMIT_MODERATE;
-    return _sodium.crypto_pwhash(
-      _sodium.crypto_secretbox_KEYBYTES,
-      passphrase,
-      salt,
-      opslimit,
-      memlimit,
-      _sodium.crypto_pwhash_ALG_ARGON2ID13,
-    );
-  }
-
-  // Symmetric secretbox encryption with a random 24-byte nonce, prepended
-  // to the ciphertext. Output is Uint8Array; callers serialize to base64
-  // via b64.fromBytes when storing.
-  function encryptBytes(plaintextBytes, key) {
-    const nonce = _sodium.randombytes_buf(_sodium.crypto_secretbox_NONCEBYTES);
-    const ct = _sodium.crypto_secretbox_easy(plaintextBytes, nonce, key);
-    const out = new Uint8Array(nonce.length + ct.length);
-    out.set(nonce, 0);
-    out.set(ct, nonce.length);
+  function randomBytes(n) {
+    const out = new Uint8Array(n);
+    window.crypto.getRandomValues(out);
     return out;
   }
 
-  function decryptBytes(blob, key) {
-    if (!blob || blob.length < _sodium.crypto_secretbox_NONCEBYTES) return null;
-    const nonce = blob.subarray(0, _sodium.crypto_secretbox_NONCEBYTES);
-    const ct = blob.subarray(_sodium.crypto_secretbox_NONCEBYTES);
-    try {
-      return _sodium.crypto_secretbox_open_easy(ct, nonce, key);
-    } catch {
-      return null;
-    }
-  }
-
-  // String → ciphertext-bytes and back, for the common case of encrypting
-  // a UTF-8 string field.
-  function encryptString(s, key) {
-    return encryptBytes(utf8.fromString(s ?? ""), key);
-  }
-  function decryptString(blob, key) {
-    const bytes = decryptBytes(blob, key);
-    return bytes === null ? null : utf8.toString(bytes);
-  }
-
-  // Blind-index sub-key derivation. The master key is used only to derive
-  // a context-tagged sub-key (one for blind-indices, future-proof to add
-  // more contexts). We use libsodium's generic_hash keyed mode so the
-  // chain is HMAC-equivalent and deterministic.
-  function deriveSubKey(masterKey, context) {
-    return _sodium.crypto_generichash(
-      32,
-      _sodium.from_string(context),
-      masterKey,
+  // 32 random bytes → master key (exportable raw form). We keep it as a
+  // CryptoKey for use with subtle.encrypt; the raw bytes are only handled
+  // during wrap/unwrap.
+  async function generateMasterKey() {
+    return await requireSubtle().generateKey(
+      { name: "AES-GCM", length: 256 },
+      true,  // extractable: we need to be able to wrap it
+      ["encrypt", "decrypt"],
     );
   }
 
-  // Deterministic, keyed hash of a value (after .trim().toLowerCase() for
-  // emails) → 32 bytes. Use for matching: hash both sides of a comparison
-  // with the same sub-key, compare equality. The backend stores these in
-  // *_blind columns.
-  function blindIndex(value, masterKey, subkeyContext = "convooz-blind-v1") {
-    const subkey = deriveSubKey(masterKey, subkeyContext);
+  // 32-byte salt for PBKDF2. Stored on the server as
+  // user_crypto.passphrase_salt — not a secret, just anti-rainbow-table.
+  function generateSalt() { return randomBytes(32); }
+
+  // PBKDF2-SHA256 over UTF-8 passphrase + salt → 32-byte derived key,
+  // returned as an AES-GCM CryptoKey suitable for wrapping/unwrapping
+  // the master key. 600k iterations is the OWASP 2023 recommendation for
+  // PBKDF2-SHA256.
+  async function deriveKeyFromPassphrase(passphrase, salt, opts = {}) {
+    const iterations = opts.iterations ?? 600000;
+    const baseKey = await requireSubtle().importKey(
+      "raw", utf8.fromString(passphrase),
+      { name: "PBKDF2" },
+      false, ["deriveKey"],
+    );
+    return await subtle.deriveKey(
+      { name: "PBKDF2", salt: salt instanceof Uint8Array ? salt : new Uint8Array(salt), iterations, hash: "SHA-256" },
+      baseKey,
+      { name: "AES-GCM", length: 256 },
+      false,                          // not extractable — never leaves crypto subsystem
+      ["encrypt", "decrypt"],
+    );
+  }
+
+  // AES-256-GCM with a random 12-byte IV prepended to the ciphertext.
+  // Input/output both Uint8Array; callers serialize to base64 when
+  // storing or transporting.
+  async function encryptBytes(plaintextBytes, key) {
+    const iv = randomBytes(12);
+    const ct = await requireSubtle().encrypt({ name: "AES-GCM", iv }, key, plaintextBytes);
+    const ctU8 = new Uint8Array(ct);
+    const out = new Uint8Array(iv.length + ctU8.length);
+    out.set(iv, 0);
+    out.set(ctU8, iv.length);
+    return out;
+  }
+
+  async function decryptBytes(blob, key) {
+    if (!blob || blob.length < 12) return null;
+    const iv = blob.subarray(0, 12);
+    const ct = blob.subarray(12);
+    try {
+      const pt = await requireSubtle().decrypt({ name: "AES-GCM", iv }, key, ct);
+      return new Uint8Array(pt);
+    } catch {
+      return null;  // wrong key, tampered ciphertext, etc.
+    }
+  }
+
+  async function encryptString(s, key) { return await encryptBytes(utf8.fromString(s ?? ""), key); }
+  async function decryptString(blob, key) {
+    const bytes = await decryptBytes(blob, key);
+    return bytes === null ? null : utf8.toString(bytes);
+  }
+
+  // Wrap the master key with a passphrase-derived key. Output blob
+  // matches the encryptBytes layout [iv | ciphertext+tag] — stored as
+  // user_crypto.wrapped_master_key.
+  async function wrapMasterKey(masterCryptoKey, derivedCryptoKey) {
+    const raw = new Uint8Array(await requireSubtle().exportKey("raw", masterCryptoKey));
+    try {
+      return await encryptBytes(raw, derivedCryptoKey);
+    } finally {
+      // Zeroize the in-memory raw copy as soon as possible.
+      raw.fill(0);
+    }
+  }
+
+  async function unwrapMasterKey(wrappedBlob, derivedCryptoKey) {
+    const raw = await decryptBytes(wrappedBlob, derivedCryptoKey);
+    if (raw === null) return null;
+    try {
+      return await requireSubtle().importKey(
+        "raw", raw,
+        { name: "AES-GCM", length: 256 },
+        true, ["encrypt", "decrypt"],
+      );
+    } finally {
+      raw.fill(0);
+    }
+  }
+
+  // HMAC sub-key derivation. We derive an HMAC-SHA256 key from the
+  // master key + a context label so the master key never directly
+  // signs anything. Result is a non-extractable CryptoKey suitable
+  // for subtle.sign({name:'HMAC'}, …).
+  async function deriveSubKey(masterCryptoKey, context) {
+    // Build sub-key material = HMAC(rawMaster, context) — we need the
+    // raw master to do this, so export → use → zero. Once Phase 1.2
+    // ships we'll cache the resulting CryptoKey alongside masterKey to
+    // avoid re-exporting per call.
+    const raw = new Uint8Array(await requireSubtle().exportKey("raw", masterCryptoKey));
+    try {
+      const hmacKeyForDerivation = await subtle.importKey(
+        "raw", raw,
+        { name: "HMAC", hash: "SHA-256" },
+        false, ["sign"],
+      );
+      const sub = new Uint8Array(await subtle.sign({ name: "HMAC" }, hmacKeyForDerivation, utf8.fromString(context)));
+      return await subtle.importKey(
+        "raw", sub,
+        { name: "HMAC", hash: "SHA-256" },
+        false, ["sign"],
+      );
+    } finally { raw.fill(0); }
+  }
+
+  // Deterministic, keyed hash of a value (after .trim().toLowerCase() —
+  // emails normalize, names normalize) → 32 bytes. Use for matching:
+  // hash both sides with the same sub-key, compare equality. Backend
+  // stores these in *_blind columns.
+  async function blindIndex(value, masterCryptoKey, subkeyContext = "convooz-blind-v1") {
+    const subKey = await deriveSubKey(masterCryptoKey, subkeyContext);
     const normalized = (value ?? "").trim().toLowerCase();
-    return _sodium.crypto_generichash(32, _sodium.from_string(normalized), subkey);
+    const sig = await requireSubtle().sign({ name: "HMAC" }, subKey, utf8.fromString(normalized));
+    return new Uint8Array(sig);
   }
 
   return {
     ready,
-    b64, utf8,
-    generateMasterKey,
-    generateSalt,
+    b64, utf8, randomBytes,
+    generateMasterKey, generateSalt,
     deriveKeyFromPassphrase,
     encryptBytes, decryptBytes,
     encryptString, decryptString,
-    blindIndex, deriveSubKey,
+    wrapMasterKey, unwrapMasterKey,
+    deriveSubKey, blindIndex,
   };
 })();
 // Exposed on window for the smoke-test described in the v0.0.202
 // release notes. Phase 1.2 will plug this into the React UI; for now
-// the dev can sanity-check the round-trip from DevTools:
+// the dev can sanity-check the full round-trip from DevTools:
 //   await CONVOOZ_CRYPTO.ready();
 //   const salt = CONVOOZ_CRYPTO.generateSalt();
-//   const k = CONVOOZ_CRYPTO.deriveKeyFromPassphrase('hello', salt);
-//   const ct = CONVOOZ_CRYPTO.encryptString('test message', k);
-//   CONVOOZ_CRYPTO.decryptString(ct, k);  // → 'test message'
-//   CONVOOZ_CRYPTO.b64.fromBytes(CONVOOZ_CRYPTO.blindIndex('Foo@Bar.com', k));
+//   const derived = await CONVOOZ_CRYPTO.deriveKeyFromPassphrase('hello', salt);
+//   const master  = await CONVOOZ_CRYPTO.generateMasterKey();
+//   const wrap    = await CONVOOZ_CRYPTO.wrapMasterKey(master, derived);
+//   const unwrap  = await CONVOOZ_CRYPTO.unwrapMasterKey(wrap, derived);
+//   const ct = await CONVOOZ_CRYPTO.encryptString('test message', master);
+//   await CONVOOZ_CRYPTO.decryptString(ct, unwrap);  // → 'test message'
+//   CONVOOZ_CRYPTO.b64.fromBytes(await CONVOOZ_CRYPTO.blindIndex('Foo@Bar.com', master));
 window.CONVOOZ_CRYPTO = CONVOOZ_CRYPTO;
 
 // ─── Constants ───────────────────────────────────────────────────────────────
 
-const APP_VERSION = "0.0.203"; // bumped on every deploy — keep in sync with version.json AND with the ?v= on polish.css above
+const APP_VERSION = "0.0.204"; // bumped on every deploy — keep in sync with version.json AND with the ?v= on polish.css above
 
 // ─── Backend + Supabase config ───────────────────────────────────────────────
 const SUPABASE_URL = "https://oyrlzqbjcsliesvunbwj.supabase.co";
