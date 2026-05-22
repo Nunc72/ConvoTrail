@@ -309,20 +309,88 @@ export async function registerMessagesRoutes(app: FastifyInstance) {
     },
   );
 
-  // ─── Soft-delete: set deleted_at = now() ─────────────────────────────────
-  // MVP: DB-only. IMAP is left untouched — the retention cron (Tier 2.5) will
-  // EXPUNGE 90 days after deletion. Users can recover within that window.
+  // ─── Delete: move to IMAP Trash + soft-delete in DB ──────────────────────
+  // Two-way Trash sync per Rik's request: hitting Delete in Convooz should
+  // also land the mail in Gmail's (or any IMAP server's) Trash folder so
+  // the two stay in sync. The reverse direction — mails the user trashed
+  // elsewhere — comes in via the sync.ts Trash-folder pass.
+  //
+  // IMAP first, DB after: if the move succeeds we write the new folder
+  // path + UID + deleted_at in one shot; if it fails (no \Trash special-
+  // use, transient network, etc.) we fall back to a DB-only soft-delete
+  // and let the next sync's permanent-delete detection reconcile.
   app.patch<{ Params: { id: string } }>("/messages/:id/delete", auth, async (req, reply) => {
     const pool = requirePool();
-    const r = await pool.query<{ user_id: string }>(
-      `SELECT user_id FROM messages WHERE id = $1`, [req.params.id],
-    );
-    if (r.rows.length === 0) return reply.notFound();
-    if (r.rows[0].user_id !== req.authUser!.id) return reply.forbidden();
-    await pool.query(
-      `UPDATE messages SET deleted_at = now() WHERE id = $1 AND deleted_at IS NULL`,
+    const userId = req.authUser!.id;
+    const r = await pool.query<{
+      user_id: string;
+      mail_account_id: string;
+      folder: string;
+      uid: number;
+      deleted_at: Date | null;
+      imap_host: string | null;
+      imap_port: number | null;
+      imap_user: string | null;
+      imap_cred_enc: Buffer | null;
+    }>(
+      `SELECT m.user_id, m.mail_account_id, m.folder, m.uid, m.deleted_at,
+              a.imap_host, a.imap_port, a.imap_user, a.imap_cred_enc
+         FROM messages m
+         JOIN mail_accounts a ON a.id = m.mail_account_id
+        WHERE m.id = $1`,
       [req.params.id],
     );
+    if (r.rows.length === 0) return reply.notFound();
+    const m = r.rows[0];
+    if (m.user_id !== userId) return reply.forbidden();
+    if (m.deleted_at) return reply.code(204).send();
+
+    let newFolder = m.folder;
+    let newUid = m.uid;
+    let imapMoved = false;
+    if (m.imap_host && m.imap_port && m.imap_cred_enc) {
+      const client = new ImapFlow({
+        host: m.imap_host, port: m.imap_port, secure: true,
+        auth: { user: m.imap_user || "", pass: decrypt(m.imap_cred_enc) },
+        logger: false, socketTimeout: 20_000,
+      });
+      try {
+        await client.connect();
+        const mailboxes = await client.list();
+        const trash = mailboxes.find(mb => mb.specialUse === "\\Trash");
+        // Skip the move if the message is already in Trash (idempotent
+        // retry / a Trash-row delete re-click). DB still gets touched
+        // below to refresh deleted_at.
+        if (trash && m.folder !== trash.path) {
+          const lock = await client.getMailboxLock(m.folder);
+          try {
+            const moveRes = await client.messageMove(String(m.uid), trash.path, { uid: true });
+            const destUid = moveRes && (moveRes as { uidMap?: Map<number, number> }).uidMap?.get(m.uid);
+            if (destUid) {
+              newFolder = trash.path;
+              newUid = destUid;
+              imapMoved = true;
+            }
+          } finally { lock.release(); }
+        }
+        await client.logout();
+      } catch (e) {
+        try { await client.logout(); } catch { /* ignore */ }
+        req.log.warn({ err: e, messageId: req.params.id }, "delete: IMAP move-to-trash failed; DB-only soft delete");
+      }
+    }
+
+    if (imapMoved) {
+      await pool.query(
+        `UPDATE messages SET deleted_at = now(), folder = $1, uid = $2 WHERE id = $3`,
+        [newFolder, newUid, req.params.id],
+      );
+    } else {
+      await pool.query(
+        `UPDATE messages SET deleted_at = now() WHERE id = $1`,
+        [req.params.id],
+      );
+    }
     return reply.code(204).send();
   });
 
@@ -385,18 +453,120 @@ export async function registerMessagesRoutes(app: FastifyInstance) {
     return reply.code(204).send();
   });
 
-  // ─── Recover from Deleted (clear deleted_at) ─────────────────────────────
+  // ─── Recover: move out of IMAP Trash + clear deleted_at ─────────────────
+  // Destination depends on the message direction so we mirror what Gmail
+  // does natively: an incoming mail goes back to INBOX (the user expects
+  // to find it where new mail lands), an outgoing mail goes back to Sent
+  // (a sent mail in INBOX would feel wrong). On Gmail, MOVE into INBOX
+  // /Sent reattaches the \Inbox / \Sent label and the mail re-enters
+  // All Mail at a brand-new UID; we look that up via Message-ID so the
+  // DB row points at a fetchable All Mail UID after recover (our
+  // primary sync target). Non-Gmail servers (no \All) keep the row at
+  // the destination folder directly.
   app.patch<{ Params: { id: string } }>("/messages/:id/recover", auth, async (req, reply) => {
     const pool = requirePool();
-    const r = await pool.query<{ user_id: string }>(
-      `SELECT user_id FROM messages WHERE id = $1`, [req.params.id],
-    );
-    if (r.rows.length === 0) return reply.notFound();
-    if (r.rows[0].user_id !== req.authUser!.id) return reply.forbidden();
-    await pool.query(
-      `UPDATE messages SET deleted_at = NULL WHERE id = $1`,
+    const userId = req.authUser!.id;
+    const r = await pool.query<{
+      user_id: string;
+      mail_account_id: string;
+      folder: string;
+      uid: number;
+      direction: string;
+      message_id: string | null;
+      imap_host: string | null;
+      imap_port: number | null;
+      imap_user: string | null;
+      imap_cred_enc: Buffer | null;
+    }>(
+      `SELECT m.user_id, m.mail_account_id, m.folder, m.uid, m.direction, m.message_id,
+              a.imap_host, a.imap_port, a.imap_user, a.imap_cred_enc
+         FROM messages m
+         JOIN mail_accounts a ON a.id = m.mail_account_id
+        WHERE m.id = $1`,
       [req.params.id],
     );
+    if (r.rows.length === 0) return reply.notFound();
+    const m = r.rows[0];
+    if (m.user_id !== userId) return reply.forbidden();
+
+    let newFolder = m.folder;
+    let newUid = m.uid;
+    let imapMoved = false;
+    if (m.imap_host && m.imap_port && m.imap_cred_enc) {
+      const client = new ImapFlow({
+        host: m.imap_host, port: m.imap_port, secure: true,
+        auth: { user: m.imap_user || "", pass: decrypt(m.imap_cred_enc) },
+        logger: false, socketTimeout: 25_000,
+      });
+      try {
+        await client.connect();
+        const mailboxes = await client.list();
+        const trash = mailboxes.find(mb => mb.specialUse === "\\Trash");
+        const allMail = mailboxes.find(mb => mb.specialUse === "\\All");
+        const inbox = mailboxes.find(mb => mb.specialUse === "\\Inbox") || mailboxes.find(mb => mb.path.toUpperCase() === "INBOX");
+        const sent = mailboxes.find(mb => mb.specialUse === "\\Sent");
+        // Only try an IMAP move if the row is actually living in Trash.
+        // DB-only recovers (no IMAP credentials, or a soft-delete that
+        // pre-dates the move-on-delete behavior) still get their
+        // deleted_at cleared below.
+        if (trash && m.folder === trash.path) {
+          const dest = m.direction === 'out' ? sent : inbox;
+          if (dest) {
+            let movedUid: number | undefined;
+            const lock = await client.getMailboxLock(m.folder);
+            try {
+              const moveRes = await client.messageMove(String(m.uid), dest.path, { uid: true });
+              const mapped = moveRes && (moveRes as { uidMap?: Map<number, number> }).uidMap?.get(m.uid);
+              if (typeof mapped === "number") movedUid = mapped;
+            } finally { lock.release(); }
+
+            if (movedUid) {
+              // Gmail: the row should point at All Mail, not INBOX/Sent.
+              // Search All Mail by RFC Message-ID for the new UID — the
+              // INBOX/Sent UID returned above is for a different folder
+              // and isn't what our sync strategy expects.
+              if (allMail && m.message_id) {
+                const lock2 = await client.getMailboxLock(allMail.path);
+                try {
+                  const cleanMid = m.message_id.replace(/^<+|>+$/g, "");
+                  const matched = (await client.search({ header: { "Message-ID": cleanMid } }, { uid: true })) as number[] | false;
+                  if (matched && matched.length > 0) {
+                    newFolder = allMail.path;
+                    newUid = matched[matched.length - 1];
+                    imapMoved = true;
+                  }
+                } finally { lock2.release(); }
+              }
+              if (!imapMoved) {
+                // Non-Gmail (or All Mail lookup didn't find it): leave
+                // the DB row pointing at the destination folder we just
+                // moved into. Sync's permanent-delete detection will
+                // reconcile any drift on the next pass.
+                newFolder = dest.path;
+                newUid = movedUid;
+                imapMoved = true;
+              }
+            }
+          }
+        }
+        await client.logout();
+      } catch (e) {
+        try { await client.logout(); } catch { /* ignore */ }
+        req.log.warn({ err: e, messageId: req.params.id }, "recover: IMAP move-from-trash failed; DB-only restore");
+      }
+    }
+
+    if (imapMoved) {
+      await pool.query(
+        `UPDATE messages SET deleted_at = NULL, folder = $1, uid = $2 WHERE id = $3`,
+        [newFolder, newUid, req.params.id],
+      );
+    } else {
+      await pool.query(
+        `UPDATE messages SET deleted_at = NULL WHERE id = $1`,
+        [req.params.id],
+      );
+    }
     return reply.code(204).send();
   });
 

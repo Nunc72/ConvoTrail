@@ -104,8 +104,15 @@ export async function syncAccount(accountId: string): Promise<SyncResult> {
     // For providers without \All (typical IMAP4: Oxilion, FastMail, etc.)
     // we keep the previous INBOX + Sent pair — those are two distinct
     // folders with no overlap, so per-folder sync works fine.
+    //
+    // The \Trash folder is synced alongside whichever main strategy
+    // applies, so mails the user trashed in the webmail (or anywhere
+    // else) show up in Convooz's Deleted tab — and so the routes that
+    // move-on-delete have a folder to push into. Rows fetched from
+    // Trash carry deleted_at = now() on insert.
     const mailboxes = await client.list();
     const allMail = mailboxes.find(m => m.specialUse === "\\All");
+    const trash   = mailboxes.find(m => m.specialUse === "\\Trash");
     let targets: { path: string }[];
     if (allMail) {
       targets = [allMail];
@@ -114,6 +121,7 @@ export async function syncAccount(accountId: string): Promise<SyncResult> {
       const sent  = mailboxes.find(m => m.specialUse === "\\Sent");
       targets = [inbox, sent].filter(Boolean) as { path: string }[];
     }
+    if (trash) targets.push(trash);
 
     // First-run migration to All Mail: prior syncs may have written
     // INBOX / Sent rows under different folder names. We delete those
@@ -123,18 +131,21 @@ export async function syncAccount(accountId: string): Promise<SyncResult> {
     // by their messages.message_id (RFC header) first, then restore
     // them after the new rows land, matching new UUID via RFC id.
     // The block is idempotent: once every row lives under allMail.path
-    // the delete affects 0 rows and the snapshot stays empty.
+    // (or trash.path) the delete affects 0 rows and the snapshot
+    // stays empty.
     let r2mSnap: Array<{ rfc_message_id: string; dismissed_at: string | null; snooze_until: string | null; snooze_count: number }> = [];
     let tagSnap: Array<{ rfc_message_id: string; tag_id: string }> = [];
     if (allMail) {
+      const preservePaths = [allMail.path];
+      if (trash) preservePaths.push(trash.path);
       const r1 = await pool.query<{ rfc_message_id: string | null; dismissed_at: string | null; snooze_until: string | null; snooze_count: number }>(
         `SELECT m.message_id AS rfc_message_id, rs.dismissed_at, rs.snooze_until, rs.snooze_count
            FROM r2m_state rs
            JOIN messages m ON m.id = rs.message_id
           WHERE m.mail_account_id = $1
-            AND m.folder <> $2
+            AND m.folder <> ALL($2::text[])
             AND m.message_id IS NOT NULL`,
-        [acc.id, allMail.path],
+        [acc.id, preservePaths],
       );
       r2mSnap = r1.rows.filter(r => !!r.rfc_message_id) as typeof r2mSnap;
       const r2 = await pool.query<{ rfc_message_id: string | null; tag_id: string }>(
@@ -142,17 +153,17 @@ export async function syncAccount(accountId: string): Promise<SyncResult> {
            FROM message_tags mt
            JOIN messages m ON m.id = mt.message_id
           WHERE m.mail_account_id = $1
-            AND m.folder <> $2
+            AND m.folder <> ALL($2::text[])
             AND m.message_id IS NOT NULL`,
-        [acc.id, allMail.path],
+        [acc.id, preservePaths],
       );
       tagSnap = r2.rows.filter(r => !!r.rfc_message_id) as typeof tagSnap;
-      const { error: delErr } = await supabaseAdmin
-        .from("messages")
-        .delete()
-        .eq("mail_account_id", acc.id)
-        .neq("folder", allMail.path);
-      if (delErr) throw new Error(`messages migration delete: ${delErr.message}`);
+      await pool.query(
+        `DELETE FROM messages
+          WHERE mail_account_id = $1
+            AND folder <> ALL($2::text[])`,
+        [acc.id, preservePaths],
+      );
     }
 
     const since = new Date(Date.now() - SINCE_DAYS * 86400_000);
@@ -232,10 +243,54 @@ export async function syncAccount(accountId: string): Promise<SyncResult> {
             // skip unparseable
           }
         }
+        // Rows fetched from \Trash should land in the Deleted tab right
+        // away — Convooz's deleted_at column is the FE filter signal.
+        // We use now() because IMAP doesn't expose a "trashed at"
+        // timestamp; the original message.date is preserved separately.
+        const isTrashFolder = !!trash && box.path === trash.path;
+        if (isTrashFolder) {
+          const nowIso = new Date().toISOString();
+          for (const row of rows) row.deleted_at = nowIso;
+        }
         if (rows.length) {
           const { error: insErr } = await supabaseAdmin.from("messages").insert(rows);
           if (insErr) throw new Error(`messages insert: ${insErr.message}`);
           stat.inserted = rows.length;
+        }
+
+        // Permanent-delete detection: mails the user (or anyone) hard-
+        // deleted on the server need to disappear from Convooz too,
+        // otherwise the Deleted tab would accumulate ghost rows forever
+        // after Gmail auto-purges Trash at 30 days. We compare the UID
+        // set we just got from IMAP against the DB's UIDs for this
+        // folder within the same SINCE_DAYS window. DB rows whose UID
+        // is no longer in IMAP are gone for good — hard-delete them
+        // (FK CASCADE handles r2m_state + message_tags). Scoped to the
+        // window so older rows outside our search horizon don't get
+        // wrongly dropped.
+        try {
+          const uidSet = new Set(uids);
+          const dbRowsInWindow = await pool.query<{ uid: number; id: string }>(
+            `SELECT uid, id
+               FROM messages
+              WHERE mail_account_id = $1
+                AND folder = $2
+                AND uidvalidity = $3
+                AND date >= $4`,
+            [acc.id, box.path, uidvalidity.toString(), since.toISOString()],
+          );
+          const staleIds = dbRowsInWindow.rows
+            .filter(r => !uidSet.has(Number(r.uid)))
+            .map(r => r.id);
+          if (staleIds.length > 0) {
+            await pool.query(
+              `DELETE FROM messages WHERE id = ANY($1::uuid[])`,
+              [staleIds],
+            );
+          }
+        } catch (e) {
+          // Non-fatal: the next sync retries. Log so it's visible in Fly logs.
+          console.warn(`[sync] permanent-delete detection failed for ${box.path}:`, e instanceof Error ? e.message : e);
         }
 
         // Backfill pass: messages that were synced BEFORE the
