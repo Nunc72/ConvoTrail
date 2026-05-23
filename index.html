@@ -193,7 +193,7 @@
        polish change is picked up by every browser as soon as the version
        is bumped — no manual cache-busters needed. Keep ?v= here in sync
        with APP_VERSION below at every deploy. -->
-  <link rel="stylesheet" href="polish.css?v=0.0.211"/>
+  <link rel="stylesheet" href="polish.css?v=0.0.212"/>
 </head>
 <body>
 <div id="root">
@@ -396,6 +396,14 @@ const CONVOOZ_CRYPTO = (() => {
     return new Uint8Array(sig);
   }
 
+  // Export a CryptoKey as raw 32 bytes. Used by App to populate the
+  // X-User-Key header pool just after Set-up / Unlock — the backend
+  // needs the raw bytes (not a CryptoKey object) to import its own
+  // copy and encrypt with the same algorithm.
+  async function exportRawKey(cryptoKey) {
+    return new Uint8Array(await requireSubtle().exportKey("raw", cryptoKey));
+  }
+
   return {
     ready,
     b64, utf8, randomBytes,
@@ -404,6 +412,7 @@ const CONVOOZ_CRYPTO = (() => {
     encryptBytes, decryptBytes,
     encryptString, decryptString,
     wrapMasterKey, unwrapMasterKey,
+    exportRawKey,
     deriveSubKey, blindIndex,
   };
 })();
@@ -423,7 +432,7 @@ window.CONVOOZ_CRYPTO = CONVOOZ_CRYPTO;
 
 // ─── Constants ───────────────────────────────────────────────────────────────
 
-const APP_VERSION = "0.0.211"; // bumped on every deploy — keep in sync with version.json AND with the ?v= on polish.css above
+const APP_VERSION = "0.0.212"; // bumped on every deploy — keep in sync with version.json AND with the ?v= on polish.css above
 
 // ─── Backend + Supabase config ───────────────────────────────────────────────
 const SUPABASE_URL = "https://oyrlzqbjcsliesvunbwj.supabase.co";
@@ -466,6 +475,17 @@ function refreshSessionDedup() {
     .finally(() => { __refreshInFlight = null; });
   return __refreshInFlight;
 }
+// Module-scope reference for the per-user master key in base64 form.
+// Set by the App after a successful Set-up / Unlock; cleared on Lock or
+// sign-out. apiFetch reads this so every server call that needs the key
+// (sync, send, future encrypted-write paths) carries X-User-Key. We
+// keep it as a base64 string instead of raw bytes so the header build
+// doesn't have to do per-call conversion. Lives outside the React
+// component tree to avoid re-render churn — React.set/getState on a
+// key would burn renders on every change.
+let _userKeyB64ForHeader = null;
+function setUserKeyHeader(b64OrNull) { _userKeyB64ForHeader = b64OrNull || null; }
+
 async function apiFetch(path, opts = {}) {
   // Build the Authorization header lazily so the 401-refresh path below
   // can pick up the fresh access_token after refreshSession() runs.
@@ -474,6 +494,7 @@ async function apiFetch(path, opts = {}) {
     const headers = { ...(opts.headers || {}) };
     if (opts.body != null) headers["Content-Type"] = "application/json";
     if (session?.access_token) headers.Authorization = `Bearer ${session.access_token}`;
+    if (_userKeyB64ForHeader) headers["X-User-Key"] = _userKeyB64ForHeader;
     return headers;
   }
   let res = await fetch(BACKEND_URL + path, { ...opts, headers: await buildHeaders() });
@@ -6166,7 +6187,16 @@ function App({userId, onSignOut}) {
   // user is in. Re-runs whenever the auth user id changes (sign-in or
   // sign-out → SIGNED_IN event resets currentUser).
   useEffect(() => {
-    if (!currentUser?.email) { setCryptoStatus('idle'); return; }
+    if (!currentUser?.email) {
+      // Auth lost (sign-out, expired refresh). Drop any in-memory key
+      // so the next apiFetch doesn't ship X-User-Key to a fresh
+      // session that may belong to a different user.
+      masterKeyRef.current = null;
+      setUserKeyHeader(null);
+      setCryptoStatus('idle');
+      setCryptoMaterial(null);
+      return;
+    }
     let cancelled = false;
     (async () => {
       try {
@@ -6214,6 +6244,10 @@ function App({userId, onSignOut}) {
         }),
       });
       masterKeyRef.current = master;
+      // Export raw bytes once so every subsequent apiFetch can attach
+      // X-User-Key without re-exporting per call.
+      const rawForHeader = await CONVOOZ_CRYPTO.exportRawKey(master);
+      setUserKeyHeader(CONVOOZ_CRYPTO.b64.fromBytes(rawForHeader));
       setCryptoMaterial({ passphrase_salt: saltB64, wrapped_master_key: wrappedB64 });
       setCryptoStatus('unlocked');
       setPassphraseModal(null);
@@ -6239,6 +6273,8 @@ function App({userId, onSignOut}) {
         return;
       }
       masterKeyRef.current = master;
+      const rawForHeader = await CONVOOZ_CRYPTO.exportRawKey(master);
+      setUserKeyHeader(CONVOOZ_CRYPTO.b64.fromBytes(rawForHeader));
       setCryptoStatus('unlocked');
       setPassphraseModal(null);
       setActionToast('Encryption unlocked');
@@ -6248,6 +6284,7 @@ function App({userId, onSignOut}) {
   }
   function handleCryptoLock() {
     masterKeyRef.current = null;
+    setUserKeyHeader(null);
     if (cryptoMaterial) setCryptoStatus('locked');
     else setCryptoStatus('unset');
   }

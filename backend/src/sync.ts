@@ -4,6 +4,7 @@ import { supabaseAdmin } from "./supabase.js";
 import { decrypt } from "./crypto.js";
 import { requirePool } from "./db.js";
 import { cleanupOrphanContacts } from "./contactCleanup.js";
+import { encryptForUser, blindIndexForUser } from "./userCrypto.js";
 
 export interface FolderSyncStat {
   folder: string;
@@ -84,6 +85,13 @@ function sanitizeStringForJsonb(s: string): string {
 function stripNulBytes<T>(value: T): T {
   if (value === null || value === undefined) return value;
   if (typeof value === "string") return sanitizeStringForJsonb(value) as unknown as T;
+  // Pass Buffer / Uint8Array through verbatim — the per-property
+  // walk below would iterate the numeric byte entries and replace
+  // them as numbers, which both wastes time and corrupts encrypted
+  // payloads (added in phase 1.3a). Recognise them before the
+  // generic "object" branch.
+  if (Buffer.isBuffer(value)) return value;
+  if (value instanceof Uint8Array) return value;
   if (Array.isArray(value)) return value.map(stripNulBytes) as unknown as T;
   if (typeof value === "object") {
     const out: Record<string, unknown> = {};
@@ -108,7 +116,12 @@ function guessNameFromEmail(email: string, parsedName: string | null): string {
 }
 
 // ─── Core sync ──────────────────────────────────────────────────────────────
-export async function syncAccount(accountId: string): Promise<SyncResult> {
+// userKey (optional, 32 raw bytes) is supplied via the X-User-Key
+// request header on /mail-accounts/:id/sync. When present, buildMessageRow
+// fills the *_enc + *_blind columns with the user's master key in-memory
+// for the duration of this sync run. When absent (locked / never set up),
+// new rows go in plaintext-only — same as pre-phase-1.3 behaviour.
+export async function syncAccount(accountId: string, userKey?: Buffer): Promise<SyncResult> {
   const started = Date.now();
   if (!supabaseAdmin) return { ok: false, folders: [], contactsCreated: 0, durationMs: 0, error: "service key missing" };
 
@@ -276,7 +289,7 @@ export async function syncAccount(accountId: string): Promise<SyncResult> {
         for await (const msg of client.fetch(toFetch, { envelope: true, flags: true, source: true, internalDate: true, uid: true }, { uid: true })) {
           stat.fetched++;
           try {
-            const row = await buildMessageRow(msg, acc.id, userId, box.path, uidvalidity, userEmail);
+            const row = await buildMessageRow(msg, acc.id, userId, box.path, uidvalidity, userEmail, userKey);
             rows.push(row);
             // Collect addresses for contact extraction. Rule:
             //   • Incoming mail → only the SENDER (from_email) becomes a
@@ -323,9 +336,62 @@ export async function syncAccount(accountId: string): Promise<SyncResult> {
           for (const row of rows) row.deleted_at = nowIso;
         }
         if (rows.length) {
-          const { error: insErr } = await supabaseAdmin.from("messages").insert(rows);
+          // Split write: supabase-js inserts everything except the BYTEA
+          // *_enc + *_blind columns (it JSON-encodes Node Buffers as
+          // {type:'Buffer',data:[…]} on the wire — same bug we hit on
+          // /me/crypto in v0.0.211). The encrypted twins go in via a
+          // direct pg-pool UPDATE that takes the Buffer values verbatim.
+          const encCols = new Set([
+            "subject_enc", "snippet_enc", "body_text_enc", "body_html_enc",
+            "from_email_enc", "from_name_enc", "to_emails_enc",
+            "from_email_blind", "to_emails_blind",
+          ]);
+          const insertableRows = rows.map(r => {
+            const out: Record<string, unknown> = {};
+            for (const [k, v] of Object.entries(r)) {
+              if (encCols.has(k)) continue;
+              out[k] = v;
+            }
+            return out;
+          });
+          const { error: insErr } = await supabaseAdmin.from("messages").insert(insertableRows);
           if (insErr) throw new Error(`messages insert: ${insErr.message}`);
           stat.inserted = rows.length;
+
+          // Phase 1.3a follow-up UPDATE for the encrypted twin columns.
+          // Only fires for rows where the user supplied X-User-Key and
+          // buildMessageRow produced at least one ciphertext payload.
+          // Matched back to the just-inserted DB row by the natural
+          // IMAP key (mail_account_id, folder, uidvalidity, uid).
+          for (const r of rows) {
+            if (
+              !r.subject_enc && !r.snippet_enc && !r.body_text_enc && !r.body_html_enc &&
+              !r.from_email_enc && !r.from_name_enc && !r.to_emails_enc &&
+              !r.from_email_blind && !r.to_emails_blind
+            ) continue;
+            await pool.query(
+              `UPDATE messages SET
+                 subject_enc = $1,
+                 snippet_enc = $2,
+                 body_text_enc = $3,
+                 body_html_enc = $4,
+                 from_email_enc = $5,
+                 from_name_enc = $6,
+                 to_emails_enc = $7,
+                 from_email_blind = $8,
+                 to_emails_blind = $9
+               WHERE mail_account_id = $10
+                 AND folder = $11
+                 AND uidvalidity = $12
+                 AND uid = $13`,
+              [
+                r.subject_enc, r.snippet_enc, r.body_text_enc, r.body_html_enc,
+                r.from_email_enc, r.from_name_enc, r.to_emails_enc,
+                r.from_email_blind, r.to_emails_blind,
+                r.mail_account_id, r.folder, r.uidvalidity, r.uid,
+              ],
+            );
+          }
         }
 
         // Permanent-delete detection: mails the user (or anyone) hard-
@@ -579,6 +645,7 @@ async function buildMessageRow(
   folder: string,
   uidvalidity: bigint,
   userEmail: string,
+  userKey?: Buffer,
 ): Promise<Record<string, unknown>> {
   const parsed: ParsedMail | null = msg.source ? await simpleParser(msg.source) : null;
   const envelope = msg.envelope;
@@ -615,9 +682,55 @@ async function buildMessageRow(
     }
   }
 
+  // Phase 1.3a: when a user key is present (the FE sent X-User-Key on
+  // this sync request because the user has unlocked encryption), fill
+  // in the *_enc + *_blind columns alongside the existing plaintext
+  // columns. Dual-write for now so we can roll out the read-path
+  // (phase 1.4) at our own pace without losing access to mail. The
+  // plaintext columns will be dropped once the read-path migration
+  // settles.
+  const subject = envelope?.subject ?? parsed?.subject ?? null;
+  const snippet = snippetOf(parsed?.text ?? undefined);
+  const bodyText = parsed?.text ?? null;
+  const bodyHtml = typeof parsed?.html === "string" ? parsed.html : null;
+  const fromEmail = from?.email ?? null;
+  const fromName  = from?.name  ?? null;
+  const toEmails: Array<{ email: string; name: string | null; role: string }> = [...tos, ...ccs];
+  let subject_enc:        Buffer | null = null;
+  let snippet_enc:        Buffer | null = null;
+  let body_text_enc:      Buffer | null = null;
+  let body_html_enc:      Buffer | null = null;
+  let from_email_enc:     Buffer | null = null;
+  let from_name_enc:      Buffer | null = null;
+  let to_emails_enc:      Buffer | null = null;
+  let from_email_blind:   Buffer | null = null;
+  let to_emails_blind:    Buffer[] | null = null;
+  if (userKey) {
+    [subject_enc, snippet_enc, body_text_enc, body_html_enc, from_email_enc, from_name_enc, to_emails_enc, from_email_blind] = await Promise.all([
+      encryptForUser(subject,                                userKey),
+      encryptForUser(snippet,                                userKey),
+      encryptForUser(bodyText,                               userKey),
+      encryptForUser(bodyHtml,                               userKey),
+      encryptForUser(fromEmail,                              userKey),
+      encryptForUser(fromName,                               userKey),
+      encryptForUser(toEmails.length ? JSON.stringify(toEmails) : null, userKey),
+      blindIndexForUser(fromEmail,                           userKey),
+    ]);
+    // Per-recipient blind indices so the FE can match a contact_email
+    // blind against any to_emails entry without seeing the plaintext.
+    const blinds: Buffer[] = [];
+    for (const r of toEmails) {
+      const b = await blindIndexForUser(r.email, userKey);
+      if (b) blinds.push(b);
+    }
+    to_emails_blind = blinds.length ? blinds : null;
+  }
+
   // Runs everything through stripNulBytes before returning so a sloppy
   // sender's NUL-laden header / body can't take out the whole INSERT
-  // batch with a "invalid input syntax for type json" error.
+  // batch with a "invalid input syntax for type json" error. Buffer
+  // values (the *_enc + *_blind columns above) pass through verbatim
+  // — see stripNulBytes for that early-out.
   return stripNulBytes({
     user_id: userId,
     mail_account_id: accountId,
@@ -626,13 +739,23 @@ async function buildMessageRow(
     uidvalidity: uidvalidity.toString(),
     message_id: envelope?.messageId ?? parsed?.messageId ?? null,
     thread_id: threadId,
-    from_email: from?.email ?? null,
-    from_name: from?.name ?? null,
-    to_emails: [...tos, ...ccs],
-    subject: envelope?.subject ?? parsed?.subject ?? null,
-    snippet: snippetOf(parsed?.text ?? undefined),
-    body_text: parsed?.text ?? null,
-    body_html: (typeof parsed?.html === "string" ? parsed.html : null),
+    from_email: fromEmail,
+    from_name:  fromName,
+    to_emails:  toEmails,
+    subject,
+    snippet,
+    body_text:  bodyText,
+    body_html:  bodyHtml,
+    // Encrypted twins (NULL when no user key was supplied).
+    subject_enc,
+    snippet_enc,
+    body_text_enc,
+    body_html_enc,
+    from_email_enc,
+    from_name_enc,
+    to_emails_enc,
+    from_email_blind,
+    to_emails_blind,
     date: new Date(envelope?.date || msg.internalDate || parsed?.date || Date.now()).toISOString(),
     flags,
     direction,

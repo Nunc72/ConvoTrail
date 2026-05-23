@@ -10,6 +10,7 @@ import { sendMail, splitAddresses } from "../smtp.js";
 import { armR2m } from "../r2m.js";
 import { downloadAttachmentBytes, deleteAttachments } from "../storage.js";
 import { cleanupOrphanContacts } from "../contactCleanup.js";
+import { parseUserKeyHeader } from "../userCrypto.js";
 
 interface AccountInput {
   email: string;
@@ -182,7 +183,13 @@ export async function registerMailAccountsRoutes(app: FastifyInstance) {
     if (r.rows.length === 0) return reply.notFound();
     if (r.rows[0].user_id !== req.authUser!.id) return reply.forbidden();
 
-    const result = await syncAccount(req.params.id);
+    // Pad A phase 1.3a: parse the (optional) per-user master key from
+    // X-User-Key. Present when the FE has the user unlocked; absent
+    // when they haven't set up encryption yet or this session is
+    // locked. The key is held only in the request handler's heap and
+    // is forwarded directly to syncAccount → buildMessageRow.
+    const userKey = parseUserKeyHeader(req.headers["x-user-key"]);
+    const result = await syncAccount(req.params.id, userKey ?? undefined);
     if (!result.ok) return reply.code(400).send(result);
     return result;
   });
