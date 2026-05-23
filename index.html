@@ -193,7 +193,7 @@
        polish change is picked up by every browser as soon as the version
        is bumped — no manual cache-busters needed. Keep ?v= here in sync
        with APP_VERSION below at every deploy. -->
-  <link rel="stylesheet" href="polish.css?v=0.0.209"/>
+  <link rel="stylesheet" href="polish.css?v=0.0.210"/>
 </head>
 <body>
 <div id="root">
@@ -423,7 +423,7 @@ window.CONVOOZ_CRYPTO = CONVOOZ_CRYPTO;
 
 // ─── Constants ───────────────────────────────────────────────────────────────
 
-const APP_VERSION = "0.0.209"; // bumped on every deploy — keep in sync with version.json AND with the ?v= on polish.css above
+const APP_VERSION = "0.0.210"; // bumped on every deploy — keep in sync with version.json AND with the ?v= on polish.css above
 
 // ─── Backend + Supabase config ───────────────────────────────────────────────
 const SUPABASE_URL = "https://oyrlzqbjcsliesvunbwj.supabase.co";
@@ -4649,6 +4649,61 @@ function LeftColumn({contactMeta, archivedContacts, selectedId, mergeId, onSelec
 
 // ─── Merge Dialog ─────────────────────────────────────────────────────────────
 
+// Passphrase setup / unlock for Pad A end-to-end encryption.
+// mode='setup'  → asks for passphrase + confirm; on submit the parent
+//                  derives + wraps + PUTs to /me/crypto.
+// mode='unlock' → single passphrase field; on submit the parent
+//                  unwraps the master key into masterKeyRef.
+// busy + error  → controlled by the parent App so the modal can show a
+//                  spinner/state during the round-trip and surface a
+//                  "Wrong passphrase" / network failure inline.
+function PassphraseModalContent({mode, busy, error, onSubmit, onCancel}) {
+  const [pw,  setPw]  = useState('');
+  const [pw2, setPw2] = useState('');
+  const minLen = 8;
+  const tooShort = mode === 'setup' && pw.length > 0 && pw.length < minLen;
+  const mismatch = mode === 'setup' && pw2.length > 0 && pw !== pw2;
+  const canSubmit = mode === 'setup' ? (pw.length >= minLen && pw === pw2) : pw.length > 0;
+  function handleSubmit(){ if (canSubmit && !busy) onSubmit(pw); }
+  return (
+    <div className="bg-white rounded-lg shadow-xl w-full max-w-sm p-5" onClick={e=>e.stopPropagation()}>
+      <div className="font-semibold text-gray-800 text-sm mb-1">
+        {mode === 'setup' ? 'Set up encryption' : 'Unlock encryption'}
+      </div>
+      <p className="text-xs text-gray-600 mb-4 leading-relaxed">
+        {mode === 'setup'
+          ? 'Choose a passphrase. It locks your mail bodies, subjects and contacts so even Convooz admins can’t read them. There is no recovery — forgetting your passphrase means losing access to everything you encrypt.'
+          : 'Enter your passphrase to unlock your encrypted data. The key is derived locally and never sent to the server.'}
+      </p>
+      <input type="password" value={pw}
+        onChange={e=>setPw(e.target.value)}
+        onKeyDown={e=>{ if (e.key === 'Enter') handleSubmit(); }}
+        placeholder="Passphrase"
+        className="w-full px-3 py-2 mb-2 border border-gray-300 rounded text-sm focus:outline-none focus:border-indigo-500"
+        autoFocus disabled={busy}/>
+      {mode === 'setup' && (
+        <input type="password" value={pw2}
+          onChange={e=>setPw2(e.target.value)}
+          onKeyDown={e=>{ if (e.key === 'Enter') handleSubmit(); }}
+          placeholder="Confirm passphrase"
+          className="w-full px-3 py-2 mb-2 border border-gray-300 rounded text-sm focus:outline-none focus:border-indigo-500"
+          disabled={busy}/>
+      )}
+      {tooShort && <div className="text-xs text-gray-500 mb-2">At least {minLen} characters.</div>}
+      {mismatch  && <div className="text-xs text-red-600 mb-2">Passphrases don’t match.</div>}
+      {error     && <div className="text-xs text-red-600 mb-2">{error}</div>}
+      <div className="flex justify-end gap-2">
+        <button onClick={onCancel} disabled={busy}
+          className="px-3 py-1.5 text-xs rounded text-gray-500 hover:bg-gray-100 font-medium disabled:opacity-50">Cancel</button>
+        <button onClick={handleSubmit} disabled={!canSubmit || busy}
+          className="px-3 py-1.5 text-xs rounded bg-indigo-600 hover:bg-indigo-700 text-white font-medium disabled:opacity-50">
+          {busy ? '…' : (mode === 'setup' ? 'Set up' : 'Unlock')}
+        </button>
+      </div>
+    </div>
+  );
+}
+
 function MergeDialog({primary,secondary,onMerge,onCancel}) {
   const [keepId,setKeepId]=useState(primary.id);
   const keep=keepId===primary.id?primary:secondary;
@@ -6085,6 +6140,118 @@ function App({userId, onSignOut}) {
     });
     return () => { cancelled = true; authSub?.subscription?.unsubscribe?.(); };
   }, []);
+
+  // ─── Pad A: end-to-end-encryption state ─────────────────────────────────
+  // cryptoStatus walks the lifecycle the user-menu reads from:
+  //   'idle'      – we haven't asked the backend yet
+  //   'unset'     – /me/crypto returned status:'unset', user has never
+  //                 chosen a passphrase. Click "Set up encryption" in
+  //                 the user menu → passphrase-setup modal.
+  //   'locked'    – wrapped key + salt are on the server, master key is
+  //                 not yet derived in this session. Click "Unlock
+  //                 encryption" → passphrase-unlock modal.
+  //   'unlocked'  – master key sits in masterKeyRef.current as a
+  //                 CryptoKey, in-memory only, never serialised.
+  //   'error'     – network or crypto failure surfaced to the user.
+  // masterKeyRef is a ref (not state) so React snapshots / DevTools
+  // inspections never serialise the live key. CryptoKey objects are
+  // already non-extractable for direct read, but keeping them out of
+  // setState reduces the chance of accidental persistence.
+  const [cryptoStatus,     setCryptoStatus]     = useState('idle');
+  const [cryptoMaterial,   setCryptoMaterial]   = useState(null);     // {passphrase_salt, wrapped_master_key, …} from server
+  const masterKeyRef = useRef(null);                                  // CryptoKey | null
+  const [passphraseModal,  setPassphraseModal]  = useState(null);     // null | {mode:'setup'|'unlock', error?:string, busy?:bool}
+
+  // After auth, query /me/crypto to find out which lifecycle bucket the
+  // user is in. Re-runs whenever the auth user id changes (sign-in or
+  // sign-out → SIGNED_IN event resets currentUser).
+  useEffect(() => {
+    if (!currentUser?.email) { setCryptoStatus('idle'); return; }
+    let cancelled = false;
+    (async () => {
+      try {
+        await CONVOOZ_CRYPTO.ready();
+        const r = await apiFetch('/me/crypto');
+        if (cancelled) return;
+        if (r?.status === 'unset') {
+          setCryptoMaterial(null);
+          setCryptoStatus('unset');
+        } else if (r?.status === 'locked') {
+          setCryptoMaterial(r);
+          setCryptoStatus('locked');
+        } else {
+          setCryptoStatus('error');
+        }
+      } catch (e) {
+        if (!cancelled) {
+          console.warn('[crypto] /me/crypto fetch failed:', e?.message || e);
+          setCryptoStatus('error');
+        }
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [currentUser?.email]);
+
+  // ── Crypto action handlers used by the passphrase modal ──
+  async function handleCryptoSetup(passphrase) {
+    setPassphraseModal(m => ({ ...m, busy: true, error: null }));
+    try {
+      await CONVOOZ_CRYPTO.ready();
+      const salt    = CONVOOZ_CRYPTO.generateSalt();
+      const derived = await CONVOOZ_CRYPTO.deriveKeyFromPassphrase(passphrase, salt);
+      const master  = await CONVOOZ_CRYPTO.generateMasterKey();
+      const wrapped = await CONVOOZ_CRYPTO.wrapMasterKey(master, derived);
+      const saltB64    = CONVOOZ_CRYPTO.b64.fromBytes(salt);
+      const wrappedB64 = CONVOOZ_CRYPTO.b64.fromBytes(wrapped);
+      await apiFetch('/me/crypto', {
+        method: 'PUT',
+        body: JSON.stringify({
+          passphrase_salt:    saltB64,
+          wrapped_master_key: wrappedB64,
+          kdf_algorithm:      'pbkdf2-sha256',
+          kdf_params:         { iterations: 600000, hash: 'SHA-256' },
+          cipher_algorithm:   'aes-256-gcm',
+        }),
+      });
+      masterKeyRef.current = master;
+      setCryptoMaterial({ passphrase_salt: saltB64, wrapped_master_key: wrappedB64 });
+      setCryptoStatus('unlocked');
+      setPassphraseModal(null);
+      setActionToast('Encryption enabled');
+    } catch (e) {
+      setPassphraseModal(m => ({ ...m, busy: false, error: e?.message || 'Setup failed' }));
+    }
+  }
+  async function handleCryptoUnlock(passphrase) {
+    if (!cryptoMaterial) {
+      setPassphraseModal(m => ({ ...m, busy: false, error: 'No wrapped key on server' }));
+      return;
+    }
+    setPassphraseModal(m => ({ ...m, busy: true, error: null }));
+    try {
+      await CONVOOZ_CRYPTO.ready();
+      const salt    = CONVOOZ_CRYPTO.b64.toBytes(cryptoMaterial.passphrase_salt);
+      const derived = await CONVOOZ_CRYPTO.deriveKeyFromPassphrase(passphrase, salt);
+      const wrapped = CONVOOZ_CRYPTO.b64.toBytes(cryptoMaterial.wrapped_master_key);
+      const master  = await CONVOOZ_CRYPTO.unwrapMasterKey(wrapped, derived);
+      if (!master) {
+        setPassphraseModal(m => ({ ...m, busy: false, error: 'Wrong passphrase' }));
+        return;
+      }
+      masterKeyRef.current = master;
+      setCryptoStatus('unlocked');
+      setPassphraseModal(null);
+      setActionToast('Encryption unlocked');
+    } catch (e) {
+      setPassphraseModal(m => ({ ...m, busy: false, error: e?.message || 'Unlock failed' }));
+    }
+  }
+  function handleCryptoLock() {
+    masterKeyRef.current = null;
+    if (cryptoMaterial) setCryptoStatus('locked');
+    else setCryptoStatus('unset');
+  }
+
   const [updateStatus,     setUpdateStatus]     = useState(null); // null | 'checking' | 'uptodate' | 'error'
   const checkForUpdate = useCallback(async ()=>{
     setUpdateStatus('checking');
@@ -7835,6 +8002,23 @@ function App({userId, onSignOut}) {
           </div>
         </div>
       )}
+      {/* Passphrase setup / unlock overlay. Stays purely opt-in for
+          phase 1.2 — the user must explicitly open it via the user
+          menu's "Encryption" line. Once data starts being encrypted in
+          phase 1.3+ we'll force the unlock path before the bootstrap
+          can render. */}
+      {passphraseModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 px-4"
+          onClick={()=>{ if (!passphraseModal.busy) setPassphraseModal(null); }}>
+          <PassphraseModalContent
+            mode={passphraseModal.mode}
+            busy={!!passphraseModal.busy}
+            error={passphraseModal.error}
+            onCancel={()=>setPassphraseModal(null)}
+            onSubmit={pw => passphraseModal.mode === 'setup' ? handleCryptoSetup(pw) : handleCryptoUnlock(pw)}
+          />
+        </div>
+      )}
       {currentUser.isTest && (
         <div className="flex-shrink-0 text-center text-xs font-semibold py-1 px-3"
           style={{background:'#fef3c7',color:'#92400e',letterSpacing:'0.04em'}}>
@@ -7896,6 +8080,32 @@ function App({userId, onSignOut}) {
                     </div>
                   )}
                   <div className="border-t border-gray-100"/>
+                  {/* Encryption status line. Opt-in for phase 1.2 — no
+                      data is encrypted yet, this is just the wire-up
+                      check (passphrase → wrapped key on server → unlock
+                      on next session). Click behaviour:
+                        unset   → open setup modal
+                        locked  → open unlock modal
+                        unlocked→ lock (drops the in-memory key) */}
+                  {cryptoStatus !== 'idle' && (
+                    <button onClick={()=>{
+                        setShowUserMenu(false);
+                        if (cryptoStatus === 'unset')   setPassphraseModal({mode:'setup'});
+                        else if (cryptoStatus === 'locked') setPassphraseModal({mode:'unlock'});
+                        else if (cryptoStatus === 'unlocked') handleCryptoLock();
+                      }}
+                      className="w-full flex items-center justify-between gap-2.5 px-3 py-2 text-sm text-gray-700 hover:bg-gray-50">
+                      <span className="flex items-center gap-2">
+                        <span aria-hidden>{cryptoStatus === 'unlocked' ? '🔓' : '🔒'}</span>
+                        <span>
+                          {cryptoStatus === 'unset'   ? 'Set up encryption'
+                          : cryptoStatus === 'locked' ? 'Unlock encryption'
+                          : cryptoStatus === 'unlocked' ? 'Encryption unlocked — Lock'
+                          : 'Encryption check failed'}
+                        </span>
+                      </span>
+                    </button>
+                  )}
                   <button onClick={()=>{setShowUserMenu(false);onSignOut?.();}}
                     className="w-full flex items-center gap-2.5 px-3 py-2 text-sm text-gray-700 hover:bg-gray-50">
                     <LogoutIcon size={14}/><span>Sign out</span>
@@ -8004,6 +8214,25 @@ function App({userId, onSignOut}) {
                     </div>
                   )}
                   <div className="border-t border-gray-100"/>
+                  {cryptoStatus !== 'idle' && (
+                    <button onClick={()=>{
+                        setShowUserMenu(false);
+                        if (cryptoStatus === 'unset')   setPassphraseModal({mode:'setup'});
+                        else if (cryptoStatus === 'locked') setPassphraseModal({mode:'unlock'});
+                        else if (cryptoStatus === 'unlocked') handleCryptoLock();
+                      }}
+                      className="w-full flex items-center justify-between gap-2.5 px-3 py-2 text-sm text-gray-700 hover:bg-gray-50">
+                      <span className="flex items-center gap-2">
+                        <span aria-hidden>{cryptoStatus === 'unlocked' ? '🔓' : '🔒'}</span>
+                        <span>
+                          {cryptoStatus === 'unset'   ? 'Set up encryption'
+                          : cryptoStatus === 'locked' ? 'Unlock encryption'
+                          : cryptoStatus === 'unlocked' ? 'Encryption unlocked — Lock'
+                          : 'Encryption check failed'}
+                        </span>
+                      </span>
+                    </button>
+                  )}
                   <button onClick={()=>{setShowUserMenu(false);onSignOut?.();}}
                     className="w-full flex items-center gap-2.5 px-3 py-2 text-sm text-gray-700 hover:bg-gray-50">
                     <LogoutIcon size={14}/>

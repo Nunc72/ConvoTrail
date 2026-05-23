@@ -40,7 +40,10 @@ export async function registerUserCryptoRoutes(app: FastifyInstance) {
       .eq("user_id", req.authUser!.id)
       .maybeSingle();
     if (error) return reply.internalServerError(error.message);
-    if (!data) return reply.code(404).send({ setup_needed: true });
+    // 200 in both branches so the FE only has to look at status, not
+    // catch a 404. `status: 'unset'` is the signal to run the setup-
+    // passphrase flow.
+    if (!data) return { status: "unset" };
     // bytea round-trips as a base64-encoded string with a "\\x" hex prefix
     // through supabase-js; normalize so the client always gets clean
     // base64 strings.
@@ -50,6 +53,7 @@ export async function registerUserCryptoRoutes(app: FastifyInstance) {
       return b;
     };
     return {
+      status:             "locked",
       passphrase_salt:    normalize(data.passphrase_salt),
       wrapped_master_key: normalize(data.wrapped_master_key),
       kdf_algorithm:      data.kdf_algorithm,
