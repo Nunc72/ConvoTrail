@@ -269,14 +269,24 @@ export async function syncAccount(accountId: string, userKey?: Buffer): Promise<
         // PER_FOLDER_CAP — older messages stayed missing forever. Check
         // every UID in the window so we can detect missing ones across the
         // entire 90-day range.
-        const { data: existing } = await supabaseAdmin
-          .from("messages")
-          .select("uid")
-          .eq("mail_account_id", acc.id)
-          .eq("folder", box.path)
-          .eq("uidvalidity", uidvalidity.toString())
-          .in("uid", uids);
-        const haveSet = new Set((existing ?? []).map(r => Number(r.uid)));
+        // Direct pg-pool instead of supabase-js. PostgREST silently
+        // truncates the .in() filter when the rendered URL exceeds
+        // its request-line limit, which is exactly what happens for
+        // Gmail All Mail with 10k+ UIDs (Stefan: 18k). The truncated
+        // haveSet missed UIDs we already had, the missing list then
+        // included rows that did exist, and the INSERT crashed on
+        // the messages_mail_account_id_folder_uid_uidvalidity_key
+        // unique constraint. Fetching the whole (acct, folder,
+        // uidvalidity) UID set in one go avoids the URL-length trap.
+        const existingRes = await pool.query<{ uid: number }>(
+          `SELECT uid
+             FROM messages
+            WHERE mail_account_id = $1
+              AND folder = $2
+              AND uidvalidity = $3`,
+          [acc.id, box.path, uidvalidity.toString()],
+        );
+        const haveSet = new Set(existingRes.rows.map(r => Number(r.uid)));
         const missing = uids.filter(u => !haveSet.has(u));
         // Newest-first cap so the user sees recent mail immediately; older
         // missing UIDs roll in on subsequent syncs until the backlog is gone.
@@ -354,7 +364,18 @@ export async function syncAccount(accountId: string, userKey?: Buffer): Promise<
             }
             return out;
           });
-          const { error: insErr } = await supabaseAdmin.from("messages").insert(insertableRows);
+          // upsert + ignoreDuplicates = INSERT … ON CONFLICT DO NOTHING.
+          // Even with the pg-pool haveSet above, two concurrent sync
+          // runs (e.g. auto-sync cron firing while the user just
+          // triggered a manual sync) can both see a UID as "missing"
+          // and race to insert it. ON CONFLICT keeps the second
+          // writer from blowing up the whole batch.
+          const { error: insErr } = await supabaseAdmin
+            .from("messages")
+            .upsert(insertableRows, {
+              onConflict: "mail_account_id,folder,uid,uidvalidity",
+              ignoreDuplicates: true,
+            });
           if (insErr) throw new Error(`messages insert: ${insErr.message}`);
           stat.inserted = rows.length;
 
