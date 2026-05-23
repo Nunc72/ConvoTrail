@@ -112,15 +112,22 @@ export async function registerDataRoutes(app: FastifyInstance) {
       const pool = requirePool();
       // email columns are TEXT (not citext — extension isn't installed),
       // so we lowercase both sides for case-insensitive matching.
+      // LOWER() the account email too — the FE's selAccounts state and
+      // accountEmailById map are both lowercased, so a mail_account row
+      // with email "Stefan" (capital S, as Stefan accidentally entered
+      // during onboarding) mismatched contact.accountEmails ("Stefan")
+      // against selAccounts ("stefan") and his entire contact list
+      // disappeared from the LeftColumn visibility filter. Normalising
+      // here makes the comparison case-insensitive end-to-end.
       const cae = await pool.query<{ contact_id: string; account_emails: string[] }>(
         `WITH per_msg AS (
-           SELECT ma.email AS account_email, ce.contact_id
+           SELECT LOWER(ma.email) AS account_email, ce.contact_id
              FROM messages m
              JOIN mail_accounts ma ON ma.id = m.mail_account_id
              JOIN contact_emails ce ON LOWER(ce.email) = LOWER(m.from_email)
             WHERE m.user_id = $1
             UNION ALL
-           SELECT ma.email AS account_email, ce.contact_id
+           SELECT LOWER(ma.email) AS account_email, ce.contact_id
              FROM messages m
              JOIN mail_accounts ma ON ma.id = m.mail_account_id
              CROSS JOIN LATERAL jsonb_array_elements(COALESCE(m.to_emails, '[]'::jsonb)) te
