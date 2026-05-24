@@ -22,15 +22,24 @@ export interface SyncResult {
 
 const SINCE_DAYS = 365;
 const PER_FOLDER_CAP = 100; // MVP safety — Fly free-tier memory + 60s HTTP timeout
-// Hard cap on how many UIDs per folder we even consider syncing. Stefan's
-// fresh onboarding pulled in 16k mails which spiked Supabase egress past
-// the free-tier 5 GB monthly quota and got the project restricted. With
-// this cap, the very first sync targets only the newest 2000 UIDs in the
-// SINCE_DAYS window; subsequent syncs continue to fetch new mail on top
-// (we don't actively delete older rows, so a long-time user will float
-// at ~2000 + however many new mails arrive). For testers with smaller
-// mailboxes this is a no-op.
-const MAX_UIDS_PER_FOLDER = 2000;
+// Soft user-wide ceiling on stored messages. Stefan's onboarding pulled
+// 16k mails from a single Gmail All Mail folder which spiked Supabase
+// egress past the free-tier 5 GB monthly quota and got the project
+// restricted. v0.0.216 used a per-folder cap (MAX_UIDS_PER_FOLDER=2000),
+// but that still meant N folders × 2000 = a multi-folder Outlook account
+// could blow through the budget. v0.0.219 makes the cap user-wide: when
+// a sync runs, we compute the headroom (CAP minus the user's current
+// non-trash message count) and distribute that evenly across the folders
+// about to be synced. Once the user reaches the cap, sync falls through
+// to the standard incremental missing-UIDs path (PER_FOLDER_CAP=100), so
+// new mail keeps arriving — it just doesn't grow the historical archive
+// further. For testers with mailboxes well under the cap this is a no-op.
+const USER_TOTAL_CAP = 2000;
+// Absolute per-folder ceiling we never exceed even when the user is at/over
+// the soft cap. Bounds how large the (UID list, haveSet) operation in the
+// folder loop can get, so a user with one humongous Gmail All Mail folder
+// doesn't pin the sync process on a single round-trip.
+const HARD_PER_FOLDER_CEILING = 5000;
 
 // ─── Helpers ────────────────────────────────────────────────────────────────
 function addrList(a: AddressObject | AddressObject[] | undefined): { email: string; name: string | null }[] {
@@ -261,6 +270,21 @@ export async function syncAccount(accountId: string, userKey?: Buffer): Promise<
     const since = new Date(Date.now() - SINCE_DAYS * 86400_000);
     const allExtractedAddrs = new Map<string, string | null>(); // email → name
 
+    // Compute user-wide cap headroom. Distributes the budget across the folders
+    // we're about to sync, so a multi-folder Outlook account or a multi-account
+    // user shares the 2000-message ceiling rather than getting 2000 per folder.
+    // When the user is at/over the cap, fall back to HARD_PER_FOLDER_CEILING —
+    // the standard PER_FOLDER_CAP missing-detection path still picks up new mail.
+    const userTotalR = await pool.query<{ cnt: string }>(
+      `SELECT COUNT(*)::text AS cnt FROM messages WHERE user_id = $1`,
+      [userId],
+    );
+    const existingMsgCount = Number(userTotalR.rows[0].cnt);
+    const userHeadroom = Math.max(0, USER_TOTAL_CAP - existingMsgCount);
+    const folderInitialCap = userHeadroom > 0
+      ? Math.max(50, Math.ceil(userHeadroom / Math.max(1, targets.length)))
+      : HARD_PER_FOLDER_CEILING;
+
     for (const box of targets) {
       const stat: FolderSyncStat = { folder: box.path, fetched: 0, inserted: 0, skipped: 0 };
       const lock = await client.getMailboxLock(box.path);
@@ -272,14 +296,13 @@ export async function syncAccount(accountId: string, userKey?: Buffer): Promise<
         const allUids = (await client.search({ since }, { uid: true })) as number[];
         sumKnownUids += allUids.length;
         if (allUids.length === 0) { folderStats.push(stat); continue; }
-        // Hard cap: only consider the newest MAX_UIDS_PER_FOLDER UIDs.
-        // IMAP search returns ascending so the tail of the array is the
-        // newest. Older UIDs outside the cap are reported into
-        // sumKnownUids (so the user-menu progress meter still says
-        // "X of <real total> mails", which is the truth on the server)
-        // but never get fetched.
-        const uids = allUids.length > MAX_UIDS_PER_FOLDER
-          ? allUids.slice(-MAX_UIDS_PER_FOLDER)
+        // Apply user-wide cap (computed pre-loop). IMAP search returns
+        // ascending so the tail of the array is the newest. Older UIDs
+        // outside the cap are still counted into sumKnownUids (so the
+        // user-menu progress meter says "X of <real total> mails" — the
+        // truth on the server) but never get fetched.
+        const uids = allUids.length > folderInitialCap
+          ? allUids.slice(-folderInitialCap)
           : allUids;
 
         // Find UIDs we already have. Earlier code only checked the newest N
@@ -445,10 +468,10 @@ export async function syncAccount(accountId: string, userKey?: Buffer): Promise<
         // wrongly dropped.
         //
         // Use the FULL IMAP UID list here (allUids, not the
-        // MAX_UIDS_PER_FOLDER-capped `uids`). If we used the capped
+        // folderInitialCap-capped `uids`). If we used the capped
         // slice, the cap would look like "missing on server" to the
         // detection pass and it would wipe every DB row outside the
-        // newest 2000 — exactly the opposite of what the cap is
+        // newest N — exactly the opposite of what the cap is
         // supposed to do (cap fresh fetches, leave existing data
         // alone).
         try {
