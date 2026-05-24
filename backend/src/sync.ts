@@ -16,6 +16,10 @@ export interface SyncResult {
   ok: boolean;
   folders: FolderSyncStat[];
   contactsCreated: number;
+  // Mails soft-deleted by the post-sync auto-purge step (oldest excess
+  // above USER_TOTAL_CAP). 0 when the user is under the cap or has only
+  // protected (tagged / r2m) mail in the excess.
+  autoPurged?: number;
   durationMs: number;
   error?: string;
 }
@@ -171,6 +175,7 @@ export async function syncAccount(accountId: string, userKey?: Buffer): Promise<
 
   const folderStats: FolderSyncStat[] = [];
   let contactsCreated = 0;
+  let autoPurgedCount = 0;
   // Sum of UIDs the server has within the SINCE_DAYS window across the
   // folders we sync. Persisted to mail_accounts.sync_known_uids so the UI
   // can render "324 / 5000 synced" while the per-folder catch-up runs.
@@ -698,7 +703,52 @@ export async function syncAccount(accountId: string, userKey?: Buffer): Promise<
       .update(accountUpdate)
       .eq("id", acc.id);
 
-    return { ok: true, folders: folderStats, contactsCreated, durationMs: Date.now() - started };
+    // 5) Auto-purge oldest mails above USER_TOTAL_CAP. Soft-delete with
+    //    flags.auto_purged = true so /bootstrap can hide them from the UI
+    //    (including Archive) but sync's haveSet still includes their UIDs
+    //    and won't re-fetch them on the next run. Protected: messages with
+    //    any message_tags row, or with an armed (dismissed_at IS NULL)
+    //    r2m_state row — those are user-curated and stay. Best-effort: a
+    //    failure here never kills the overall sync.
+    try {
+      const activeR = await pool.query<{ cnt: string }>(
+        `SELECT COUNT(*)::text AS cnt FROM messages
+          WHERE user_id = $1 AND deleted_at IS NULL`,
+        [userId],
+      );
+      const activeCount = Number(activeR.rows[0].cnt);
+      if (activeCount > USER_TOTAL_CAP) {
+        const excess = activeCount - USER_TOTAL_CAP;
+        const purgeR = await pool.query<{ id: string }>(
+          `WITH candidates AS (
+             SELECT m.id
+               FROM messages m
+              WHERE m.user_id = $1
+                AND m.deleted_at IS NULL
+                AND NOT EXISTS (SELECT 1 FROM message_tags mt WHERE mt.message_id = m.id)
+                AND NOT EXISTS (SELECT 1 FROM r2m_state rs WHERE rs.message_id = m.id AND rs.dismissed_at IS NULL)
+              ORDER BY m.date ASC NULLS FIRST
+              LIMIT $2
+           )
+           UPDATE messages
+              SET deleted_at = NOW(),
+                  flags = COALESCE(flags, '{}'::jsonb) || '{"auto_purged": true}'::jsonb
+            WHERE id IN (SELECT id FROM candidates)
+           RETURNING id`,
+          [userId, excess],
+        );
+        if (purgeR.rowCount && purgeR.rowCount > 0) {
+          // Surfaced as part of SyncResult so the FE can show "X mails archived"
+          // if/when we add a polish ribbon for it. For now, just available
+          // through the API contract.
+          autoPurgedCount = purgeR.rowCount;
+        }
+      }
+    } catch {
+      // Auto-purge is best-effort; never fail the sync.
+    }
+
+    return { ok: true, folders: folderStats, contactsCreated, autoPurged: autoPurgedCount, durationMs: Date.now() - started };
   } catch (e: unknown) {
     const msg = e instanceof Error ? e.message : String(e);
     await supabaseAdmin.from("mail_accounts").update({ last_error: msg }).eq("id", acc.id);

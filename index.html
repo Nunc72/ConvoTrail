@@ -193,7 +193,7 @@
        polish change is picked up by every browser as soon as the version
        is bumped — no manual cache-busters needed. Keep ?v= here in sync
        with APP_VERSION below at every deploy. -->
-  <link rel="stylesheet" href="polish.css?v=0.0.219"/>
+  <link rel="stylesheet" href="polish.css?v=0.0.220"/>
 </head>
 <body>
 <div id="root">
@@ -432,7 +432,7 @@ window.CONVOOZ_CRYPTO = CONVOOZ_CRYPTO;
 
 // ─── Constants ───────────────────────────────────────────────────────────────
 
-const APP_VERSION = "0.0.219"; // bumped on every deploy — keep in sync with version.json AND with the ?v= on polish.css above
+const APP_VERSION = "0.0.220"; // bumped on every deploy — keep in sync with version.json AND with the ?v= on polish.css above
 
 // ─── Backend + Supabase config ───────────────────────────────────────────────
 const SUPABASE_URL = "https://oyrlzqbjcsliesvunbwj.supabase.co";
@@ -6695,9 +6695,19 @@ function App({userId, onSignOut}) {
   // deal with" exist across the user's accounts (unread incoming + active
   // r2m), broken down by what's currently in selAccounts vs everything.
   // Drafts and deleted rows don't count — they're not actionable.
+  //
+  // v0.0.220: mails belonging to muted contacts are excluded too. They
+  // live under the "Muted" tab — explicitly off the user's attention list
+  // — so they shouldn't drive the home-screen badge or the (X/Y now)
+  // counter in the account selector. A mail with multiple recipients is
+  // still counted if at least one of those contacts is NOT muted: the
+  // per-(message,contact) entries in messageList give us granular
+  // per-contact filtering, and the seen-id dedup makes the mail count
+  // once across the surviving entries.
   const actionableCounts = useMemo(() => {
     const selSet = new Set(selAccounts);
     const deletedSet = new Set(deletedIds);
+    const mutedContactIds = new Set(contactList.filter(c => c.isMuted).map(c => c.id));
     // Dedup by mail id — outgoing mails with multiple recipients now
     // produce one entry per recipient in messageList, but they're still
     // a single actionable item. Without this an outgoing r2m sent to
@@ -6709,13 +6719,15 @@ function App({userId, onSignOut}) {
       if (m.draft || deletedSet.has(m.id)) continue;
       const isActionable = (!m.read && m.dir === 'in') || m.revert2me;
       if (!isActionable) continue;
+      // Per-contact mute filter — see comment above.
+      if (m.contactId && mutedContactIds.has(m.contactId)) continue;
       if (!seenTotal.has(m.id)) { seenTotal.add(m.id); total++; }
       if (m.accountEmail && selSet.has(m.accountEmail) && !seenInSel.has(m.id)) {
         seenInSel.add(m.id); inSel++;
       }
     }
     return { total, inSel };
-  }, [messageList, deletedIds, selAccounts]);
+  }, [messageList, deletedIds, selAccounts, contactList]);
 
   // App-icon badge on the home-screen / dock when installed as a PWA.
   // Mirrors the "now" count of the active account selection — same number

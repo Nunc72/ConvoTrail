@@ -68,12 +68,16 @@ export async function registerDataRoutes(app: FastifyInstance) {
                       FROM contacts WHERE user_id = $1 ORDER BY name ASC`, [userId]),
         pool.query(`SELECT contact_id, email, is_news, is_no_reply, is_muted
                       FROM contact_emails WHERE user_id = $1`, [userId]),
+        // Hide auto-purged rows entirely (v0.0.220): they sit in DB only so
+        // sync's haveSet stops them from being re-fetched, but the user
+        // shouldn't see them anywhere — not even in Archive.
         pool.query(`SELECT id, mail_account_id, folder, uid, message_id, thread_id,
                            from_email, from_name, to_emails, subject, snippet, date, flags,
                            direction, deleted_at, spam, has_attachments, attachments_meta,
                            unsubscribe_url, unsubscribe_one_click
                       FROM messages
                      WHERE user_id = $1
+                       AND NOT COALESCE((flags->>'auto_purged')::bool, false)
                      ORDER BY date DESC LIMIT $2`, [userId, limit]),
         pool.query(`SELECT id, mail_account_id, to_emails, cc_emails, bcc_emails,
                            subject, body, reply_to_message_id, tags, created_at, modified_at
@@ -174,6 +178,7 @@ export async function registerDataRoutes(app: FastifyInstance) {
              JOIN mail_accounts ma ON ma.id = m.mail_account_id
              JOIN contact_emails ce ON LOWER(ce.email) = LOWER(m.from_email)
             WHERE m.user_id = $1
+              AND NOT COALESCE((m.flags->>'auto_purged')::bool, false)
             UNION ALL
            SELECT LOWER(ma.email) AS account_email, ce.contact_id
              FROM messages m
@@ -181,6 +186,7 @@ export async function registerDataRoutes(app: FastifyInstance) {
              CROSS JOIN LATERAL jsonb_array_elements(COALESCE(m.to_emails, '[]'::jsonb)) te
              JOIN contact_emails ce ON LOWER(ce.email) = LOWER(te->>'email')
             WHERE m.user_id = $1
+              AND NOT COALESCE((m.flags->>'auto_purged')::bool, false)
          )
          SELECT contact_id, ARRAY_AGG(DISTINCT account_email) AS account_emails
            FROM per_msg
@@ -418,6 +424,7 @@ export async function registerDataRoutes(app: FastifyInstance) {
                 deleted_at, spam, has_attachments
            FROM messages
           WHERE user_id = $1
+            AND NOT COALESCE((flags->>'auto_purged')::bool, false)
             AND (subject ILIKE $2 OR body_text ILIKE $2 OR from_email ILIKE $2)
           ORDER BY date DESC
           LIMIT $3`,
@@ -482,7 +489,8 @@ export async function registerDataRoutes(app: FastifyInstance) {
         `SELECT id, mail_account_id, folder, uid, thread_id, from_email, from_name, to_emails,
                 subject, snippet, body_text, date, flags, direction, deleted_at, spam, has_attachments
            FROM messages
-          WHERE user_id = $1${whereExtra}
+          WHERE user_id = $1
+            AND NOT COALESCE((flags->>'auto_purged')::bool, false)${whereExtra}
           ORDER BY date DESC
           LIMIT $${params.length}`,
         params,
@@ -533,6 +541,7 @@ export async function registerDataRoutes(app: FastifyInstance) {
                 m.unsubscribe_url, m.unsubscribe_one_click
            FROM messages m
           WHERE m.user_id = $1
+            AND NOT COALESCE((m.flags->>'auto_purged')::bool, false)
             AND (
               LOWER(m.from_email) = ANY($2::text[])
               OR EXISTS (
