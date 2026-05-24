@@ -1,5 +1,4 @@
 import type { FastifyInstance } from "fastify";
-import { supabaseWithJwt } from "../supabase.js";
 import { authPreHandler } from "../auth.js";
 import { maybeCleanupAuditLog } from "../audit.js";
 import { sendTransientOr500 } from "../errors.js";
@@ -394,70 +393,104 @@ export async function registerDataRoutes(app: FastifyInstance) {
 
   // ─── Search across the user's mail ──────────────────────────────────────
   // Used by the global search box to extend the client-side filter (which
-  // only sees the cached subset) with hits from older mail. Three parallel
-  // ILIKE queries on subject / body_text / from_email, deduped and sorted
-  // by date desc. Limit caps how many rows we ship back; the client merges
-  // them after its own list.
+  // only sees the cached subset) with hits from older mail. Single ILIKE
+  // OR-query on subject / body_text / from_email, ordered by date desc.
+  // Limit caps how many rows we ship back; the client merges them after
+  // its own list.
+  //
+  // v0.0.218: switched from 3 parallel supabase-js .ilike() calls to a
+  // single pg-pool query — the previous shape pulled body_text + body_html
+  // for every hit through PostgREST (high egress) and ran three round-
+  // trips. One OR-filtered SELECT is both cheaper egress-wise (Supavisor
+  // pool, not API) and a single round-trip. JS-side dedup also disappears
+  // because a single SELECT can't return the same id twice.
   app.get<{ Querystring: { q?: string; limit?: string } }>("/search", auth, async (req, reply) => {
     const q = (req.query.q || '').trim();
     if (q.length < 2) return { messages: [] };
     const limit = Math.min(Number(req.query.limit) || 50, 200);
-    const sb = supabaseWithJwt(req.authJwt!);
-    const cols =
-      "id, mail_account_id, folder, uid, message_id, thread_id, from_email, from_name, to_emails, " +
-      "subject, snippet, body_text, body_html, date, flags, direction, deleted_at, spam, has_attachments";
+    const pool = requirePool();
     const pattern = `%${q}%`;
-    const [subjectRes, bodyRes, fromRes] = await Promise.all([
-      sb.from("messages").select(cols).ilike("subject", pattern).order("date", { ascending: false }).limit(limit),
-      sb.from("messages").select(cols).ilike("body_text", pattern).order("date", { ascending: false }).limit(limit),
-      sb.from("messages").select(cols).ilike("from_email", pattern).order("date", { ascending: false }).limit(limit),
-    ]);
-    if (subjectRes.error) return reply.internalServerError(subjectRes.error.message);
-    if (bodyRes.error)    return reply.internalServerError(bodyRes.error.message);
-    if (fromRes.error)    return reply.internalServerError(fromRes.error.message);
-    type Row = { id: string; date: string | null };
-    const seen = new Set<string>();
-    const merged: Row[] = [];
-    for (const row of ([...((subjectRes.data ?? []) as unknown as Row[]), ...((bodyRes.data ?? []) as unknown as Row[]), ...((fromRes.data ?? []) as unknown as Row[])])) {
-      if (seen.has(row.id)) continue;
-      seen.add(row.id);
-      merged.push(row);
+    try {
+      const r = await pool.query(
+        `SELECT id, mail_account_id, folder, uid, message_id, thread_id,
+                from_email, from_name, to_emails, subject, snippet,
+                body_text, body_html, date, flags, direction,
+                deleted_at, spam, has_attachments
+           FROM messages
+          WHERE user_id = $1
+            AND (subject ILIKE $2 OR body_text ILIKE $2 OR from_email ILIKE $2)
+          ORDER BY date DESC
+          LIMIT $3`,
+        [req.authUser!.id, pattern, limit],
+      );
+      return { messages: rowsWithIsoDates(r.rows) };
+    } catch (e) {
+      return sendTransientOr500(reply, e);
     }
-    merged.sort((a, b) => (b.date || '').localeCompare(a.date || ''));
-    return { messages: merged.slice(0, limit) };
   });
 
   // ─── Contacts (with all emails) ─────────────────────────────────────────
+  // Standalone endpoint — currently the FE only reads contacts via
+  // /bootstrap. Kept for compatibility / direct calls. v0.0.218: switched
+  // from supabase-js embedded select to a two-query pg-pool join (same
+  // pattern as /bootstrap), keeping the FE wire-shape identical.
   app.get("/contacts", auth, async (req, reply) => {
-    const sb = supabaseWithJwt(req.authJwt!);
-    const { data, error } = await sb
-      .from("contacts")
-      .select(
-        "id, name, org, color, portrait_url, r2m_days, primary_email, archived_at, " +
-        "is_news, is_no_reply, is_muted, mute_reason, " +
-        "contact_emails(email, is_news, is_no_reply, is_muted)",
-      )
-      .order("name", { ascending: true });
-    if (error) return reply.internalServerError(error.message);
-    return { contacts: data };
+    const pool = requirePool();
+    const userId = req.authUser!.id;
+    try {
+      const [contactsR, emailsR] = await Promise.all([
+        pool.query(`SELECT id, name, org, color, portrait_url, r2m_days, primary_email,
+                           archived_at, is_news, is_no_reply, is_muted, mute_reason
+                      FROM contacts WHERE user_id = $1 ORDER BY name ASC`, [userId]),
+        pool.query<{ contact_id: string; email: string; is_news: boolean | null; is_no_reply: boolean | null; is_muted: boolean | null }>(
+          `SELECT contact_id, email, is_news, is_no_reply, is_muted
+             FROM contact_emails WHERE user_id = $1`, [userId]),
+      ]);
+      const emailsByContact = new Map<string, Array<{ email: string; is_news: boolean | null; is_no_reply: boolean | null; is_muted: boolean | null }>>();
+      for (const e of emailsR.rows) {
+        const arr = emailsByContact.get(e.contact_id) ?? [];
+        arr.push({ email: e.email, is_news: e.is_news, is_no_reply: e.is_no_reply, is_muted: e.is_muted });
+        emailsByContact.set(e.contact_id, arr);
+      }
+      const contacts = rowsWithIsoDates(contactsR.rows).map(c => ({
+        ...c,
+        contact_emails: emailsByContact.get(c.id as string) ?? [],
+      }));
+      return { contacts };
+    } catch (e) {
+      return sendTransientOr500(reply, e);
+    }
   });
 
   // ─── Messages (cross-account, filtered by user via RLS) ─────────────────
+  // Pagination endpoint with optional `before` cursor (date<…). FE doesn't
+  // currently call this — /bootstrap is the only message-list source — but
+  // it's kept available for future infinite-scroll / "load older" UI.
+  // v0.0.218: pg-pool, same egress reasoning as /bootstrap.
   app.get<{ Querystring: { limit?: string; before?: string } }>("/messages", auth, async (req, reply) => {
     const limit = Math.min(Number(req.query.limit) || 500, 2000);
-    const sb = supabaseWithJwt(req.authJwt!);
-    let q = sb
-      .from("messages")
-      .select(
-        "id, mail_account_id, folder, uid, thread_id, from_email, from_name, to_emails, " +
-        "subject, snippet, body_text, date, flags, direction, deleted_at, spam, has_attachments",
-      )
-      .order("date", { ascending: false })
-      .limit(limit);
-    if (req.query.before) q = q.lt("date", req.query.before);
-    const { data, error } = await q;
-    if (error) return reply.internalServerError(error.message);
-    return { messages: data };
+    const pool = requirePool();
+    const params: unknown[] = [req.authUser!.id];
+    let whereExtra = '';
+    if (req.query.before) {
+      params.push(req.query.before);
+      whereExtra = ` AND date < $${params.length}`;
+    }
+    params.push(limit);
+    try {
+      const r = await pool.query(
+        `SELECT id, mail_account_id, folder, uid, thread_id, from_email, from_name, to_emails,
+                subject, snippet, body_text, date, flags, direction, deleted_at, spam, has_attachments
+           FROM messages
+          WHERE user_id = $1${whereExtra}
+          ORDER BY date DESC
+          LIMIT $${params.length}`,
+        params,
+      );
+      return { messages: rowsWithIsoDates(r.rows) };
+    } catch (e) {
+      return sendTransientOr500(reply, e);
+    }
   });
 
   // ─── Messages for one contact (lazy load) ───────────────────────────────
