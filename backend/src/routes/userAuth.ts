@@ -8,7 +8,6 @@
 import type { FastifyInstance } from "fastify";
 import { authPreHandler } from "../auth.js";
 import { requirePool } from "../db.js";
-import { supabaseAdmin } from "../supabase.js";
 
 const USERNAME_RE = /^[A-Za-z0-9._@+\-]{2,64}$/;
 
@@ -24,37 +23,30 @@ export async function registerUserAuthRoutes(app: FastifyInstance) {
       config: { rateLimit: { max: 10, timeWindow: "1 minute" } },
     },
     async (req, reply) => {
-      if (!supabaseAdmin) return reply.internalServerError("admin key not configured");
       const u = (req.body?.username || "").trim();
       if (!u) return reply.code(400).send({ ok: false, error: "username required" });
 
       const pool = requirePool();
-      const r = await pool.query<{ user_id: string }>(
-        `SELECT user_id FROM user_usernames WHERE LOWER(username) = LOWER($1)`,
+      // Both the username lookup AND the email fetch run via pg pool
+      // (DATABASE_URL → Supavisor pooler) in one round-trip via JOIN.
+      // The old version did a second hop via supabaseAdmin.auth.admin
+      // .getUserById, which goes through Supabase's GoTrue HTTP API
+      // and therefore counts against egress quota; when that quota
+      // got throttled (project showed "exceed_egress_quota" / 402) the
+      // call silently failed and the FE saw a generic "no account"
+      // 404. The direct SQL path doesn't depend on the API quota.
+      const r = await pool.query<{ email: string }>(
+        `SELECT au.email
+           FROM user_usernames uu
+           JOIN auth.users au ON au.id = uu.user_id
+          WHERE LOWER(uu.username) = LOWER($1)`,
         [u],
       );
-      if (r.rows.length === 0) {
-        req.log.info({ username: u }, "username-to-email: no user_usernames row");
+      if (r.rows.length === 0 || !r.rows[0].email) {
+        req.log.info({ username: u }, "username-to-email: no match");
         return reply.code(404).send({ ok: false });
       }
-      const userId = r.rows[0].user_id;
-      const { data, error } = await supabaseAdmin.auth.admin.getUserById(userId);
-      if (error || !data?.user?.email) {
-        // Log the underlying failure so we can tell admin-API errors
-        // apart from a genuinely missing user. Otherwise the FE just
-        // sees a generic "no account" 404, which masks expired
-        // service keys, h2 stalls, etc. (Rik hit this with his own
-        // RikTuithof account: row existed, admin lookup failed
-        // silently, FE said "no account".)
-        req.log.warn({
-          username: u, userId,
-          err: error ? { message: error.message, status: (error as { status?: number }).status, name: (error as { name?: string }).name } : null,
-          hasUser: !!data?.user,
-          hasEmail: !!data?.user?.email,
-        }, "username-to-email: admin.getUserById failed");
-        return reply.code(404).send({ ok: false });
-      }
-      return { ok: true, email: data.user.email };
+      return { ok: true, email: r.rows[0].email };
     },
   );
 
