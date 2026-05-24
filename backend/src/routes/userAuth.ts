@@ -33,9 +33,27 @@ export async function registerUserAuthRoutes(app: FastifyInstance) {
         `SELECT user_id FROM user_usernames WHERE LOWER(username) = LOWER($1)`,
         [u],
       );
-      if (r.rows.length === 0) return reply.code(404).send({ ok: false });
-      const { data, error } = await supabaseAdmin.auth.admin.getUserById(r.rows[0].user_id);
-      if (error || !data?.user?.email) return reply.code(404).send({ ok: false });
+      if (r.rows.length === 0) {
+        req.log.info({ username: u }, "username-to-email: no user_usernames row");
+        return reply.code(404).send({ ok: false });
+      }
+      const userId = r.rows[0].user_id;
+      const { data, error } = await supabaseAdmin.auth.admin.getUserById(userId);
+      if (error || !data?.user?.email) {
+        // Log the underlying failure so we can tell admin-API errors
+        // apart from a genuinely missing user. Otherwise the FE just
+        // sees a generic "no account" 404, which masks expired
+        // service keys, h2 stalls, etc. (Rik hit this with his own
+        // RikTuithof account: row existed, admin lookup failed
+        // silently, FE said "no account".)
+        req.log.warn({
+          username: u, userId,
+          err: error ? { message: error.message, status: (error as { status?: number }).status, name: (error as { name?: string }).name } : null,
+          hasUser: !!data?.user,
+          hasEmail: !!data?.user?.email,
+        }, "username-to-email: admin.getUserById failed");
+        return reply.code(404).send({ ok: false });
+      }
       return { ok: true, email: data.user.email };
     },
   );
