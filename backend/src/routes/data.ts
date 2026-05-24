@@ -5,6 +5,21 @@ import { maybeCleanupAuditLog } from "../audit.js";
 import { sendTransientOr500 } from "../errors.js";
 import { requirePool } from "../db.js";
 
+// pg returns timestamptz columns as JS Date objects, but supabase-js (which
+// previously powered /bootstrap) returned them as ISO 8601 strings — which
+// the FE shape logic and localeCompare-based sorting depend on. This helper
+// converts every Date in a row to its ISO string so the wire format stays
+// identical across the pg-pool refactor.
+function rowsWithIsoDates<T extends Record<string, unknown>>(rows: T[]): T[] {
+  return rows.map(r => {
+    const out: Record<string, unknown> = {};
+    for (const [k, v] of Object.entries(r)) {
+      out[k] = v instanceof Date ? v.toISOString() : v;
+    }
+    return out as T;
+  });
+}
+
 export async function registerDataRoutes(app: FastifyInstance) {
   const auth = { preHandler: authPreHandler };
 
@@ -14,62 +29,96 @@ export async function registerDataRoutes(app: FastifyInstance) {
     // delete rows older than 180 days. Async, doesn't block the response.
     maybeCleanupAuditLog(req);
     const limit = Math.min(Number(req.query.limit) || 500, 2000);
-    const sb = supabaseWithJwt(req.authJwt!);
-    // Phase 1: metadata only — body_text and body_html are excluded from
-    // the messages select so the bootstrap payload stays small. Bodies are
-    // fetched in phase 2 below for the messages the user is most likely
-    // to open immediately (unread incoming + active revert-to-me). The
-    // detail view falls back to GET /messages/:id/body for everything
-    // else, fetched on demand when the user opens a message.
-    const [accountsRes, contactsRes, messagesRes, draftsRes, tagsRes, msgTagsRes, r2mRes, sigsRes, accSigsRes, draftAttsRes, hidesRes] = await Promise.all([
-      sb.from("mail_accounts").select(
-        "id, email, display_name, provider, last_sync_at, auto_sync, " +
-        "retention_deleted_days, retention_spam_days, sync_known_uids",
-      ).order("created_at", { ascending: true }),
-      sb.from("contacts").select(
-        "id, name, org, color, portrait_url, r2m_days, primary_email, archived_at, deleted_at, " +
-        "is_news, is_no_reply, is_muted, mute_reason, " +
-        "contact_emails(email, is_news, is_no_reply, is_muted)",
-      ).order("name", { ascending: true }),
-      sb.from("messages").select(
-        "id, mail_account_id, folder, uid, message_id, thread_id, from_email, from_name, to_emails, " +
-        "subject, snippet, date, flags, direction, deleted_at, spam, has_attachments, " +
-        "attachments_meta, " +
-        "unsubscribe_url, unsubscribe_one_click",
-      ).order("date", { ascending: false }).limit(limit),
-      sb.from("drafts").select(
-        "id, mail_account_id, to_emails, cc_emails, bcc_emails, subject, body, " +
-        "reply_to_message_id, tags, created_at, modified_at",
-      ).order("modified_at", { ascending: false }),
-      sb.from("tags").select("id, name, archived_at, created_at, email_roles")
-        .order("name", { ascending: true }),
-      sb.from("message_tags").select("message_id, tag_id"),
-      sb.from("r2m_state").select("message_id, dismissed_at, snooze_until, snooze_count"),
-      sb.from("signatures").select("id, title, body, created_at")
-        .order("created_at", { ascending: true }),
-      sb.from("account_signatures").select("mail_account_id, signature_id, is_auto"),
-      sb.from("draft_attachments").select("id, draft_id, filename, content_type, size, created_at")
-        .order("created_at", { ascending: true }),
-      // Per-(message, contact) "Only this" hides — used by the FE to
-      // suppress specific entries in messageList without touching the
-      // global messages.deleted_at. RLS pins these to the caller's
-      // user_id so this query is safe.
-      sb.from("message_contact_hides").select("message_id, contact_id"),
-    ]);
-    // Any of these can carry a wrapped "fetch failed" or pooler-drop —
-    // route through sendTransientOr500 so the client gets a 503 it can
-    // safely retry instead of a confusing 500.
-    if (accountsRes.error) return sendTransientOr500(reply, accountsRes.error);
-    if (contactsRes.error) return sendTransientOr500(reply, contactsRes.error);
-    if (messagesRes.error) return sendTransientOr500(reply, messagesRes.error);
-    if (draftsRes.error)   return sendTransientOr500(reply, draftsRes.error);
-    if (tagsRes.error)     return sendTransientOr500(reply, tagsRes.error);
-    if (msgTagsRes.error)  return sendTransientOr500(reply, msgTagsRes.error);
-    if (r2mRes.error)      return sendTransientOr500(reply, r2mRes.error);
-    if (sigsRes.error)     return sendTransientOr500(reply, sigsRes.error);
-    if (accSigsRes.error)  return sendTransientOr500(reply, accSigsRes.error);
-    if (draftAttsRes.error) return sendTransientOr500(reply, draftAttsRes.error);
-    if (hidesRes.error)     return sendTransientOr500(reply, hidesRes.error);
+    const userId = req.authUser!.id;
+    const pool = requirePool();
+    // Refactored (v0.0.217) to fetch every block via direct pg-pool
+    // (Supavisor pooler) instead of supabase-js / PostgREST. The old
+    // path counted every row of every bootstrap response against
+    // Supabase's egress quota — that's what pushed us past the free-
+    // tier 5 GB/month and got the project briefly restricted. The
+    // Supavisor pool sits on a separate billing dimension (DB compute
+    // / connections, not API egress), so all of this traffic is now
+    // effectively free egress-wise. The FE response shape is
+    // unchanged so no FE updates needed.
+    //
+    // Phase 1 (this block): metadata only — body_text + body_html
+    // are NOT selected from messages so the payload stays small.
+    // Phase 2 below pulls bodies for "actionable" messages only.
+    let accountsRows: Record<string, unknown>[];
+    let contactsRows: Record<string, unknown>[];
+    let contactEmailsRows: Array<{ contact_id: string; email: string; is_news: boolean | null; is_no_reply: boolean | null; is_muted: boolean | null }>;
+    let messagesRows: Record<string, unknown>[];
+    let draftsRows: Record<string, unknown>[];
+    let tagsRows: Record<string, unknown>[];
+    let msgTagsRows: Array<{ message_id: string; tag_id: string }>;
+    let r2mRows: Array<{ message_id: string; dismissed_at: string | null; snooze_until: string | null; snooze_count: number }>;
+    let sigsRows: Record<string, unknown>[];
+    let accSigsRows: Array<{ mail_account_id: string; signature_id: string; is_auto: boolean }>;
+    let draftAttsRows: Record<string, unknown>[];
+    let hidesRows: Array<{ message_id: string; contact_id: string }>;
+    try {
+      const [
+        accountsR, contactsR, contactEmailsR, messagesR, draftsR, tagsR,
+        msgTagsR, r2mR, sigsR, accSigsR, draftAttsR, hidesR,
+      ] = await Promise.all([
+        pool.query(`SELECT id, email, display_name, provider, last_sync_at, auto_sync,
+                           retention_deleted_days, retention_spam_days, sync_known_uids
+                      FROM mail_accounts WHERE user_id = $1 ORDER BY created_at ASC`, [userId]),
+        pool.query(`SELECT id, name, org, color, portrait_url, r2m_days, primary_email,
+                           archived_at, deleted_at, is_news, is_no_reply, is_muted, mute_reason
+                      FROM contacts WHERE user_id = $1 ORDER BY name ASC`, [userId]),
+        pool.query(`SELECT contact_id, email, is_news, is_no_reply, is_muted
+                      FROM contact_emails WHERE user_id = $1`, [userId]),
+        pool.query(`SELECT id, mail_account_id, folder, uid, message_id, thread_id,
+                           from_email, from_name, to_emails, subject, snippet, date, flags,
+                           direction, deleted_at, spam, has_attachments, attachments_meta,
+                           unsubscribe_url, unsubscribe_one_click
+                      FROM messages
+                     WHERE user_id = $1
+                     ORDER BY date DESC LIMIT $2`, [userId, limit]),
+        pool.query(`SELECT id, mail_account_id, to_emails, cc_emails, bcc_emails,
+                           subject, body, reply_to_message_id, tags, created_at, modified_at
+                      FROM drafts WHERE user_id = $1 ORDER BY modified_at DESC`, [userId]),
+        pool.query(`SELECT id, name, archived_at, created_at, email_roles
+                      FROM tags WHERE user_id = $1 ORDER BY name ASC`, [userId]),
+        pool.query(`SELECT message_id, tag_id FROM message_tags WHERE user_id = $1`, [userId]),
+        pool.query(`SELECT message_id, dismissed_at, snooze_until, snooze_count
+                      FROM r2m_state WHERE user_id = $1`, [userId]),
+        pool.query(`SELECT id, title, body, created_at
+                      FROM signatures WHERE user_id = $1 ORDER BY created_at ASC`, [userId]),
+        pool.query(`SELECT mail_account_id, signature_id, is_auto
+                      FROM account_signatures WHERE user_id = $1`, [userId]),
+        pool.query(`SELECT id, draft_id, filename, content_type, size, created_at
+                      FROM draft_attachments WHERE user_id = $1 ORDER BY created_at ASC`, [userId]),
+        pool.query(`SELECT message_id, contact_id
+                      FROM message_contact_hides WHERE user_id = $1`, [userId]),
+      ]);
+      accountsRows      = rowsWithIsoDates(accountsR.rows);
+      // Merge contact_emails into each contact under the same key the FE
+      // used to receive from supabase-js's nested embedded select.
+      const contactEmailsByContact = new Map<string, Array<{ email: string; is_news: boolean | null; is_no_reply: boolean | null; is_muted: boolean | null }>>();
+      contactEmailsRows = contactEmailsR.rows;
+      for (const ce of contactEmailsRows) {
+        const arr = contactEmailsByContact.get(ce.contact_id) ?? [];
+        arr.push({ email: ce.email, is_news: ce.is_news, is_no_reply: ce.is_no_reply, is_muted: ce.is_muted });
+        contactEmailsByContact.set(ce.contact_id, arr);
+      }
+      contactsRows = rowsWithIsoDates(contactsR.rows).map(c => ({
+        ...c,
+        contact_emails: contactEmailsByContact.get(c.id as string) ?? [],
+      }));
+      messagesRows  = rowsWithIsoDates(messagesR.rows);
+      draftsRows    = rowsWithIsoDates(draftsR.rows);
+      tagsRows      = rowsWithIsoDates(tagsR.rows);
+      msgTagsRows   = msgTagsR.rows;
+      r2mRows       = rowsWithIsoDates(r2mR.rows) as typeof r2mRows;
+      sigsRows      = rowsWithIsoDates(sigsR.rows);
+      accSigsRows   = accSigsR.rows;
+      draftAttsRows = rowsWithIsoDates(draftAttsR.rows);
+      hidesRows     = hidesR.rows;
+    } catch (e) {
+      return sendTransientOr500(reply, e);
+    }
 
     // Per-account synced count for the user-menu progress display, via
     // direct pg GROUP BY. This is matched against sync_known_uids (the
@@ -260,11 +309,10 @@ export async function registerDataRoutes(app: FastifyInstance) {
     } catch (e) {
       req.log.warn({ err: e }, "bootstrap: extra actionable fetch failed (non-fatal)");
     }
-    const baseMessages = (messagesRes.data ?? []) as unknown as Record<string, unknown>[];
     const mergedMessages = (() => {
-      const have = new Set(baseMessages.map(m => (m as { id: string }).id));
+      const have = new Set(messagesRows.map(m => (m as { id: string }).id));
       const extras = extraActionableRows.filter(r => !have.has((r as { id: string }).id));
-      return [...baseMessages, ...extras];
+      return [...messagesRows, ...extras];
     })();
 
     // Phase 2: collect bodies for the "actionable" subset only — unread
@@ -283,12 +331,12 @@ export async function registerDataRoutes(app: FastifyInstance) {
     type R2mRow = { message_id: string; dismissed_at: string | null };
     type MsgMeta = { id: string; direction: string; flags: Record<string, unknown> | null; mail_account_id: string };
     type BodyRow = { id: string; body_text: string | null; body_html: string | null };
-    const r2mRows = (r2mRes.data ?? []) as unknown as R2mRow[];
-    const messagesRows = mergedMessages as unknown as MsgMeta[];
+    const r2mTyped = r2mRows as unknown as R2mRow[];
+    const messagesTyped = mergedMessages as unknown as MsgMeta[];
     const r2mActiveIds = new Set(
-      r2mRows.filter(r => r.dismissed_at === null).map(r => r.message_id),
+      r2mTyped.filter(r => r.dismissed_at === null).map(r => r.message_id),
     );
-    const actionableIds = messagesRows
+    const actionableIds = messagesTyped
       .filter(m => {
         if (r2mActiveIds.has(m.id)) return true;
         if (m.direction !== 'in') return false;
@@ -296,8 +344,8 @@ export async function registerDataRoutes(app: FastifyInstance) {
         return !seen;
       })
       .map(m => m.id);
-    // messagesRows is already ordered by date desc, so slice the head.
-    const recentIds = messagesRows.slice(0, RECENT_BODY_LIMIT).map(m => m.id);
+    // messagesTyped is already ordered by date desc, so slice the head.
+    const recentIds = messagesTyped.slice(0, RECENT_BODY_LIMIT).map(m => m.id);
     const bodyTargetIds = Array.from(new Set([...actionableIds, ...recentIds]));
     const bodiesById = new Map<string, { body_text: string | null; body_html: string | null }>();
     if (bodyTargetIds.length > 0) {
@@ -322,22 +370,22 @@ export async function registerDataRoutes(app: FastifyInstance) {
         return sendTransientOr500(reply, e);
       }
     }
-    const messagesWithBodies = messagesRows.map(m => {
+    const messagesWithBodies = messagesTyped.map(m => {
       const body = bodiesById.get(m.id);
       return body ? { ...m, body_text: body.body_text, body_html: body.body_html } : m;
     });
     return {
-      mail_accounts: accountsRes.data,
-      contacts: contactsRes.data,
+      mail_accounts: accountsRows,
+      contacts: contactsRows,
       messages: messagesWithBodies,
-      drafts: draftsRes.data,
-      tags: tagsRes.data,
-      message_tags: msgTagsRes.data,
-      r2m_state: r2mRes.data,
-      signatures: sigsRes.data,
-      account_signatures: accSigsRes.data,
-      draft_attachments: draftAttsRes.data,
-      message_contact_hides: hidesRes.data,
+      drafts: draftsRows,
+      tags: tagsRows,
+      message_tags: msgTagsRows,
+      r2m_state: r2mRows,
+      signatures: sigsRows,
+      account_signatures: accSigsRows,
+      draft_attachments: draftAttsRows,
+      message_contact_hides: hidesRows,
       message_count_by_account: messageCountByAccount,
       contact_account_emails: contactAccountEmails,
       contact_stats: contactStats,
