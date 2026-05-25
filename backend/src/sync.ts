@@ -366,10 +366,12 @@ export async function syncAccount(accountId: string, userKey?: Buffer): Promise<
         // Best-effort; never fails the sync. Runs inside the same
         // mailbox lock as the rest of the folder processing.
         try {
+          console.log(`[sync] ${box.path}: reconcile start, allUids.length=${allUids.length}`);
           const flagsByUid = new Map<number, boolean>();
           for await (const fm of client.fetch(allUids, { uid: true, flags: true }, { uid: true })) {
             flagsByUid.set(Number(fm.uid), Array.from(fm.flags || []).includes("\\Seen"));
           }
+          console.log(`[sync] ${box.path}: reconcile fetched flags for ${flagsByUid.size} uids`);
           const dbRowsR = (await pool.query<{ uid: number; db_seen: boolean }>(
             `SELECT uid, COALESCE((flags->>'seen')::bool, false) AS db_seen
                FROM messages
@@ -404,8 +406,9 @@ export async function syncAccount(accountId: string, userKey?: Buffer): Promise<
             console.log(`[sync] ${box.path}: pulled \\Seen into DB for ${toMarkDbSeen.length} mails`);
           }
           stat.seenDrift = toPushSeen.length + toMarkDbSeen.length;
+          console.log(`[sync] ${box.path}: reconcile done — toPush=${toPushSeen.length} toMark=${toMarkDbSeen.length} dbRows=${dbRowsR.length}`);
         } catch (e) {
-          console.warn(`[sync] ${box.path}: flag reconciliation failed: ${e instanceof Error ? e.message : e}`);
+          console.warn(`[sync] ${box.path}: flag reconciliation failed:`, e instanceof Error ? e.stack : e);
         }
 
         if (toFetch.length === 0) { folderStats.push(stat); continue; }
