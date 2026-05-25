@@ -79,9 +79,15 @@ await app.register(cors, {
   methods: ["GET", "HEAD", "POST", "PATCH", "PUT", "DELETE", "OPTIONS"],
 });
 
+// Bumped on every backend deploy (lockstep with index.html's APP_VERSION),
+// so we can curl /health and verify which build is actually running on
+// Fly — useful when investigating whether a code change actually shipped.
+const BACKEND_VERSION = "0.0.224";
+
 app.get("/health", async () => ({
   status: "ok",
   service: "convotrail-backend",
+  version: BACKEND_VERSION,
   env: config.env,
   time: new Date().toISOString(),
 }));
