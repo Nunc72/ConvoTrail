@@ -193,7 +193,7 @@
        polish change is picked up by every browser as soon as the version
        is bumped — no manual cache-busters needed. Keep ?v= here in sync
        with APP_VERSION below at every deploy. -->
-  <link rel="stylesheet" href="polish.css?v=0.0.234"/>
+  <link rel="stylesheet" href="polish.css?v=0.0.235"/>
 </head>
 <body>
 <div id="root">
@@ -432,7 +432,7 @@ window.CONVOOZ_CRYPTO = CONVOOZ_CRYPTO;
 
 // ─── Constants ───────────────────────────────────────────────────────────────
 
-const APP_VERSION = "0.0.234"; // bumped on every deploy — keep in sync with version.json AND with the ?v= on polish.css above
+const APP_VERSION = "0.0.235"; // bumped on every deploy — keep in sync with version.json AND with the ?v= on polish.css above
 
 // ─── Backend + Supabase config ───────────────────────────────────────────────
 // Two stacks: prod (live testers) and staging (where new features land first).
@@ -6769,10 +6769,13 @@ function App({userId, onSignOut}) {
     const selSet = new Set(selAccounts);
     const deletedSet = new Set(deletedIds);
     const mutedContactIds = new Set(contactList.filter(c => c.isMuted).map(c => c.id));
-    // Dedup by mail id — outgoing mails with multiple recipients now
-    // produce one entry per recipient in messageList, but they're still
-    // a single actionable item. Without this an outgoing r2m sent to
-    // three people would inflate the total + inSel counts threefold.
+    // Dedup by (mail id, contact id) — a single mail with multiple TO
+    // recipients should count once per recipient, because each TO is an
+    // independent expected reply. v0.0.235 fixes a miscount where the
+    // app-badge showed 7 with 5 unread + 3 r2m, because two of those r2m
+    // were the same outgoing mail sent to two different TO contacts and
+    // got collapsed by an id-only dedup. CC/BCC entries already carry
+    // revert2me=false (v0.0.229) so they don't contribute here regardless.
     const seenTotal = new Set();
     const seenInSel = new Set();
     let total = 0, inSel = 0;
@@ -6782,9 +6785,10 @@ function App({userId, onSignOut}) {
       if (!isActionable) continue;
       // Per-contact mute filter — see comment above.
       if (m.contactId && mutedContactIds.has(m.contactId)) continue;
-      if (!seenTotal.has(m.id)) { seenTotal.add(m.id); total++; }
-      if (m.accountEmail && selSet.has(m.accountEmail) && !seenInSel.has(m.id)) {
-        seenInSel.add(m.id); inSel++;
+      const key = m.id + '::' + (m.contactId ?? '');
+      if (!seenTotal.has(key)) { seenTotal.add(key); total++; }
+      if (m.accountEmail && selSet.has(m.accountEmail) && !seenInSel.has(key)) {
+        seenInSel.add(key); inSel++;
       }
     }
     return { total, inSel };
