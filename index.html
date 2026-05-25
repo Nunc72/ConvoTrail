@@ -193,7 +193,7 @@
        polish change is picked up by every browser as soon as the version
        is bumped — no manual cache-busters needed. Keep ?v= here in sync
        with APP_VERSION below at every deploy. -->
-  <link rel="stylesheet" href="polish.css?v=0.0.232"/>
+  <link rel="stylesheet" href="polish.css?v=0.0.233"/>
 </head>
 <body>
 <div id="root">
@@ -432,7 +432,7 @@ window.CONVOOZ_CRYPTO = CONVOOZ_CRYPTO;
 
 // ─── Constants ───────────────────────────────────────────────────────────────
 
-const APP_VERSION = "0.0.232"; // bumped on every deploy — keep in sync with version.json AND with the ?v= on polish.css above
+const APP_VERSION = "0.0.233"; // bumped on every deploy — keep in sync with version.json AND with the ?v= on polish.css above
 
 // ─── Backend + Supabase config ───────────────────────────────────────────────
 // Two stacks: prod (live testers) and staging (where new features land first).
@@ -466,9 +466,12 @@ const SUPABASE_ANON_KEY = _CFG.SUPABASE_ANON_KEY;
 const BACKEND_URL = _CFG.BACKEND_URL;
 if (CONVOOZ_ENV === "staging") {
   console.log("%c[Convooz] STAGING environment", "color:#f97316;font-weight:bold");
-  // Prefix the document title so the browser tab is obviously staging.
+  // Only mark staging inside the page itself (orange bar). The browser-tab
+  // title is kept clean — the bar in the page is signal enough and gives
+  // the user a less in-your-face indicator than a [STAGING] prefix that
+  // would persist in every favicon / bookmark / window switcher entry.
+  // v0.0.233.
   if (typeof document !== "undefined") {
-    document.title = "[STAGING] " + (document.title || "Convooz");
     // Inject a thin orange strip at the very top of the page so you can't
     // miss which environment is active. The JSX script tag (type=text/babel)
     // executes AFTER DOMContentLoaded fires, so an addEventListener call
