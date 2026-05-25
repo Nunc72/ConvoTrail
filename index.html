@@ -193,7 +193,7 @@
        polish change is picked up by every browser as soon as the version
        is bumped — no manual cache-busters needed. Keep ?v= here in sync
        with APP_VERSION below at every deploy. -->
-  <link rel="stylesheet" href="polish.css?v=0.0.226"/>
+  <link rel="stylesheet" href="polish.css?v=0.0.227"/>
 </head>
 <body>
 <div id="root">
@@ -432,7 +432,7 @@ window.CONVOOZ_CRYPTO = CONVOOZ_CRYPTO;
 
 // ─── Constants ───────────────────────────────────────────────────────────────
 
-const APP_VERSION = "0.0.226"; // bumped on every deploy — keep in sync with version.json AND with the ?v= on polish.css above
+const APP_VERSION = "0.0.227"; // bumped on every deploy — keep in sync with version.json AND with the ?v= on polish.css above
 
 // ─── Backend + Supabase config ───────────────────────────────────────────────
 const SUPABASE_URL = "https://oyrlzqbjcsliesvunbwj.supabase.co";
@@ -7295,6 +7295,13 @@ function App({userId, onSignOut}) {
   // it into React state so the UI can show a spinner on the button.
   const syncingRef = useRef(new Set());
   const [syncingIds, setSyncingIds] = useState(()=>new Set());
+  // catchUpRunning spans the WHOLE handleGetMail catch-up loop, so the
+  // button stays in its "Syncing…" state continuously across rounds.
+  // Without this the button briefly flipped back to "Get mail" between
+  // each round (one round finishes → syncingIds momentarily empty →
+  // setState fires → next round queues a fresh syncingIds), which
+  // visually felt like two separate syncs back-to-back. v0.0.227.
+  const [catchUpRunning, setCatchUpRunning] = useState(false);
   async function handleSyncAccount(accountId) {
     if (syncingRef.current.has(accountId)) return null;
     syncingRef.current.add(accountId);
@@ -7318,24 +7325,29 @@ function App({userId, onSignOut}) {
     // iteration refreshes the bootstrap so the user-menu progress line
     // updates in real time.
     const MAX_ITERATIONS = 25;        // ~25 * 100 = 2500 mails per account
-    for (let i = 0; i < MAX_ITERATIONS; i++) {
-      const results = await Promise.all(mailAccounts.map(a => handleSyncAccount(a.id)));
-      const fired = results.filter(r => r !== null);
-      if (fired.length === 0) return; // every account already in flight elsewhere
-      const errors = fired.filter(r => r && !r.ok);
-      if (errors.length > 0) {
-        setActionToast(`Sync had errors: ${errors.map(e=>e.error).slice(0,2).join('; ')}`);
-        break;
+    setCatchUpRunning(true);
+    try {
+      for (let i = 0; i < MAX_ITERATIONS; i++) {
+        const results = await Promise.all(mailAccounts.map(a => handleSyncAccount(a.id)));
+        const fired = results.filter(r => r !== null);
+        if (fired.length === 0) return; // every account already in flight elsewhere
+        const errors = fired.filter(r => r && !r.ok);
+        if (errors.length > 0) {
+          setActionToast(`Sync had errors: ${errors.map(e=>e.error).slice(0,2).join('; ')}`);
+          break;
+        }
+        refreshData(); // updates messages_count / sync_known_uids in the menu
+        // Each /sync response returns folder stats with `skipped` = UIDs
+        // we didn't fetch because we hit PER_FOLDER_CAP. Any non-zero
+        // skipped means more missing mails for next round.
+        const moreToGo = fired.some(r => (r.folders || []).some(f => (f.skipped || 0) > 0));
+        if (!moreToGo) {
+          if (i > 0) setActionToast(`Sync complete: all mails in sync`);
+          break;
+        }
       }
-      refreshData(); // updates messages_count / sync_known_uids in the menu
-      // Each /sync response returns folder stats with `skipped` = UIDs
-      // we didn't fetch because we hit PER_FOLDER_CAP. Any non-zero
-      // skipped means more missing mails for next round.
-      const moreToGo = fired.some(r => (r.folders || []).some(f => (f.skipped || 0) > 0));
-      if (!moreToGo) {
-        if (i > 0) setActionToast(`Sync complete: all mails in sync`);
-        break;
-      }
+    } finally {
+      setCatchUpRunning(false);
     }
   }
   async function handleAutoSync() {
@@ -8178,10 +8190,10 @@ function App({userId, onSignOut}) {
                 Spinner replaces the icon while syncing OR while the
                 /bootstrap fetch is in flight (cold start + background
                 refresh both light it up). */}
-            <button onClick={handleGetMail} disabled={mailAccounts.length===0 || syncingIds.size>0}
+            <button onClick={handleGetMail} disabled={mailAccounts.length===0 || syncingIds.size>0 || catchUpRunning}
               title={mailAccounts.length===0 ? 'Add a mail account first' : 'Sync all accounts'}
               className="flex items-center justify-center w-8 h-8 rounded-full hover:bg-gray-100 text-gray-500 disabled:opacity-40">
-              {(syncingIds.size>0 || bootstrapFetching) ? <Spinner size={14}/> : <SyncIcon size={14}/>}
+              {(syncingIds.size>0 || bootstrapFetching || catchUpRunning) ? <Spinner size={14}/> : <SyncIcon size={14}/>}
             </button>
             <button onClick={()=>{
               // Topbar +: never prefills recipient (always empty "To:"). Origin determines back routing.
@@ -8302,10 +8314,10 @@ function App({userId, onSignOut}) {
                 </div>
               )}
             </div>
-            <button onClick={handleGetMail} disabled={mailAccounts.length===0 || syncingIds.size>0}
+            <button onClick={handleGetMail} disabled={mailAccounts.length===0 || syncingIds.size>0 || catchUpRunning}
               title={mailAccounts.length===0 ? 'Add a mail account first' : 'Sync all accounts now'}
               className="px-3 py-1.5 text-xs rounded bg-gray-100 hover:bg-gray-200 disabled:opacity-50 text-gray-600 font-medium">
-              {(syncingIds.size>0 || bootstrapFetching) ? '↻ Syncing…' : '↻ Get mail'}
+              {(syncingIds.size>0 || bootstrapFetching || catchUpRunning) ? '↻ Syncing…' : '↻ Get mail'}
             </button>
             <button onClick={()=>handleNewMsg(null)}
               className="flex items-center gap-1.5 px-3 py-1.5 text-xs rounded bg-indigo-600 hover:bg-indigo-700 text-white font-medium">
