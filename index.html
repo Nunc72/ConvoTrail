@@ -193,7 +193,7 @@
        polish change is picked up by every browser as soon as the version
        is bumped — no manual cache-busters needed. Keep ?v= here in sync
        with APP_VERSION below at every deploy. -->
-  <link rel="stylesheet" href="polish.css?v=0.0.229"/>
+  <link rel="stylesheet" href="polish.css?v=0.0.230"/>
 </head>
 <body>
 <div id="root">
@@ -432,12 +432,62 @@ window.CONVOOZ_CRYPTO = CONVOOZ_CRYPTO;
 
 // ─── Constants ───────────────────────────────────────────────────────────────
 
-const APP_VERSION = "0.0.229"; // bumped on every deploy — keep in sync with version.json AND with the ?v= on polish.css above
+const APP_VERSION = "0.0.230"; // bumped on every deploy — keep in sync with version.json AND with the ?v= on polish.css above
 
 // ─── Backend + Supabase config ───────────────────────────────────────────────
-const SUPABASE_URL = "https://oyrlzqbjcsliesvunbwj.supabase.co";
-const SUPABASE_ANON_KEY = "sb_publishable_-AmkKndtiScgdS4itzK3kw_sSHPz4tk";
-const BACKEND_URL = "https://convotrail-backend-nunc72.fly.dev";
+// Two stacks: prod (live testers) and staging (where new features land first).
+// Switch by appending ?env=staging to the URL. The choice is remembered in
+// localStorage so the user doesn't have to keep the query param on every nav,
+// and a small "STAGING" pill in the user menu surfaces which one is active.
+// ?env=prod (or ?env=production) forces a switch back. Anything else falls
+// back to "prod". v0.0.230.
+function _resolveEnv() {
+  if (typeof window === "undefined") return "prod";
+  const qs = new URLSearchParams(window.location.search);
+  const explicit = qs.get("env");
+  if (explicit === "staging") {
+    try { localStorage.setItem("convooz.env", "staging"); } catch {}
+    return "staging";
+  }
+  if (explicit === "prod" || explicit === "production") {
+    try { localStorage.removeItem("convooz.env"); } catch {}
+    return "prod";
+  }
+  try { return localStorage.getItem("convooz.env") === "staging" ? "staging" : "prod"; }
+  catch { return "prod"; }
+}
+const CONVOOZ_ENV = _resolveEnv();
+const _PROD = {
+  SUPABASE_URL:     "https://oyrlzqbjcsliesvunbwj.supabase.co",
+  SUPABASE_ANON_KEY:"sb_publishable_-AmkKndtiScgdS4itzK3kw_sSHPz4tk",
+  BACKEND_URL:      "https://convotrail-backend-nunc72.fly.dev",
+};
+const _STAGING = {
+  SUPABASE_URL:     "https://dvzzuarhaligsbdobptg.supabase.co",
+  SUPABASE_ANON_KEY:"sb_publishable_ThAwJpsfzPSmiWtiBrDiSw_Zw0ZoM0o",
+  BACKEND_URL:      "https://convotrail-backend-nunc72-staging.fly.dev",
+};
+const _CFG = CONVOOZ_ENV === "staging" ? _STAGING : _PROD;
+const SUPABASE_URL = _CFG.SUPABASE_URL;
+const SUPABASE_ANON_KEY = _CFG.SUPABASE_ANON_KEY;
+const BACKEND_URL = _CFG.BACKEND_URL;
+if (CONVOOZ_ENV === "staging") {
+  console.log("%c[Convooz] STAGING environment", "color:#f97316;font-weight:bold");
+  // Prefix the document title so the browser tab is obviously staging.
+  if (typeof document !== "undefined") {
+    document.title = "[STAGING] " + (document.title || "Convooz");
+    // Inject a thin orange strip at the very top of the page so you can't
+    // miss which environment is active. Done in vanilla JS pre-React so
+    // it lights up immediately and survives any re-render.
+    document.addEventListener("DOMContentLoaded", () => {
+      const bar = document.createElement("div");
+      bar.textContent = "STAGING — testdata only, separate database";
+      bar.style.cssText = "position:fixed;top:0;left:0;right:0;z-index:9999;background:#f97316;color:#fff;text-align:center;padding:2px 8px;font-size:11px;font-weight:600;letter-spacing:0.3px;font-family:system-ui,sans-serif;";
+      document.body.appendChild(bar);
+      document.body.style.paddingTop = "18px";
+    });
+  }
+}
 
 const sb = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
   auth: { persistSession: true, autoRefreshToken: true, detectSessionInUrl: true, flowType: "pkce" },

@@ -1,0 +1,26 @@
+app = "convotrail-backend-nunc72-staging"
+primary_region = "fra"
+
+[build]
+
+# Staging deploy target. Identical to fly.toml except for the app name
+# and CORS — secrets (SUPABASE_*, DATABASE_URL, CRED_ENC_KEY) point at a
+# separate Supabase Free project. Trigger with:
+#   fly deploy --config fly.staging.toml
+[http_service]
+  internal_port = 3000
+  force_https = true
+  auto_stop_machines = "suspend"
+  auto_start_machines = true
+  min_machines_running = 0
+
+[[http_service.checks]]
+  interval = "30s"
+  timeout = "5s"
+  grace_period = "10s"
+  method = "GET"
+  path = "/health"
+
+[[vm]]
+  size = "shared-cpu-1x"
+  memory = "512mb"
