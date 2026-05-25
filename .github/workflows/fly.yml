@@ -1,0 +1,32 @@
+name: Deploy backend to Fly
+
+# Replaces the Fly-side "Connect Repository" auto-deploy, which silently
+# stopped firing on 24 May 2026 (last release before that day's morning
+# was v85, ~v0.0.215 in our index.html numbering, leaving v0.0.216
+# through v0.0.223 stuck on local-only). Now every push to main that
+# touches backend code (or this workflow itself) builds and ships via
+# `flyctl deploy --remote-only`. The FE on GitHub Pages auto-publishes
+# from the root index.html and is not affected by this workflow.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'backend/**'
+      - '.github/workflows/fly.yml'
+
+jobs:
+  deploy:
+    name: Deploy app
+    runs-on: ubuntu-latest
+    # Prevent two pushes in quick succession from racing each other on a
+    # Fly machine: the second one waits for the first to finish.
+    concurrency: deploy-group
+    steps:
+      - uses: actions/checkout@v4
+      - uses: superfly/flyctl-actions/setup-flyctl@master
+      - name: Deploy
+        working-directory: backend
+        run: flyctl deploy --remote-only
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
