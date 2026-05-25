@@ -193,7 +193,7 @@
        polish change is picked up by every browser as soon as the version
        is bumped — no manual cache-busters needed. Keep ?v= here in sync
        with APP_VERSION below at every deploy. -->
-  <link rel="stylesheet" href="polish.css?v=0.0.233"/>
+  <link rel="stylesheet" href="polish.css?v=0.0.234"/>
 </head>
 <body>
 <div id="root">
@@ -432,7 +432,7 @@ window.CONVOOZ_CRYPTO = CONVOOZ_CRYPTO;
 
 // ─── Constants ───────────────────────────────────────────────────────────────
 
-const APP_VERSION = "0.0.233"; // bumped on every deploy — keep in sync with version.json AND with the ?v= on polish.css above
+const APP_VERSION = "0.0.234"; // bumped on every deploy — keep in sync with version.json AND with the ?v= on polish.css above
 
 // ─── Backend + Supabase config ───────────────────────────────────────────────
 // Two stacks: prod (live testers) and staging (where new features land first).
@@ -478,12 +478,14 @@ if (CONVOOZ_ENV === "staging") {
     // here would silently miss the event — handle both states explicitly.
     const injectStagingBar = () => {
       if (document.getElementById("staging-bar")) return; // idempotent
+      // Subtle 2-px orange strip at the very top of the viewport. No text —
+      // the hover-title plus the console banner cover discoverability.
+      // v0.0.234: shrunk from a 20-px text bar that felt too loud.
       const bar = document.createElement("div");
       bar.id = "staging-bar";
-      bar.textContent = "STAGING — testdata only, separate database";
-      bar.style.cssText = "position:fixed;top:0;left:0;right:0;z-index:99999;background:#f97316;color:#fff;text-align:center;padding:3px 8px;font-size:11px;font-weight:600;letter-spacing:0.3px;font-family:system-ui,-apple-system,sans-serif;pointer-events:none;";
+      bar.title = "STAGING environment";
+      bar.style.cssText = "position:fixed;top:0;left:0;right:0;height:2px;background:#f97316;z-index:99999;pointer-events:none;";
       document.body.appendChild(bar);
-      document.body.style.paddingTop = "20px";
     };
     if (document.readyState === "loading") {
       document.addEventListener("DOMContentLoaded", injectStagingBar);
