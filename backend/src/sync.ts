@@ -338,7 +338,14 @@ export async function syncAccount(accountId: string, userKey?: Buffer): Promise<
         // Newest-first cap so the user sees recent mail immediately; older
         // missing UIDs roll in on subsequent syncs until the backlog is gone.
         const toFetch = missing.slice(-PER_FOLDER_CAP);
-        stat.skipped = uids.length - toFetch.length;
+        // `skipped` reports the missing-mail backlog after this run — used by
+        // the FE's catch-up loop (handleGetMail) to decide whether another
+        // /sync is worth firing. Earlier versions computed `uids.length -
+        // toFetch.length`, which also counted UIDs we already had in DB —
+        // bug: the loop never terminated, so the "Syncing…" spinner stayed
+        // on for minutes even when the account was fully in sync. Now only
+        // mails we actually couldn't fetch this round count as skipped.
+        stat.skipped = missing.length - toFetch.length;
         if (toFetch.length === 0) { folderStats.push(stat); continue; }
 
         // Batch-fetch via UID list
