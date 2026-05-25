@@ -733,13 +733,14 @@ const MESSAGE_INSERT_CASTS: Record<string, string> = {
 };
 
 // Max rows we INSERT in a single statement. Hit by Supabase's Postgres
-// statement_timeout on a 100-row batch with newsletter-sized body_html
-// (v0.0.221: "canceling statement due to statement timeout" at ~41s).
-// Splitting into ~25-row chunks keeps every statement well under the
-// timeout while still amortising the per-statement overhead. ON
-// CONFLICT applies per-chunk and is idempotent across chunks, so a
-// partial failure leaves the DB consistent.
-const INSERT_CHUNK_SIZE = 25;
+// statement_timeout: in v0.0.221 a 100-row INSERT (with newsletter-sized
+// body_html through TOAST compression + jsonb validation) blew through
+// at ~41s. v0.0.222 dropped to 25 — still timing out at ~44s, which
+// means a single newsletter with multi-MB inline-image body_html
+// dominates the batch. v0.0.223 drops further to 10 AND raises the
+// session statement_timeout to 5 min via SET LOCAL inside a tx, so
+// even an oversized newsletter can't kill the chunk.
+const INSERT_CHUNK_SIZE = 10;
 
 // Bulk-insert one folder's worth of message rows, chunked to stay under
 // the PG statement_timeout. ON CONFLICT DO NOTHING handles the
@@ -780,7 +781,23 @@ async function bulkInsertMessagesChunk(pool: pg.Pool, rows: Record<string, unkno
     `INSERT INTO messages (${MESSAGE_INSERT_COLS.join(', ')})
      VALUES ${groups.join(', ')}
      ON CONFLICT (mail_account_id, folder, uid, uidvalidity) DO NOTHING`;
-  await pool.query(sql, values);
+  // Borrow a dedicated client so SET LOCAL applies to this transaction's
+  // INSERT and nothing else. Supabase's pooler default statement_timeout
+  // is too tight for big newsletter HTML — SET LOCAL bumps it to 5 min
+  // for just this statement, then BEGIN/COMMIT scopes it down again so
+  // we don't leak the bump back into the pool.
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    await client.query("SET LOCAL statement_timeout = '5min'");
+    await client.query(sql, values);
+    await client.query('COMMIT');
+  } catch (e) {
+    try { await client.query('ROLLBACK'); } catch { /* ignore */ }
+    throw e;
+  } finally {
+    client.release();
+  }
 }
 
 async function buildMessageRow(
