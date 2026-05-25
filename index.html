@@ -193,7 +193,7 @@
        polish change is picked up by every browser as soon as the version
        is bumped — no manual cache-busters needed. Keep ?v= here in sync
        with APP_VERSION below at every deploy. -->
-  <link rel="stylesheet" href="polish.css?v=0.0.236"/>
+  <link rel="stylesheet" href="polish.css?v=0.0.237"/>
 </head>
 <body>
 <div id="root">
@@ -432,7 +432,7 @@ window.CONVOOZ_CRYPTO = CONVOOZ_CRYPTO;
 
 // ─── Constants ───────────────────────────────────────────────────────────────
 
-const APP_VERSION = "0.0.236"; // bumped on every deploy — keep in sync with version.json AND with the ?v= on polish.css above
+const APP_VERSION = "0.0.237"; // bumped on every deploy — keep in sync with version.json AND with the ?v= on polish.css above
 
 // ─── Backend + Supabase config ───────────────────────────────────────────────
 // Two stacks: prod (live testers) and staging (where new features land first).
@@ -7367,6 +7367,10 @@ function App({userId, onSignOut}) {
   // setState fires → next round queues a fresh syncingIds), which
   // visually felt like two separate syncs back-to-back. v0.0.227.
   const [catchUpRunning, setCatchUpRunning] = useState(false);
+  // v0.0.237: persistent banner when sync had to repair 20+ flag drifts
+  // between DB and IMAP in a single Get-mail run. Dismissed by clicking
+  // the X, no auto-fade — the user should consciously acknowledge it.
+  const [syncDriftWarning, setSyncDriftWarning] = useState(null);
   async function handleSyncAccount(accountId) {
     if (syncingRef.current.has(accountId)) return null;
     syncingRef.current.add(accountId);
@@ -7391,6 +7395,7 @@ function App({userId, onSignOut}) {
     // updates in real time.
     const MAX_ITERATIONS = 25;        // ~25 * 100 = 2500 mails per account
     setCatchUpRunning(true);
+    let totalSeenDrift = 0;
     try {
       for (let i = 0; i < MAX_ITERATIONS; i++) {
         const results = await Promise.all(mailAccounts.map(a => handleSyncAccount(a.id)));
@@ -7402,6 +7407,11 @@ function App({userId, onSignOut}) {
           break;
         }
         refreshData(); // updates messages_count / sync_known_uids in the menu
+        // Sum the per-folder seenDrift signals from this round so we can
+        // raise an alert below if it ever gets noticeable. v0.0.237.
+        for (const r of fired) {
+          for (const f of (r.folders || [])) totalSeenDrift += (f.seenDrift || 0);
+        }
         // Each /sync response returns folder stats with `skipped` = UIDs
         // we didn't fetch because we hit PER_FOLDER_CAP. Any non-zero
         // skipped means more missing mails for next round.
@@ -7413,6 +7423,13 @@ function App({userId, onSignOut}) {
       }
     } finally {
       setCatchUpRunning(false);
+      // v0.0.237: surface a persistent banner if IMAP-flag reconciliation
+      // had to repair more than 20 mails this run — that usually means
+      // the IMAP mirror has been failing silently for a while (Oxilion
+      // hick-ups, dropped connections) and the user should know.
+      if (totalSeenDrift >= 20) {
+        setSyncDriftWarning(`Synchronisatieprobleem opgemerkt: ${totalSeenDrift} mails liepen achter op IMAP, nu gerepareerd. Mogelijk een IMAP-server hapering — als dit blijft terugkomen, laat het me weten.`);
+      }
     }
   }
   async function handleAutoSync() {
@@ -8459,6 +8476,23 @@ function App({userId, onSignOut}) {
         <div style={{position:'fixed',left:16,right:16,top:100,zIndex:100}}
           className="px-3 py-2.5 rounded bg-gray-800 text-white text-xs flex items-center gap-2 pointer-events-none shadow-lg">
           {actionToast}
+        </div>
+      )}
+
+      {/* Sync-drift banner — persistent, prominent, dismissable. v0.0.237. */}
+      {syncDriftWarning && (
+        <div style={{position:'fixed',top:CONVOOZ_ENV==='staging'?6:2,left:0,right:0,zIndex:9998}}
+          className="bg-red-600 text-white text-sm font-medium px-4 py-2.5 flex items-center justify-between gap-3 shadow-lg">
+          <div className="flex items-center gap-2 min-w-0">
+            <svg className="w-5 h-5 flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+              <path strokeLinecap="round" strokeLinejoin="round" d="M12 9v3m0 4h.01M5.07 19h13.86c1.54 0 2.5-1.67 1.73-3L13.73 4a2 2 0 00-3.46 0L3.34 16c-.77 1.33.19 3 1.73 3z"/>
+            </svg>
+            <span className="truncate">{syncDriftWarning}</span>
+          </div>
+          <button onClick={()=>setSyncDriftWarning(null)}
+            className="flex-shrink-0 px-2 py-0.5 rounded bg-red-700 hover:bg-red-800 text-xs font-semibold">
+            Sluit
+          </button>
         </div>
       )}
 
