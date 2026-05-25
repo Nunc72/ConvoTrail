@@ -5,6 +5,7 @@ import { decrypt } from "./crypto.js";
 import { requirePool } from "./db.js";
 import { cleanupOrphanContacts } from "./contactCleanup.js";
 import { encryptForUser, blindIndexForUser } from "./userCrypto.js";
+import type pg from "pg";
 
 export interface FolderSyncStat {
   folder: string;
@@ -392,73 +393,22 @@ export async function syncAccount(accountId: string, userKey?: Buffer): Promise<
           for (const row of rows) row.deleted_at = nowIso;
         }
         if (rows.length) {
-          // Split write: supabase-js inserts everything except the BYTEA
-          // *_enc + *_blind columns (it JSON-encodes Node Buffers as
-          // {type:'Buffer',data:[…]} on the wire — same bug we hit on
-          // /me/crypto in v0.0.211). The encrypted twins go in via a
-          // direct pg-pool UPDATE that takes the Buffer values verbatim.
-          const encCols = new Set([
-            "subject_enc", "snippet_enc", "body_text_enc", "body_html_enc",
-            "from_email_enc", "from_name_enc", "to_emails_enc",
-            "from_email_blind", "to_emails_blind",
-          ]);
-          const insertableRows = rows.map(r => {
-            const out: Record<string, unknown> = {};
-            for (const [k, v] of Object.entries(r)) {
-              if (encCols.has(k)) continue;
-              out[k] = v;
-            }
-            return out;
-          });
-          // upsert + ignoreDuplicates = INSERT … ON CONFLICT DO NOTHING.
-          // Even with the pg-pool haveSet above, two concurrent sync
-          // runs (e.g. auto-sync cron firing while the user just
-          // triggered a manual sync) can both see a UID as "missing"
-          // and race to insert it. ON CONFLICT keeps the second
-          // writer from blowing up the whole batch.
-          const { error: insErr } = await supabaseAdmin
-            .from("messages")
-            .upsert(insertableRows, {
-              onConflict: "mail_account_id,folder,uid,uidvalidity",
-              ignoreDuplicates: true,
-            });
-          if (insErr) throw new Error(`messages insert: ${insErr.message}`);
+          // v0.0.221: bulk INSERT via pg-pool in a single round-trip.
+          // Replaces the old split-write (supabase-js .upsert + per-row
+          // pg-pool UPDATE for BYTEA columns), which:
+          //   1. routed everything through PostgREST, hitting a 60s timeout
+          //      on larger batches with big body_html payloads (TypeError:
+          //      fetch failed at ~55s in v0.0.220),
+          //   2. needed a workaround for supabase-js encoding Node Buffers
+          //      as {type:'Buffer',data:[…]} JSON instead of raw bytes,
+          //   3. ran 1 + N round-trips per folder (one insert + one update
+          //      per encrypted row).
+          // Now one INSERT with ON CONFLICT DO NOTHING per folder, and the
+          // _enc / _blind columns ride along atomically. Race condition
+          // protection (concurrent sync runs racing to insert the same UID)
+          // is unchanged — ON CONFLICT swallows the duplicate.
+          await bulkInsertMessages(pool, rows);
           stat.inserted = rows.length;
-
-          // Phase 1.3a follow-up UPDATE for the encrypted twin columns.
-          // Only fires for rows where the user supplied X-User-Key and
-          // buildMessageRow produced at least one ciphertext payload.
-          // Matched back to the just-inserted DB row by the natural
-          // IMAP key (mail_account_id, folder, uidvalidity, uid).
-          for (const r of rows) {
-            if (
-              !r.subject_enc && !r.snippet_enc && !r.body_text_enc && !r.body_html_enc &&
-              !r.from_email_enc && !r.from_name_enc && !r.to_emails_enc &&
-              !r.from_email_blind && !r.to_emails_blind
-            ) continue;
-            await pool.query(
-              `UPDATE messages SET
-                 subject_enc = $1,
-                 snippet_enc = $2,
-                 body_text_enc = $3,
-                 body_html_enc = $4,
-                 from_email_enc = $5,
-                 from_name_enc = $6,
-                 to_emails_enc = $7,
-                 from_email_blind = $8,
-                 to_emails_blind = $9
-               WHERE mail_account_id = $10
-                 AND folder = $11
-                 AND uidvalidity = $12
-                 AND uid = $13`,
-              [
-                r.subject_enc, r.snippet_enc, r.body_text_enc, r.body_html_enc,
-                r.from_email_enc, r.from_name_enc, r.to_emails_enc,
-                r.from_email_blind, r.to_emails_blind,
-                r.mail_account_id, r.folder, r.uidvalidity, r.uid,
-              ],
-            );
-          }
         }
 
         // Permanent-delete detection: mails the user (or anyone) hard-
@@ -756,6 +706,65 @@ export async function syncAccount(accountId: string, userKey?: Buffer): Promise<
   } finally {
     try { await client.logout(); } catch {}
   }
+}
+
+// Columns the bulk-INSERT writes, in fixed order. Must line up with the
+// keys returned by buildMessageRow (with deleted_at as an optional extra).
+const MESSAGE_INSERT_COLS = [
+  'user_id', 'mail_account_id', 'folder', 'uid', 'uidvalidity',
+  'message_id', 'thread_id', 'from_email', 'from_name', 'to_emails',
+  'subject', 'snippet', 'body_text', 'body_html',
+  'subject_enc', 'snippet_enc', 'body_text_enc', 'body_html_enc',
+  'from_email_enc', 'from_name_enc', 'to_emails_enc',
+  'from_email_blind', 'to_emails_blind',
+  'date', 'flags', 'direction', 'has_attachments',
+  'unsubscribe_url', 'unsubscribe_one_click', 'deleted_at',
+] as const;
+
+// Per-column placeholder casts. pg-node can usually infer types from the
+// value, but some columns need an explicit cast: jsonb because we pass a
+// stringified value, bytea[] because pg-node doesn't auto-cast arrays of
+// Buffers, bigint because uidvalidity arrives as a string.
+const MESSAGE_INSERT_CASTS: Record<string, string> = {
+  to_emails: '::jsonb',
+  flags: '::jsonb',
+  to_emails_blind: '::bytea[]',
+  uidvalidity: '::bigint',
+};
+
+// Bulk-insert one folder's worth of message rows in a single round-trip.
+// ON CONFLICT DO NOTHING handles the (mail_account_id, folder, uid,
+// uidvalidity) unique constraint so two concurrent sync runs can't blow
+// up the batch on a race.
+async function bulkInsertMessages(pool: pg.Pool, rows: Record<string, unknown>[]): Promise<void> {
+  if (rows.length === 0) return;
+  const groups: string[] = [];
+  const values: unknown[] = [];
+  let n = 1;
+  for (const row of rows) {
+    const placeholders = MESSAGE_INSERT_COLS.map(col => {
+      const cast = MESSAGE_INSERT_CASTS[col] ?? '';
+      return `$${n++}${cast}`;
+    });
+    groups.push(`(${placeholders.join(', ')})`);
+    for (const col of MESSAGE_INSERT_COLS) {
+      const v = row[col];
+      if (v === undefined || v === null) {
+        values.push(null);
+      } else if (col === 'to_emails' || col === 'flags') {
+        // jsonb columns: stringify so pg sends the JSON text and the
+        // ::jsonb cast parses it server-side.
+        values.push(JSON.stringify(v));
+      } else {
+        values.push(v);
+      }
+    }
+  }
+  const sql =
+    `INSERT INTO messages (${MESSAGE_INSERT_COLS.join(', ')})
+     VALUES ${groups.join(', ')}
+     ON CONFLICT (mail_account_id, folder, uid, uidvalidity) DO NOTHING`;
+  await pool.query(sql, values);
 }
 
 async function buildMessageRow(
