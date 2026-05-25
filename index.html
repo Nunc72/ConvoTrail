@@ -193,7 +193,7 @@
        polish change is picked up by every browser as soon as the version
        is bumped — no manual cache-busters needed. Keep ?v= here in sync
        with APP_VERSION below at every deploy. -->
-  <link rel="stylesheet" href="polish.css?v=0.0.231"/>
+  <link rel="stylesheet" href="polish.css?v=0.0.232"/>
 </head>
 <body>
 <div id="root">
@@ -432,29 +432,22 @@ window.CONVOOZ_CRYPTO = CONVOOZ_CRYPTO;
 
 // ─── Constants ───────────────────────────────────────────────────────────────
 
-const APP_VERSION = "0.0.231"; // bumped on every deploy — keep in sync with version.json AND with the ?v= on polish.css above
+const APP_VERSION = "0.0.232"; // bumped on every deploy — keep in sync with version.json AND with the ?v= on polish.css above
 
 // ─── Backend + Supabase config ───────────────────────────────────────────────
 // Two stacks: prod (live testers) and staging (where new features land first).
-// Switch by appending ?env=staging to the URL. The choice is remembered in
-// localStorage so the user doesn't have to keep the query param on every nav,
-// and a small "STAGING" pill in the user menu surfaces which one is active.
-// ?env=prod (or ?env=production) forces a switch back. Anything else falls
-// back to "prod". v0.0.230.
+// Switch by appending ?env=staging to the URL. The URL is authoritative —
+// no localStorage memory between tabs/sessions, because that turned out
+// confusing (open staging once, every other tab on the same origin starts
+// behaving like staging too). v0.0.232: drop localStorage, URL only.
+// Bookmark the ?env=staging URL if you want to keep coming back to staging.
+// Also clean up any leftover localStorage from older builds so the next
+// reload of a plain URL doesn't keep returning to staging.
 function _resolveEnv() {
+  try { localStorage.removeItem("convooz.env"); } catch {}
   if (typeof window === "undefined") return "prod";
   const qs = new URLSearchParams(window.location.search);
-  const explicit = qs.get("env");
-  if (explicit === "staging") {
-    try { localStorage.setItem("convooz.env", "staging"); } catch {}
-    return "staging";
-  }
-  if (explicit === "prod" || explicit === "production") {
-    try { localStorage.removeItem("convooz.env"); } catch {}
-    return "prod";
-  }
-  try { return localStorage.getItem("convooz.env") === "staging" ? "staging" : "prod"; }
-  catch { return "prod"; }
+  return qs.get("env") === "staging" ? "staging" : "prod";
 }
 const CONVOOZ_ENV = _resolveEnv();
 const _PROD = {
