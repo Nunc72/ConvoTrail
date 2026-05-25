@@ -732,11 +732,27 @@ const MESSAGE_INSERT_CASTS: Record<string, string> = {
   uidvalidity: '::bigint',
 };
 
-// Bulk-insert one folder's worth of message rows in a single round-trip.
-// ON CONFLICT DO NOTHING handles the (mail_account_id, folder, uid,
-// uidvalidity) unique constraint so two concurrent sync runs can't blow
-// up the batch on a race.
+// Max rows we INSERT in a single statement. Hit by Supabase's Postgres
+// statement_timeout on a 100-row batch with newsletter-sized body_html
+// (v0.0.221: "canceling statement due to statement timeout" at ~41s).
+// Splitting into ~25-row chunks keeps every statement well under the
+// timeout while still amortising the per-statement overhead. ON
+// CONFLICT applies per-chunk and is idempotent across chunks, so a
+// partial failure leaves the DB consistent.
+const INSERT_CHUNK_SIZE = 25;
+
+// Bulk-insert one folder's worth of message rows, chunked to stay under
+// the PG statement_timeout. ON CONFLICT DO NOTHING handles the
+// (mail_account_id, folder, uid, uidvalidity) unique constraint so two
+// concurrent sync runs can't blow up the batch on a race.
 async function bulkInsertMessages(pool: pg.Pool, rows: Record<string, unknown>[]): Promise<void> {
+  for (let i = 0; i < rows.length; i += INSERT_CHUNK_SIZE) {
+    const chunk = rows.slice(i, i + INSERT_CHUNK_SIZE);
+    await bulkInsertMessagesChunk(pool, chunk);
+  }
+}
+
+async function bulkInsertMessagesChunk(pool: pg.Pool, rows: Record<string, unknown>[]): Promise<void> {
   if (rows.length === 0) return;
   const groups: string[] = [];
   const values: unknown[] = [];
