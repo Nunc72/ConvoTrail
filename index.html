@@ -193,7 +193,7 @@
        polish change is picked up by every browser as soon as the version
        is bumped — no manual cache-busters needed. Keep ?v= here in sync
        with APP_VERSION below at every deploy. -->
-  <link rel="stylesheet" href="polish.css?v=0.0.228"/>
+  <link rel="stylesheet" href="polish.css?v=0.0.229"/>
 </head>
 <body>
 <div id="root">
@@ -432,7 +432,7 @@ window.CONVOOZ_CRYPTO = CONVOOZ_CRYPTO;
 
 // ─── Constants ───────────────────────────────────────────────────────────────
 
-const APP_VERSION = "0.0.228"; // bumped on every deploy — keep in sync with version.json AND with the ?v= on polish.css above
+const APP_VERSION = "0.0.229"; // bumped on every deploy — keep in sync with version.json AND with the ?v= on polish.css above
 
 // ─── Backend + Supabase config ───────────────────────────────────────────────
 const SUPABASE_URL = "https://oyrlzqbjcsliesvunbwj.supabase.co";
@@ -5821,8 +5821,13 @@ function App({userId, onSignOut}) {
             if (!cid || seen.has(cid)) continue;
             seen.add(cid);
             if (hiddenPairsBoot.has(m.id + '::' + cid)) continue;
-            const r2mActive = isR2mActive(r2mRow) && !hasReply(m, cid);
-            entries.push({ ...baseFields, contactId: cid, role: r.role || 'to', revert2me: r2mActive });
+            // r2m only applies to TO recipients — those are the people we
+            // actually expected a reply from. CC / BCC contacts are
+            // informed-only and shouldn't get a "where's my reply?"
+            // alert, badge or amber bullet on their thread. v0.0.229.
+            const role = r.role || 'to';
+            const r2mActive = role === 'to' && isR2mActive(r2mRow) && !hasReply(m, cid);
+            entries.push({ ...baseFields, contactId: cid, role, revert2me: r2mActive });
           }
           if (entries.length === 0) {
             __dbgDroppedOut.push({ id: m.id, to: '(no recipient mapped or all hidden)', subject: m.subject });
@@ -7905,7 +7910,17 @@ function App({userId, onSignOut}) {
   })();
   const mergeContactObj=contactList.find(c=>c.id===mergeContact)||null;
   const selectedMsg = (() => {
-    const m = messageList.find(x => x.id === selMsg);
+    // Multi-recipient mails (v0.0.206+) produce one entry per contactId
+    // with the same id. When the user is viewing a contact's thread,
+    // pick the entry that belongs to THAT contact — otherwise the detail
+    // view would inherit role / revert2me state from the first match
+    // (typically a TO recipient), which is wrong for a CC contact's
+    // thread and was the cause of the "no snooze/seen alert visible
+    // even though there's an amber bullet" bug. v0.0.229. Fall back to
+    // a plain id-match for non-thread contexts (search results, etc).
+    const m =
+      (selContact != null && messageList.find(x => x.id === selMsg && x.contactId === selContact))
+      || messageList.find(x => x.id === selMsg);
     if (!m) return null;
     if (m.accountEmail && !selAccounts.includes(m.accountEmail)) return null;
     // When viewing a contact thread, the message must also match the
