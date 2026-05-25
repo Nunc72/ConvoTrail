@@ -115,25 +115,41 @@ export async function registerMessagesRoutes(app: FastifyInstance) {
         [JSON.stringify(newFlags), id],
       );
 
+      // v0.0.236: try up to MAX_ATTEMPTS times to mirror flags to IMAP.
+      // Earlier versions tried just once — silent failures (Oxilion
+      // hick-ups, transient socket timeouts) left DB and IMAP in drift,
+      // visible after months as a big stack of mails marked seen in
+      // Convooz but still unread on the mailserver. Sync reconciliation
+      // catches the slow path; this retry loop catches the fast one.
       let imapWarning: string | null = null;
-      const client = new ImapFlow({
-        host: m.imap_host, port: m.imap_port, secure: true,
-        auth: { user: m.imap_user || "", pass: decrypt(m.imap_cred_enc) },
-        logger: false, socketTimeout: 15_000,
-      });
-      try {
-        await client.connect();
-        const lock = await client.getMailboxLock(m.folder);
+      const MAX_ATTEMPTS = 10;
+      const uidStr = String(m.uid);
+      for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
+        const client = new ImapFlow({
+          host: m.imap_host, port: m.imap_port, secure: true,
+          auth: { user: m.imap_user || "", pass: decrypt(m.imap_cred_enc) },
+          logger: false, socketTimeout: 15_000,
+        });
         try {
-          const uidStr = String(m.uid);
-          if (toAdd.length) await client.messageFlagsAdd(uidStr, toAdd, { uid: true });
-          if (toRm.length)  await client.messageFlagsRemove(uidStr, toRm, { uid: true });
-        } finally { lock.release(); }
-        await client.logout();
-      } catch (e) {
-        try { await client.logout(); } catch { /* ignore */ }
-        imapWarning = "IMAP flag update failed (DB updated): " + (e instanceof Error ? e.message : String(e));
-        req.log.warn({ err: e, messageId: id }, "flags: IMAP mirror failed; DB-only update");
+          await client.connect();
+          const lock = await client.getMailboxLock(m.folder);
+          try {
+            if (toAdd.length) await client.messageFlagsAdd(uidStr, toAdd, { uid: true });
+            if (toRm.length)  await client.messageFlagsRemove(uidStr, toRm, { uid: true });
+          } finally { lock.release(); }
+          await client.logout();
+          imapWarning = null;
+          break; // success
+        } catch (e) {
+          try { await client.logout(); } catch { /* ignore */ }
+          if (attempt === MAX_ATTEMPTS) {
+            imapWarning = `IMAP flag update failed after ${MAX_ATTEMPTS} attempts: ${e instanceof Error ? e.message : String(e)}`;
+            req.log.warn({ err: e, messageId: id, attempts: MAX_ATTEMPTS }, "flags: IMAP mirror exhausted retries");
+          } else {
+            req.log.warn({ err: e, messageId: id, attempt }, "flags: IMAP mirror attempt failed, retrying");
+            await new Promise(r => setTimeout(r, 500));
+          }
+        }
       }
 
       return { ok: true, flags: newFlags, imapWarning };

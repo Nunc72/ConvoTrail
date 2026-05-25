@@ -12,6 +12,11 @@ export interface FolderSyncStat {
   fetched: number;
   inserted: number;
   skipped: number;
+  // v0.0.236: count of mails that needed flag-state reconciliation
+  // between DB and IMAP this run (either direction). FE can surface a
+  // banner when this is consistently high — usually means IMAP-mirror
+  // is struggling.
+  seenDrift?: number;
 }
 export interface SyncResult {
   ok: boolean;
@@ -512,6 +517,57 @@ export async function syncAccount(accountId: string, userKey?: Buffer): Promise<
               }
             } catch {/* skip unparseable, try next */}
           }
+        }
+        // Flag reconciliation: for every UID in window, compare IMAP
+        // truth vs DB state. v0.0.236 — see also messages.ts /flags
+        // retry. Two directions:
+        //   DB.seen=true, IMAP no \Seen → push \Seen to IMAP (catches
+        //     /flags calls whose IMAP-mirror silently failed earlier).
+        //   DB.seen=false, IMAP has \Seen → update DB (catches reads
+        //     done on another mail client like Mail.app on phone).
+        // Best-effort; never fails the sync. Runs inside the same
+        // mailbox lock as the rest of the folder processing.
+        try {
+          const flagsByUid = new Map<number, boolean>();
+          for await (const fm of client.fetch(allUids, { uid: true, flags: true }, { uid: true })) {
+            flagsByUid.set(Number(fm.uid), Array.from(fm.flags || []).includes("\\Seen"));
+          }
+          const dbRows = (await pool.query<{ uid: number; db_seen: boolean }>(
+            `SELECT uid, COALESCE((flags->>'seen')::bool, false) AS db_seen
+               FROM messages
+              WHERE mail_account_id = $1 AND folder = $2 AND uidvalidity = $3
+                AND deleted_at IS NULL`,
+            [acc.id, box.path, uidvalidity.toString()],
+          )).rows;
+          const toPushSeen: number[] = [];
+          const toMarkDbSeen: number[] = [];
+          for (const r of dbRows) {
+            const imapSeen = flagsByUid.get(Number(r.uid));
+            if (imapSeen === undefined) continue;
+            if (r.db_seen && !imapSeen) toPushSeen.push(Number(r.uid));
+            else if (!r.db_seen && imapSeen) toMarkDbSeen.push(Number(r.uid));
+          }
+          if (toPushSeen.length > 0) {
+            try {
+              await client.messageFlagsAdd(toPushSeen.map(String).join(","), ["\\Seen"], { uid: true });
+              console.log(`[sync] ${box.path}: pushed \\Seen to IMAP for ${toPushSeen.length} drifted mails`);
+            } catch (e) {
+              console.warn(`[sync] ${box.path}: pushing \\Seen failed (${toPushSeen.length} uids): ${e instanceof Error ? e.message : e}`);
+            }
+          }
+          if (toMarkDbSeen.length > 0) {
+            await pool.query(
+              `UPDATE messages
+                  SET flags = COALESCE(flags, '{}'::jsonb) || '{"seen": true}'::jsonb
+                WHERE mail_account_id = $1 AND folder = $2 AND uidvalidity = $3
+                  AND uid = ANY($4::int[])`,
+              [acc.id, box.path, uidvalidity.toString(), toMarkDbSeen],
+            );
+            console.log(`[sync] ${box.path}: pulled \\Seen into DB for ${toMarkDbSeen.length} mails`);
+          }
+          stat.seenDrift = toPushSeen.length + toMarkDbSeen.length;
+        } catch (e) {
+          console.warn(`[sync] ${box.path}: flag reconciliation failed: ${e instanceof Error ? e.message : e}`);
         }
       } finally {
         lock.release();
