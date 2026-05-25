@@ -193,7 +193,7 @@
        polish change is picked up by every browser as soon as the version
        is bumped — no manual cache-busters needed. Keep ?v= here in sync
        with APP_VERSION below at every deploy. -->
-  <link rel="stylesheet" href="polish.css?v=0.0.227"/>
+  <link rel="stylesheet" href="polish.css?v=0.0.228"/>
 </head>
 <body>
 <div id="root">
@@ -432,7 +432,7 @@ window.CONVOOZ_CRYPTO = CONVOOZ_CRYPTO;
 
 // ─── Constants ───────────────────────────────────────────────────────────────
 
-const APP_VERSION = "0.0.227"; // bumped on every deploy — keep in sync with version.json AND with the ?v= on polish.css above
+const APP_VERSION = "0.0.228"; // bumped on every deploy — keep in sync with version.json AND with the ?v= on polish.css above
 
 // ─── Backend + Supabase config ───────────────────────────────────────────────
 const SUPABASE_URL = "https://oyrlzqbjcsliesvunbwj.supabase.co";
@@ -8193,7 +8193,7 @@ function App({userId, onSignOut}) {
             <button onClick={handleGetMail} disabled={mailAccounts.length===0 || syncingIds.size>0 || catchUpRunning}
               title={mailAccounts.length===0 ? 'Add a mail account first' : 'Sync all accounts'}
               className="flex items-center justify-center w-8 h-8 rounded-full hover:bg-gray-100 text-gray-500 disabled:opacity-40">
-              {(syncingIds.size>0 || bootstrapFetching || catchUpRunning) ? <Spinner size={14}/> : <SyncIcon size={14}/>}
+              {(syncingIds.size>0 || catchUpRunning) ? <Spinner size={14}/> : <SyncIcon size={14}/>}
             </button>
             <button onClick={()=>{
               // Topbar +: never prefills recipient (always empty "To:"). Origin determines back routing.
@@ -8317,7 +8317,7 @@ function App({userId, onSignOut}) {
             <button onClick={handleGetMail} disabled={mailAccounts.length===0 || syncingIds.size>0 || catchUpRunning}
               title={mailAccounts.length===0 ? 'Add a mail account first' : 'Sync all accounts now'}
               className="px-3 py-1.5 text-xs rounded bg-gray-100 hover:bg-gray-200 disabled:opacity-50 text-gray-600 font-medium">
-              {(syncingIds.size>0 || bootstrapFetching || catchUpRunning) ? '↻ Syncing…' : '↻ Get mail'}
+              {(syncingIds.size>0 || catchUpRunning) ? '↻ Syncing…' : '↻ Get mail'}
             </button>
             <button onClick={()=>handleNewMsg(null)}
               className="flex items-center gap-1.5 px-3 py-1.5 text-xs rounded bg-indigo-600 hover:bg-indigo-700 text-white font-medium">
