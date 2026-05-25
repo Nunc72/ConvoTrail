@@ -193,7 +193,7 @@
        polish change is picked up by every browser as soon as the version
        is bumped — no manual cache-busters needed. Keep ?v= here in sync
        with APP_VERSION below at every deploy. -->
-  <link rel="stylesheet" href="polish.css?v=0.0.230"/>
+  <link rel="stylesheet" href="polish.css?v=0.0.231"/>
 </head>
 <body>
 <div id="root">
@@ -432,7 +432,7 @@ window.CONVOOZ_CRYPTO = CONVOOZ_CRYPTO;
 
 // ─── Constants ───────────────────────────────────────────────────────────────
 
-const APP_VERSION = "0.0.230"; // bumped on every deploy — keep in sync with version.json AND with the ?v= on polish.css above
+const APP_VERSION = "0.0.231"; // bumped on every deploy — keep in sync with version.json AND with the ?v= on polish.css above
 
 // ─── Backend + Supabase config ───────────────────────────────────────────────
 // Two stacks: prod (live testers) and staging (where new features land first).
@@ -477,15 +477,23 @@ if (CONVOOZ_ENV === "staging") {
   if (typeof document !== "undefined") {
     document.title = "[STAGING] " + (document.title || "Convooz");
     // Inject a thin orange strip at the very top of the page so you can't
-    // miss which environment is active. Done in vanilla JS pre-React so
-    // it lights up immediately and survives any re-render.
-    document.addEventListener("DOMContentLoaded", () => {
+    // miss which environment is active. The JSX script tag (type=text/babel)
+    // executes AFTER DOMContentLoaded fires, so an addEventListener call
+    // here would silently miss the event — handle both states explicitly.
+    const injectStagingBar = () => {
+      if (document.getElementById("staging-bar")) return; // idempotent
       const bar = document.createElement("div");
+      bar.id = "staging-bar";
       bar.textContent = "STAGING — testdata only, separate database";
-      bar.style.cssText = "position:fixed;top:0;left:0;right:0;z-index:9999;background:#f97316;color:#fff;text-align:center;padding:2px 8px;font-size:11px;font-weight:600;letter-spacing:0.3px;font-family:system-ui,sans-serif;";
+      bar.style.cssText = "position:fixed;top:0;left:0;right:0;z-index:99999;background:#f97316;color:#fff;text-align:center;padding:3px 8px;font-size:11px;font-weight:600;letter-spacing:0.3px;font-family:system-ui,-apple-system,sans-serif;pointer-events:none;";
       document.body.appendChild(bar);
-      document.body.style.paddingTop = "18px";
-    });
+      document.body.style.paddingTop = "20px";
+    };
+    if (document.readyState === "loading") {
+      document.addEventListener("DOMContentLoaded", injectStagingBar);
+    } else {
+      injectStagingBar();
+    }
   }
 }
 
