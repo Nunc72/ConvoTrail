@@ -10,7 +10,7 @@ import { sendMail, splitAddresses } from "../smtp.js";
 import { armR2m } from "../r2m.js";
 import { downloadAttachmentBytes, deleteAttachments } from "../storage.js";
 import { cleanupOrphanContacts } from "../contactCleanup.js";
-import { parseUserKeyHeader } from "../userCrypto.js";
+import { parseUserKeyHeader, encryptForUser, blindIndexForUser } from "../userCrypto.js";
 
 interface AccountInput {
   email: string;
@@ -353,22 +353,63 @@ export async function registerMailAccountsRoutes(app: FastifyInstance) {
         }
       }
 
+      // Phase 1.3b — send-route encryption. When the FE forwards the
+      // user's master key in X-User-Key, encrypt subject/body/headers
+      // alongside plaintext (dual-write, matching sync's behaviour).
+      // CC/BCC entries are encoded in toList, so a single to_emails_enc
+      // blob covers all recipients. v0.0.243.
+      const userKey = parseUserKeyHeader(req.headers["x-user-key"]);
+      const subjectPlain = b.subject || "";
+      const bodyPlain    = b.body || "";
+      let subjectEnc:      Buffer | null = null;
+      let snippetEnc:      Buffer | null = null;
+      let bodyTextEnc:     Buffer | null = null;
+      let fromEmailEnc:    Buffer | null = null;
+      let fromNameEnc:     Buffer | null = null;
+      let toEmailsEnc:     Buffer | null = null;
+      let fromEmailBlind:  Buffer | null = null;
+      let toEmailsBlind:   Buffer[] | null = null;
+      if (userKey) {
+        [subjectEnc, snippetEnc, bodyTextEnc, fromEmailEnc, fromNameEnc, toEmailsEnc, fromEmailBlind] = await Promise.all([
+          encryptForUser(subjectPlain,                            userKey),
+          encryptForUser(snippet,                                 userKey),
+          encryptForUser(bodyPlain,                               userKey),
+          encryptForUser(acc.email,                               userKey),
+          encryptForUser(acc.display_name,                        userKey),
+          encryptForUser(toList.length ? JSON.stringify(toList) : null, userKey),
+          blindIndexForUser(acc.email,                            userKey),
+        ]);
+        const blinds: Buffer[] = [];
+        for (const t of toList) {
+          const bi = await blindIndexForUser(t.email, userKey);
+          if (bi) blinds.push(bi);
+        }
+        toEmailsBlind = blinds.length ? blinds : null;
+      }
+
       try {
         const ins = await pool.query<{ id: string }>(
           `INSERT INTO messages (
              user_id, mail_account_id, folder, uid, uidvalidity, message_id,
              from_email, from_name, to_emails, subject, body_text, snippet,
-             date, flags, direction, has_attachments
-           ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9::jsonb,$10,$11,$12, now(), $13::jsonb, 'out', $14)
+             date, flags, direction, has_attachments,
+             subject_enc, snippet_enc, body_text_enc,
+             from_email_enc, from_name_enc, to_emails_enc,
+             from_email_blind, to_emails_blind
+           ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9::jsonb,$10,$11,$12, now(), $13::jsonb, 'out', $14,
+             $15, $16, $17, $18, $19, $20, $21, $22::bytea[])
            ON CONFLICT DO NOTHING
            RETURNING id`,
           [
             req.authUser!.id, id,
             result.appended.folder, result.appended.uid, result.appended.uidValidity, result.messageId || null,
             acc.email, acc.display_name,
-            JSON.stringify(toList), b.subject || "", b.body || "", snippet,
+            JSON.stringify(toList), subjectPlain, bodyPlain, snippet,
             JSON.stringify({ seen: true }),
             draftAttachments.length > 0,
+            subjectEnc, snippetEnc, bodyTextEnc,
+            fromEmailEnc, fromNameEnc, toEmailsEnc,
+            fromEmailBlind, toEmailsBlind,
           ],
         );
         const newMessageId = ins.rows[0]?.id;
