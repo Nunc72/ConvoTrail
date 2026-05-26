@@ -281,20 +281,19 @@ export async function syncAccount(accountId: string, userKey?: Buffer): Promise<
     const since = new Date(Date.now() - SINCE_DAYS * 86400_000);
     const allExtractedAddrs = new Map<string, string | null>(); // email → name
 
-    // Compute user-wide cap headroom. Distributes the budget across the folders
-    // we're about to sync, so a multi-folder Outlook account or a multi-account
-    // user shares the 2000-message ceiling rather than getting 2000 per folder.
-    // When the user is at/over the cap, fall back to HARD_PER_FOLDER_CEILING —
-    // the standard PER_FOLDER_CAP missing-detection path still picks up new mail.
+    // User-wide cap (USER_TOTAL_CAP = 2000 active mails) is enforced as a
+    // per-sync-run *fetch* limit, not as a slice on the IMAP UID list. The
+    // earlier version sliced allUids down to folderInitialCap which broke
+    // catch-up: with 941 UIDs on IMAP and a 431-cap, only the newest 431
+    // were considered — once those landed in DB the loop terminated with
+    // 510 older UIDs still missing forever. We now keep `uids = allUids`
+    // and cap only `toFetch.length` by remaining headroom.
     const userTotalR = await pool.query<{ cnt: string }>(
-      `SELECT COUNT(*)::text AS cnt FROM messages WHERE user_id = $1`,
+      `SELECT COUNT(*)::text AS cnt FROM messages WHERE user_id = $1 AND deleted_at IS NULL`,
       [userId],
     );
     const existingMsgCount = Number(userTotalR.rows[0].cnt);
-    const userHeadroom = Math.max(0, USER_TOTAL_CAP - existingMsgCount);
-    const folderInitialCap = userHeadroom > 0
-      ? Math.max(50, Math.ceil(userHeadroom / Math.max(1, targets.length)))
-      : HARD_PER_FOLDER_CEILING;
+    let remainingHeadroom = Math.max(0, USER_TOTAL_CAP - existingMsgCount);
 
     for (const box of targets) {
       const stat: FolderSyncStat = { folder: box.path, fetched: 0, inserted: 0, skipped: 0 };
@@ -307,14 +306,11 @@ export async function syncAccount(accountId: string, userKey?: Buffer): Promise<
         const allUids = (await client.search({ since }, { uid: true })) as number[];
         sumKnownUids += allUids.length;
         if (allUids.length === 0) { folderStats.push(stat); continue; }
-        // Apply user-wide cap (computed pre-loop). IMAP search returns
-        // ascending so the tail of the array is the newest. Older UIDs
-        // outside the cap are still counted into sumKnownUids (so the
-        // user-menu progress meter says "X of <real total> mails" — the
-        // truth on the server) but never get fetched.
-        const uids = allUids.length > folderInitialCap
-          ? allUids.slice(-folderInitialCap)
-          : allUids;
+        // Keep the full IMAP UID list — catch-up of older mails depends
+        // on `missing` covering everything we don't have, not just a
+        // newest-N slice. The user-wide cap is enforced later by capping
+        // `toFetch.length` to `remainingHeadroom`. v0.0.241.
+        const uids = allUids;
 
         // Find UIDs we already have. Earlier code only checked the newest N
         // and consequently never caught up if the very first sync hit the
@@ -342,7 +338,12 @@ export async function syncAccount(accountId: string, userKey?: Buffer): Promise<
         const missing = uids.filter(u => !haveSet.has(u));
         // Newest-first cap so the user sees recent mail immediately; older
         // missing UIDs roll in on subsequent syncs until the backlog is gone.
-        const toFetch = missing.slice(-PER_FOLDER_CAP);
+        // v0.0.241: also clamp by remainingHeadroom so we never push the
+        // user past USER_TOTAL_CAP. Once headroom hits 0, toFetch is [] and
+        // skipped reflects the residual backlog so the FE loop terminates.
+        const perRoundLimit = Math.min(PER_FOLDER_CAP, remainingHeadroom);
+        const toFetch = perRoundLimit > 0 ? missing.slice(-perRoundLimit) : [];
+        remainingHeadroom = Math.max(0, remainingHeadroom - toFetch.length);
         // `skipped` reports the missing-mail backlog after this run — used by
         // the FE's catch-up loop (handleGetMail) to decide whether another
         // /sync is worth firing. Earlier versions computed `uids.length -
