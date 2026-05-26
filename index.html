@@ -193,7 +193,7 @@
        polish change is picked up by every browser as soon as the version
        is bumped — no manual cache-busters needed. Keep ?v= here in sync
        with APP_VERSION below at every deploy. -->
-  <link rel="stylesheet" href="polish.css?v=0.0.242"/>
+  <link rel="stylesheet" href="polish.css?v=0.0.244"/>
 </head>
 <body>
 <div id="root">
@@ -432,7 +432,7 @@ window.CONVOOZ_CRYPTO = CONVOOZ_CRYPTO;
 
 // ─── Constants ───────────────────────────────────────────────────────────────
 
-const APP_VERSION = "0.0.242"; // bumped on every deploy — keep in sync with version.json AND with the ?v= on polish.css above
+const APP_VERSION = "0.0.244"; // bumped on every deploy — keep in sync with version.json AND with the ?v= on polish.css above
 
 // ─── Backend + Supabase config ───────────────────────────────────────────────
 // Two stacks: prod (live testers) and staging (where new features land first).
@@ -8029,12 +8029,15 @@ function App({userId, onSignOut}) {
     .filter(m=>m.contactId===selContact)
     .filter(m=>!m.accountEmail||selAccounts.includes(m.accountEmail))
     .filter(msgMatchesSearch):[];
-  // Incoming has one shape-entry per mail so unread is naturally per-mail;
-  // r2m is outgoing-only and now fans out across recipients, so we dedup
-  // by mail id before counting to avoid 3× inflation on a 3-recipient
-  // r2m'd mail.
+  // Incoming has one shape-entry per mail (the sender contact), so unread
+  // is naturally per-mail and id-dedup works. For r2m the fan-out across
+  // TO-recipients is intentional — each TO is an independent expected
+  // reply (same reasoning as the home-screen badge fix in v0.0.235). So
+  // dedup on (id, contactId) here too: a 3-TO r2m mail counts as 3 in
+  // the footer, matching how it shows up in the contact list. CC/BCC
+  // entries already carry revert2me=false from v0.0.229. v0.0.244.
   const totalUnread=new Set(messageList.filter(m=>!m.read&&m.dir==='in'&&!deletedIds.includes(m.id)&&!m.draft&&selAccounts.includes(m.accountEmail)).map(m=>m.id)).size;
-  const totalR2m=new Set(messageList.filter(m=>m.revert2me&&!deletedIds.includes(m.id)&&!m.draft&&selAccounts.includes(m.accountEmail)).map(m=>m.id)).size;
+  const totalR2m=new Set(messageList.filter(m=>m.revert2me&&!deletedIds.includes(m.id)&&!m.draft&&selAccounts.includes(m.accountEmail)).map(m=>m.id+'::'+(m.contactId??''))).size;
 
   function msgMatchesSearch(m) {
     if(!searchQuery) return true;
