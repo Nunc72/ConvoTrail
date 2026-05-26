@@ -193,7 +193,7 @@
        polish change is picked up by every browser as soon as the version
        is bumped — no manual cache-busters needed. Keep ?v= here in sync
        with APP_VERSION below at every deploy. -->
-  <link rel="stylesheet" href="polish.css?v=0.0.245"/>
+  <link rel="stylesheet" href="polish.css?v=0.0.246"/>
 </head>
 <body>
 <div id="root">
@@ -432,7 +432,7 @@ window.CONVOOZ_CRYPTO = CONVOOZ_CRYPTO;
 
 // ─── Constants ───────────────────────────────────────────────────────────────
 
-const APP_VERSION = "0.0.245"; // bumped on every deploy — keep in sync with version.json AND with the ?v= on polish.css above
+const APP_VERSION = "0.0.246"; // bumped on every deploy — keep in sync with version.json AND with the ?v= on polish.css above
 
 // ─── Backend + Supabase config ───────────────────────────────────────────────
 // Two stacks: prod (live testers) and staging (where new features land first).
@@ -5814,6 +5814,29 @@ function App({userId, onSignOut}) {
             hiddenPairsBoot.add(h.message_id + "::" + h.contact_id);
           }
         }
+        // Phase 1.4 — pre-shape decrypt pass. Replaces plaintext subject /
+        // snippet with their decrypted versions when the user is unlocked
+        // AND the row carries an _enc payload (back-filled by 1.3c, or
+        // freshly written by 1.3a/1.3b). Plaintext stays as fallback for
+        // locked sessions and for rows that haven't been back-filled yet.
+        // v0.0.246.
+        const masterKeyForRead = masterKeyRef.current;
+        if (masterKeyForRead) {
+          for (const m of messages) {
+            if (m.subject_enc) {
+              try {
+                const dec = await CONVOOZ_CRYPTO.decryptString(CONVOOZ_CRYPTO.b64.toBytes(m.subject_enc), masterKeyForRead);
+                if (dec !== null) m.subject = dec;
+              } catch { /* keep plaintext */ }
+            }
+            if (m.snippet_enc) {
+              try {
+                const dec = await CONVOOZ_CRYPTO.decryptString(CONVOOZ_CRYPTO.b64.toBytes(m.snippet_enc), masterKeyForRead);
+                if (dec !== null) m.snippet = dec;
+              } catch { /* keep plaintext */ }
+            }
+          }
+        }
         const shapedMessages = messages.flatMap(m => {
           const accountEmail = accountEmailById.get(m.mail_account_id) ?? '';
           const fromEmail = (m.from_email || '').toLowerCase();
@@ -6283,6 +6306,27 @@ function App({userId, onSignOut}) {
     return () => { cancelled = true; };
   }, [currentUser?.email]);
 
+  // Phase 1.3c backfill driver. Calls /me/crypto/backfill in 50-row
+  // batches until the server reports remaining=0 (or the route is
+  // unavailable, in which case we silently stop — prod backend may not
+  // have this endpoint yet). Best-effort and idempotent; safe to call
+  // on every unlock. v0.0.246.
+  async function runEncryptionBackfill() {
+    let safety = 200; // ≤ 10k mails total
+    while (safety-- > 0) {
+      try {
+        const r = await apiFetch('/me/crypto/backfill?limit=50', { method: 'POST' });
+        if (!r || typeof r.remaining !== 'number') break;
+        if (r.processed === 0 && r.remaining === 0) break;
+        console.log(`[backfill] +${r.processed} encrypted, ${r.remaining} to go`);
+        if (r.remaining === 0) break;
+      } catch (e) {
+        console.warn('[backfill] aborted:', e?.message || e);
+        break;
+      }
+    }
+  }
+
   // ── Crypto action handlers used by the passphrase modal ──
   async function handleCryptoSetup(passphrase) {
     setPassphraseModal(m => ({ ...m, busy: true, error: null }));
@@ -6313,6 +6357,10 @@ function App({userId, onSignOut}) {
       setCryptoStatus('unlocked');
       setPassphraseModal(null);
       setActionToast('Encryption enabled');
+      // Phase 1.3c: kick off backfill of pre-existing plaintext rows. Silent
+      // background process — no UI banner needed for now, finishes in a few
+      // batches for a typical 1k-mail mailbox.
+      runEncryptionBackfill();
     } catch (e) {
       setPassphraseModal(m => ({ ...m, busy: false, error: e?.message || 'Setup failed' }));
     }
@@ -6339,6 +6387,9 @@ function App({userId, onSignOut}) {
       setCryptoStatus('unlocked');
       setPassphraseModal(null);
       setActionToast('Encryption unlocked');
+      // Phase 1.3c: keep walking the backfill on every unlock — picks up
+      // mails synced while the user was locked.
+      runEncryptionBackfill();
     } catch (e) {
       setPassphraseModal(m => ({ ...m, busy: false, error: e?.message || 'Unlock failed' }));
     }

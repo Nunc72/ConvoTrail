@@ -13,7 +13,12 @@ function rowsWithIsoDates<T extends Record<string, unknown>>(rows: T[]): T[] {
   return rows.map(r => {
     const out: Record<string, unknown> = {};
     for (const [k, v] of Object.entries(r)) {
-      out[k] = v instanceof Date ? v.toISOString() : v;
+      if (v instanceof Date) out[k] = v.toISOString();
+      // bytea columns come back from pg as Node Buffers; JSON-serialize as
+      // base64 so the FE can decode them with atob → Uint8Array. Phase 1.4
+      // read-path needs subject_enc / snippet_enc in the bootstrap payload.
+      else if (Buffer.isBuffer(v)) out[k] = v.toString("base64");
+      else out[k] = v;
     }
     return out as T;
   });
@@ -71,10 +76,15 @@ export async function registerDataRoutes(app: FastifyInstance) {
         // Hide auto-purged rows entirely (v0.0.220): they sit in DB only so
         // sync's haveSet stops them from being re-fetched, but the user
         // shouldn't see them anywhere — not even in Archive.
+        // v0.0.246: include subject_enc + snippet_enc so the FE can render
+        // decrypted text once the user is unlocked. Plaintext stays in the
+        // payload as a fallback for locked sessions and as the source of
+        // truth until Phase 1.4 read-path settles and we can drop them.
         pool.query(`SELECT id, mail_account_id, folder, uid, message_id, thread_id,
                            from_email, from_name, to_emails, subject, snippet, date, flags,
                            direction, deleted_at, spam, has_attachments, attachments_meta,
-                           unsubscribe_url, unsubscribe_one_click
+                           unsubscribe_url, unsubscribe_one_click,
+                           subject_enc, snippet_enc
                       FROM messages
                      WHERE user_id = $1
                        AND NOT COALESCE((flags->>'auto_purged')::bool, false)
