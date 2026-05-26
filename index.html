@@ -193,7 +193,7 @@
        polish change is picked up by every browser as soon as the version
        is bumped — no manual cache-busters needed. Keep ?v= here in sync
        with APP_VERSION below at every deploy. -->
-  <link rel="stylesheet" href="polish.css?v=0.0.246"/>
+  <link rel="stylesheet" href="polish.css?v=0.0.247"/>
 </head>
 <body>
 <div id="root">
@@ -432,7 +432,7 @@ window.CONVOOZ_CRYPTO = CONVOOZ_CRYPTO;
 
 // ─── Constants ───────────────────────────────────────────────────────────────
 
-const APP_VERSION = "0.0.246"; // bumped on every deploy — keep in sync with version.json AND with the ?v= on polish.css above
+const APP_VERSION = "0.0.247"; // bumped on every deploy — keep in sync with version.json AND with the ?v= on polish.css above
 
 // ─── Backend + Supabase config ───────────────────────────────────────────────
 // Two stacks: prod (live testers) and staging (where new features land first).
@@ -541,6 +541,12 @@ function refreshSessionDedup() {
 // key would burn renders on every change.
 let _userKeyB64ForHeader = null;
 function setUserKeyHeader(b64OrNull) { _userKeyB64ForHeader = b64OrNull || null; }
+
+// Module-level CryptoKey reference for read-path decryption inside child
+// components (MessageDetail) without prop-drilling masterKeyRef from App.
+// Set whenever the user unlocks; cleared on lock/sign-out. v0.0.247.
+let _masterKeyForDecrypt = null;
+function setMasterKeyForDecrypt(cryptoKey) { _masterKeyForDecrypt = cryptoKey || null; }
 
 async function apiFetch(path, opts = {}) {
   // Build the Authorization header lazily so the 401-refresh path below
@@ -3037,7 +3043,30 @@ function MessageDetail({message,contact,isDeleted,msgTags,allTags,onReply,onRepl
     let cancelled = false;
     setEnrichedLoading(true);
     apiFetch(`/messages/${message.id}/body`)
-      .then(r => { if (!cancelled) setEnriched(r || null); })
+      .then(async r => {
+        if (cancelled || !r) return;
+        // Phase 1.4b — decrypt body_text_enc / body_html_enc when the
+        // user is unlocked. Failures (wrong key, tampered ct) keep the
+        // plaintext fields as fallback. v0.0.247. Module-level ref keeps
+        // MessageDetail decoupled from App's masterKeyRef without
+        // prop-drilling.
+        const masterKey = _masterKeyForDecrypt;
+        if (masterKey) {
+          if (r.body_text_enc) {
+            try {
+              const dec = await CONVOOZ_CRYPTO.decryptString(CONVOOZ_CRYPTO.b64.toBytes(r.body_text_enc), masterKey);
+              if (dec !== null) r = { ...r, text: dec };
+            } catch { /* keep plaintext */ }
+          }
+          if (r.body_html_enc) {
+            try {
+              const dec = await CONVOOZ_CRYPTO.decryptString(CONVOOZ_CRYPTO.b64.toBytes(r.body_html_enc), masterKey);
+              if (dec !== null) r = { ...r, html: dec };
+            } catch { /* keep plaintext */ }
+          }
+        }
+        if (!cancelled) setEnriched(r);
+      })
       .catch(e => { if (!cancelled) setEnrichedErr(e?.message || 'Failed to load full message'); })
       .finally(() => { if (!cancelled) setEnrichedLoading(false); });
     return () => { cancelled = true; };
@@ -6349,6 +6378,7 @@ function App({userId, onSignOut}) {
         }),
       });
       masterKeyRef.current = master;
+      setMasterKeyForDecrypt(master);
       // Export raw bytes once so every subsequent apiFetch can attach
       // X-User-Key without re-exporting per call.
       const rawForHeader = await CONVOOZ_CRYPTO.exportRawKey(master);
@@ -6382,6 +6412,7 @@ function App({userId, onSignOut}) {
         return;
       }
       masterKeyRef.current = master;
+      setMasterKeyForDecrypt(master);
       const rawForHeader = await CONVOOZ_CRYPTO.exportRawKey(master);
       setUserKeyHeader(CONVOOZ_CRYPTO.b64.fromBytes(rawForHeader));
       setCryptoStatus('unlocked');
@@ -6396,6 +6427,7 @@ function App({userId, onSignOut}) {
   }
   function handleCryptoLock() {
     masterKeyRef.current = null;
+    setMasterKeyForDecrypt(null);
     setUserKeyHeader(null);
     if (cryptoMaterial) setCryptoStatus('locked');
     else setCryptoStatus('unset');

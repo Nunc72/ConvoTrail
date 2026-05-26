@@ -8,6 +8,7 @@ import { simpleParser, type Attachment } from "mailparser";
 import { authPreHandler } from "../auth.js";
 import { logAudit } from "../audit.js";
 import { decrypt } from "../crypto.js";
+import { parseUserKeyHeader, encryptForUser } from "../userCrypto.js";
 import { requirePool } from "../db.js";
 
 interface MessageImapRow {
@@ -177,10 +178,13 @@ export async function registerMessagesRoutes(app: FastifyInstance) {
       const r = await pool.query<MessageImapRow & {
         body_text: string | null;
         body_html: string | null;
+        body_text_enc: Buffer | null;
+        body_html_enc: Buffer | null;
         attachments_meta: AttMeta[] | null;
       }>(
         `SELECT m.user_id, m.mail_account_id, m.folder, m.uid,
-                m.body_text, m.body_html, m.attachments_meta,
+                m.body_text, m.body_html, m.body_text_enc, m.body_html_enc,
+                m.attachments_meta,
                 a.imap_host, a.imap_port, a.imap_user, a.imap_cred_enc
            FROM messages m
            JOIN mail_accounts a ON a.id = m.mail_account_id
@@ -195,10 +199,15 @@ export async function registerMessagesRoutes(app: FastifyInstance) {
       // FE only needs /body for the attachments list when bodies were
       // cached without it, so we still serve a hit when attachments_meta
       // is present even with NULL bodies (rare: pure-binary mail).
+      // v0.0.247: also ship body_text_enc / body_html_enc as base64 so
+      // the FE can decrypt client-side when unlocked. Plaintext stays
+      // as the fallback for locked sessions.
       if (row.attachments_meta !== null && (row.body_text !== null || row.body_html !== null)) {
         return {
           html: row.body_html,
           text: row.body_text,
+          body_text_enc: row.body_text_enc ? row.body_text_enc.toString("base64") : null,
+          body_html_enc: row.body_html_enc ? row.body_html_enc.toString("base64") : null,
           attachments: row.attachments_meta,
         };
       }
@@ -266,19 +275,36 @@ export async function registerMessagesRoutes(app: FastifyInstance) {
       // call returns instantly from pg. Failure here is non-fatal — we
       // still served the user's current request, only the next one
       // would re-IMAP. Don't block on the write either.
+      // v0.0.247: also write body_text_enc + body_html_enc when the user
+      // is unlocked (X-User-Key present). COALESCE keeps existing _enc
+      // values if this request happens to be locked — never blow away a
+      // previously-encrypted blob with NULL.
       const textForCache = parsed.text || null;
+      const userKey = parseUserKeyHeader(req.headers["x-user-key"]);
+      let bodyTextEnc: Buffer | null = null;
+      let bodyHtmlEnc: Buffer | null = null;
+      if (userKey) {
+        [bodyTextEnc, bodyHtmlEnc] = await Promise.all([
+          encryptForUser(textForCache, userKey),
+          encryptForUser(html, userKey),
+        ]);
+      }
       pool.query(
         `UPDATE messages
             SET body_text = $1,
                 body_html = $2,
-                attachments_meta = $3
-          WHERE id = $4`,
-        [textForCache, html, JSON.stringify(publicList), req.params.id],
+                attachments_meta = $3,
+                body_text_enc = COALESCE($4, body_text_enc),
+                body_html_enc = COALESCE($5, body_html_enc)
+          WHERE id = $6`,
+        [textForCache, html, JSON.stringify(publicList), bodyTextEnc, bodyHtmlEnc, req.params.id],
       ).catch(e => req.log.warn({ err: e }, "/body cache write failed (non-fatal)"));
 
       return {
         html,
         text: textForCache,
+        body_text_enc: bodyTextEnc ? bodyTextEnc.toString("base64") : null,
+        body_html_enc: bodyHtmlEnc ? bodyHtmlEnc.toString("base64") : null,
         attachments: publicList,
       };
     },
