@@ -1,0 +1,40 @@
+name: Deploy Pages
+
+# The default "Deploy from a branch" pipeline got stuck building forever
+# on 26 May 2026 — three commits in a row sat in "building" status with
+# no error message and no progress. Switching the Pages source to "GitHub
+# Actions" and running an explicit Static-HTML deploy avoids that pipeline
+# entirely and gives us visible logs in the Actions tab.
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/configure-pages@v5
+      - name: Upload site
+        uses: actions/upload-pages-artifact@v3
+        with:
+          # Whole repo root — the FE is index.html + polish.css + version.json
+          # + icons + manifest.json + service-worker.js, all in /.
+          path: .
+      - name: Deploy
+        id: deployment
+        uses: actions/deploy-pages@v4
