@@ -193,7 +193,7 @@
        polish change is picked up by every browser as soon as the version
        is bumped — no manual cache-busters needed. Keep ?v= here in sync
        with APP_VERSION below at every deploy. -->
-  <link rel="stylesheet" href="polish.css?v=0.0.241"/>
+  <link rel="stylesheet" href="polish.css?v=0.0.242"/>
 </head>
 <body>
 <div id="root">
@@ -432,7 +432,7 @@ window.CONVOOZ_CRYPTO = CONVOOZ_CRYPTO;
 
 // ─── Constants ───────────────────────────────────────────────────────────────
 
-const APP_VERSION = "0.0.241"; // bumped on every deploy — keep in sync with version.json AND with the ?v= on polish.css above
+const APP_VERSION = "0.0.242"; // bumped on every deploy — keep in sync with version.json AND with the ?v= on polish.css above
 
 // ─── Backend + Supabase config ───────────────────────────────────────────────
 // Two stacks: prod (live testers) and staging (where new features land first).
@@ -6358,8 +6358,12 @@ function App({userId, onSignOut}) {
       if(!r.ok) throw new Error('HTTP '+r.status);
       const {version} = await r.json();
       if(version && version !== APP_VERSION){
-        // Force a cold load of the HTML: new query → new cache key
-        window.location.replace(window.location.pathname + '?v=' + version);
+        // Force a cold load of the HTML: new query → new cache key.
+        // v0.0.242: preserve other params (notably ?env=staging) so
+        // clicking "update" on staging doesn't snap back to prod.
+        const params = new URLSearchParams(window.location.search);
+        params.set('v', version);
+        window.location.replace(window.location.pathname + '?' + params.toString());
         return;
       }
       setUpdateStatus('uptodate');
@@ -8699,7 +8703,11 @@ function Root() {
         }
         console.log('[auto-update] version.json says', j.version, '— reloading');
         sessionStorage.setItem('convooz-update-redirect-at', String(Date.now()));
-        window.location.replace(window.location.pathname + '?v=' + j.version);
+        // v0.0.242: preserve ?env=staging when updating; only the v= param
+        // is replaced.
+        const params = new URLSearchParams(window.location.search);
+        params.set('v', j.version);
+        window.location.replace(window.location.pathname + '?' + params.toString());
       })
       .catch(() => {});
     return () => { cancelled = true; };
