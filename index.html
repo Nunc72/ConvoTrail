@@ -193,7 +193,7 @@
        polish change is picked up by every browser as soon as the version
        is bumped — no manual cache-busters needed. Keep ?v= here in sync
        with APP_VERSION below at every deploy. -->
-  <link rel="stylesheet" href="polish.css?v=0.0.252"/>
+  <link rel="stylesheet" href="polish.css?v=0.0.253"/>
 </head>
 <body>
 <div id="root">
@@ -432,7 +432,7 @@ window.CONVOOZ_CRYPTO = CONVOOZ_CRYPTO;
 
 // ─── Constants ───────────────────────────────────────────────────────────────
 
-const APP_VERSION = "0.0.252"; // bumped on every deploy — keep in sync with version.json AND with the ?v= on polish.css above
+const APP_VERSION = "0.0.253"; // bumped on every deploy — keep in sync with version.json AND with the ?v= on polish.css above
 
 // ─── Backend + Supabase config ───────────────────────────────────────────────
 // Two stacks: prod (live testers) and staging (where new features land first).
@@ -5008,8 +5008,14 @@ function LoginScreen() {
     let lookupEmail = null;
     try { lookupEmail = await lookupUsernameEmail(username.trim()); } catch (_) {}
     if (!lookupEmail) { setBusy(false); setErr('No account with that username.'); return; }
+    // Preserve ?env=staging on the redirect URL so the reset-flow lands
+    // back on the environment the user actually came from. Without this
+    // the redirect lost the query param and Supabase staging would send
+    // the user to prod after clicking the email link. v0.0.253.
+    const envParam = new URLSearchParams(window.location.search).get('env');
+    const redirectQs = envParam === 'staging' ? '?env=staging' : '';
     const { error } = await sb.auth.resetPasswordForEmail(lookupEmail, {
-      redirectTo: window.location.origin + window.location.pathname,
+      redirectTo: window.location.origin + window.location.pathname + redirectQs,
     });
     setBusy(false);
     if (error) { setErr(error.message); return; }
