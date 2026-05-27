@@ -193,7 +193,7 @@
        polish change is picked up by every browser as soon as the version
        is bumped — no manual cache-busters needed. Keep ?v= here in sync
        with APP_VERSION below at every deploy. -->
-  <link rel="stylesheet" href="polish.css?v=0.0.247"/>
+  <link rel="stylesheet" href="polish.css?v=0.0.248"/>
 </head>
 <body>
 <div id="root">
@@ -432,7 +432,7 @@ window.CONVOOZ_CRYPTO = CONVOOZ_CRYPTO;
 
 // ─── Constants ───────────────────────────────────────────────────────────────
 
-const APP_VERSION = "0.0.247"; // bumped on every deploy — keep in sync with version.json AND with the ?v= on polish.css above
+const APP_VERSION = "0.0.248"; // bumped on every deploy — keep in sync with version.json AND with the ?v= on polish.css above
 
 // ─── Backend + Supabase config ───────────────────────────────────────────────
 // Two stacks: prod (live testers) and staging (where new features land first).
@@ -6334,6 +6334,19 @@ function App({userId, onSignOut}) {
     })();
     return () => { cancelled = true; };
   }, [currentUser?.email]);
+
+  // Whenever the session is in the unlocked state, make sure the backfill
+  // has caught up — covers the case where the user set up encryption
+  // before v0.0.246 (auto-backfill didn't exist yet) or where the page
+  // reloads while unlocked. The runner is idempotent and exits in one
+  // round when nothing is left to do, so triggering it on every status
+  // transition to "unlocked" costs ~1 API call when already encrypted.
+  // v0.0.248.
+  useEffect(() => {
+    if (cryptoStatus !== 'unlocked') return;
+    runEncryptionBackfill();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [cryptoStatus]);
 
   // Phase 1.3c backfill driver. Calls /me/crypto/backfill in 50-row
   // batches until the server reports remaining=0 (or the route is
