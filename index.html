@@ -193,7 +193,7 @@
        polish change is picked up by every browser as soon as the version
        is bumped — no manual cache-busters needed. Keep ?v= here in sync
        with APP_VERSION below at every deploy. -->
-  <link rel="stylesheet" href="polish.css?v=0.0.248"/>
+  <link rel="stylesheet" href="polish.css?v=0.0.249"/>
 </head>
 <body>
 <div id="root">
@@ -432,7 +432,7 @@ window.CONVOOZ_CRYPTO = CONVOOZ_CRYPTO;
 
 // ─── Constants ───────────────────────────────────────────────────────────────
 
-const APP_VERSION = "0.0.248"; // bumped on every deploy — keep in sync with version.json AND with the ?v= on polish.css above
+const APP_VERSION = "0.0.249"; // bumped on every deploy — keep in sync with version.json AND with the ?v= on polish.css above
 
 // ─── Backend + Supabase config ───────────────────────────────────────────────
 // Two stacks: prod (live testers) and staging (where new features land first).
@@ -8354,10 +8354,10 @@ function App({userId, onSignOut}) {
                       <span className="flex items-center gap-2">
                         <span aria-hidden>{cryptoStatus === 'unlocked' ? '🔓' : '🔒'}</span>
                         <span>
-                          {cryptoStatus === 'unset'   ? 'Set up encryption'
-                          : cryptoStatus === 'locked' ? 'Unlock encryption'
-                          : cryptoStatus === 'unlocked' ? 'Encryption unlocked — Lock'
-                          : 'Encryption check failed'}
+                          {cryptoStatus === 'unset'   ? 'Set up decryption'
+                          : cryptoStatus === 'locked' ? 'Decryption disabled'
+                          : cryptoStatus === 'unlocked' ? 'Decryption enabled'
+                          : 'Decryption check failed'}
                         </span>
                       </span>
                     </button>
@@ -8481,10 +8481,10 @@ function App({userId, onSignOut}) {
                       <span className="flex items-center gap-2">
                         <span aria-hidden>{cryptoStatus === 'unlocked' ? '🔓' : '🔒'}</span>
                         <span>
-                          {cryptoStatus === 'unset'   ? 'Set up encryption'
-                          : cryptoStatus === 'locked' ? 'Unlock encryption'
-                          : cryptoStatus === 'unlocked' ? 'Encryption unlocked — Lock'
-                          : 'Encryption check failed'}
+                          {cryptoStatus === 'unset'   ? 'Set up decryption'
+                          : cryptoStatus === 'locked' ? 'Decryption disabled'
+                          : cryptoStatus === 'unlocked' ? 'Decryption enabled'
+                          : 'Decryption check failed'}
                         </span>
                       </span>
                     </button>
