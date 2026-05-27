@@ -52,7 +52,12 @@ await app.register(helmet, {
 // the brute-force-worthy ones.
 await app.register(rateLimit, {
   global: true,
-  max: 300,
+  // v0.0.251: bump from 300 to 800/minute. Encryption backfill (Phase
+  // 1.3c) walks ~20 batches in 20s plus the usual bootstrap refreshes
+  // and Realtime-triggered re-fetches; 300/min started hitting 429 on
+  // a moderately busy unlock session. 800/min still flags a runaway
+  // client at twice that volume.
+  max: 800,
   timeWindow: "1 minute",
   // Key by JWT subject when present, else by IP. That stops a single
   // user from accidentally hammering us regardless of their IP, while
@@ -82,7 +87,7 @@ await app.register(cors, {
 // Bumped on every backend deploy (lockstep with index.html's APP_VERSION),
 // so we can curl /health and verify which build is actually running on
 // Fly — useful when investigating whether a code change actually shipped.
-const BACKEND_VERSION = "0.0.247";
+const BACKEND_VERSION = "0.0.251";
 
 app.get("/health", async () => ({
   status: "ok",
