@@ -193,7 +193,7 @@
        polish change is picked up by every browser as soon as the version
        is bumped — no manual cache-busters needed. Keep ?v= here in sync
        with APP_VERSION below at every deploy. -->
-  <link rel="stylesheet" href="polish.css?v=0.0.249"/>
+  <link rel="stylesheet" href="polish.css?v=0.0.250"/>
 </head>
 <body>
 <div id="root">
@@ -432,7 +432,7 @@ window.CONVOOZ_CRYPTO = CONVOOZ_CRYPTO;
 
 // ─── Constants ───────────────────────────────────────────────────────────────
 
-const APP_VERSION = "0.0.249"; // bumped on every deploy — keep in sync with version.json AND with the ?v= on polish.css above
+const APP_VERSION = "0.0.250"; // bumped on every deploy — keep in sync with version.json AND with the ?v= on polish.css above
 
 // ─── Backend + Supabase config ───────────────────────────────────────────────
 // Two stacks: prod (live testers) and staging (where new features land first).
@@ -3045,24 +3045,36 @@ function MessageDetail({message,contact,isDeleted,msgTags,allTags,onReply,onRepl
     apiFetch(`/messages/${message.id}/body`)
       .then(async r => {
         if (cancelled || !r) return;
-        // Phase 1.4b — decrypt body_text_enc / body_html_enc when the
-        // user is unlocked. Failures (wrong key, tampered ct) keep the
-        // plaintext fields as fallback. v0.0.247. Module-level ref keeps
-        // MessageDetail decoupled from App's masterKeyRef without
-        // prop-drilling.
+        // Phase 1.4b — body decrypt path. Three cases (matching the
+        // bootstrap rule in App):
+        //   • Unlocked + body_text_enc present → decrypt, show plaintext
+        //   • Locked   + body_text_enc present → show the raw base64
+        //     ciphertext so the user can SEE that decryption is off.
+        //     For body_html in this case we drop it (rendering base64
+        //     as HTML is incomprehensible) and instead show the text
+        //     base64 — the user gets one visible blob, not two.
+        //   • No _enc at all → keep the plaintext fields untouched.
         const masterKey = _masterKeyForDecrypt;
-        if (masterKey) {
-          if (r.body_text_enc) {
+        if (r.body_text_enc) {
+          if (masterKey) {
             try {
               const dec = await CONVOOZ_CRYPTO.decryptString(CONVOOZ_CRYPTO.b64.toBytes(r.body_text_enc), masterKey);
               if (dec !== null) r = { ...r, text: dec };
             } catch { /* keep plaintext */ }
+          } else {
+            r = { ...r, text: r.body_text_enc, html: null };
           }
-          if (r.body_html_enc) {
+        }
+        if (r.body_html_enc) {
+          if (masterKey) {
             try {
               const dec = await CONVOOZ_CRYPTO.decryptString(CONVOOZ_CRYPTO.b64.toBytes(r.body_html_enc), masterKey);
               if (dec !== null) r = { ...r, html: dec };
             } catch { /* keep plaintext */ }
+          } else {
+            // Already null'd above if body_text_enc was present. Locked +
+            // html-only? Surface the html base64 as text instead.
+            if (!r.body_text_enc) r = { ...r, text: r.body_html_enc, html: null };
           }
         }
         if (!cancelled) setEnriched(r);
@@ -5843,26 +5855,35 @@ function App({userId, onSignOut}) {
             hiddenPairsBoot.add(h.message_id + "::" + h.contact_id);
           }
         }
-        // Phase 1.4 — pre-shape decrypt pass. Replaces plaintext subject /
-        // snippet with their decrypted versions when the user is unlocked
-        // AND the row carries an _enc payload (back-filled by 1.3c, or
-        // freshly written by 1.3a/1.3b). Plaintext stays as fallback for
-        // locked sessions and for rows that haven't been back-filled yet.
-        // v0.0.246.
+        // Phase 1.4 — pre-shape decrypt pass. Three cases per field:
+        //   1. Unlocked + _enc present  → decrypt, show plaintext
+        //   2. Locked + _enc present    → swap the visible field with the
+        //      raw base64 ciphertext so the user can SEE that the
+        //      decryption path is bypassed (Rik wanted a visible cue
+        //      that locking actually hides the data). v0.0.250.
+        //   3. No _enc at all           → keep the plaintext column as-is
+        //      (e.g. mails that haven't been back-filled yet, or rows
+        //      from before encryption was enabled).
         const masterKeyForRead = masterKeyRef.current;
-        if (masterKeyForRead) {
-          for (const m of messages) {
-            if (m.subject_enc) {
+        for (const m of messages) {
+          if (m.subject_enc) {
+            if (masterKeyForRead) {
               try {
                 const dec = await CONVOOZ_CRYPTO.decryptString(CONVOOZ_CRYPTO.b64.toBytes(m.subject_enc), masterKeyForRead);
                 if (dec !== null) m.subject = dec;
               } catch { /* keep plaintext */ }
+            } else {
+              m.subject = m.subject_enc; // raw base64 cue while locked
             }
-            if (m.snippet_enc) {
+          }
+          if (m.snippet_enc) {
+            if (masterKeyForRead) {
               try {
                 const dec = await CONVOOZ_CRYPTO.decryptString(CONVOOZ_CRYPTO.b64.toBytes(m.snippet_enc), masterKeyForRead);
                 if (dec !== null) m.snippet = dec;
               } catch { /* keep plaintext */ }
+            } else {
+              m.snippet = m.snippet_enc; // raw base64 cue while locked
             }
           }
         }
@@ -6431,6 +6452,10 @@ function App({userId, onSignOut}) {
       setCryptoStatus('unlocked');
       setPassphraseModal(null);
       setActionToast('Encryption unlocked');
+      // Re-fetch the bootstrap so the shape pass re-runs with the master
+      // key in scope — replaces the locked-state base64 cues with the
+      // decrypted plaintext. v0.0.250.
+      refreshData();
       // Phase 1.3c: keep walking the backfill on every unlock — picks up
       // mails synced while the user was locked.
       runEncryptionBackfill();
@@ -6444,6 +6469,9 @@ function App({userId, onSignOut}) {
     setUserKeyHeader(null);
     if (cryptoMaterial) setCryptoStatus('locked');
     else setCryptoStatus('unset');
+    // Re-fetch so the shape pass re-runs without the master key in scope
+    // — swaps the decrypted plaintext back to the raw base64 cues. v0.0.250.
+    refreshData();
   }
 
   const [updateStatus,     setUpdateStatus]     = useState(null); // null | 'checking' | 'uptodate' | 'error'
