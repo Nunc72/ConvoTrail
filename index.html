@@ -193,7 +193,7 @@
        polish change is picked up by every browser as soon as the version
        is bumped — no manual cache-busters needed. Keep ?v= here in sync
        with APP_VERSION below at every deploy. -->
-  <link rel="stylesheet" href="polish.css?v=0.0.251"/>
+  <link rel="stylesheet" href="polish.css?v=0.0.252"/>
 </head>
 <body>
 <div id="root">
@@ -432,7 +432,7 @@ window.CONVOOZ_CRYPTO = CONVOOZ_CRYPTO;
 
 // ─── Constants ───────────────────────────────────────────────────────────────
 
-const APP_VERSION = "0.0.251"; // bumped on every deploy — keep in sync with version.json AND with the ?v= on polish.css above
+const APP_VERSION = "0.0.252"; // bumped on every deploy — keep in sync with version.json AND with the ?v= on polish.css above
 
 // ─── Backend + Supabase config ───────────────────────────────────────────────
 // Two stacks: prod (live testers) and staging (where new features land first).
@@ -8369,14 +8369,13 @@ function App({userId, onSignOut}) {
                     </div>
                   )}
                   <div className="border-t border-gray-100"/>
-                  {/* Encryption status line. Opt-in for phase 1.2 — no
-                      data is encrypted yet, this is just the wire-up
-                      check (passphrase → wrapped key on server → unlock
-                      on next session). Click behaviour:
+                  {/* Encryption status line — staging-only until the feature
+                      is proven safe for prod testers. Phase 1.2 wire-up
+                      onwards. Click behaviour:
                         unset   → open setup modal
                         locked  → open unlock modal
                         unlocked→ lock (drops the in-memory key) */}
-                  {cryptoStatus !== 'idle' && (
+                  {CONVOOZ_ENV === 'staging' && cryptoStatus !== 'idle' && (
                     <button onClick={()=>{
                         setShowUserMenu(false);
                         if (cryptoStatus === 'unset')   setPassphraseModal({mode:'setup'});
@@ -8503,7 +8502,8 @@ function App({userId, onSignOut}) {
                     </div>
                   )}
                   <div className="border-t border-gray-100"/>
-                  {cryptoStatus !== 'idle' && (
+                  {/* Encryption status — staging-only until prod-safe. */}
+                  {CONVOOZ_ENV === 'staging' && cryptoStatus !== 'idle' && (
                     <button onClick={()=>{
                         setShowUserMenu(false);
                         if (cryptoStatus === 'unset')   setPassphraseModal({mode:'setup'});
