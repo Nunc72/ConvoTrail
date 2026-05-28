@@ -50,7 +50,7 @@ export async function registerDataRoutes(app: FastifyInstance) {
     // Phase 2 below pulls bodies for "actionable" messages only.
     let accountsRows: Record<string, unknown>[];
     let contactsRows: Record<string, unknown>[];
-    let contactEmailsRows: Array<{ contact_id: string; email: string; is_news: boolean | null; is_no_reply: boolean | null; is_muted: boolean | null }>;
+    let contactEmailsRows: Array<{ contact_id: string; email: string; is_news: boolean | null; is_no_reply: boolean | null; is_muted: boolean | null; email_enc: Buffer | null }>;
     let messagesRows: Record<string, unknown>[];
     let draftsRows: Record<string, unknown>[];
     let tagsRows: Record<string, unknown>[];
@@ -68,10 +68,14 @@ export async function registerDataRoutes(app: FastifyInstance) {
         pool.query(`SELECT id, email, display_name, provider, last_sync_at, auto_sync,
                            retention_deleted_days, retention_spam_days, sync_known_uids
                       FROM mail_accounts WHERE user_id = $1 ORDER BY created_at ASC`, [userId]),
+        // v0.0.254: include contact name_enc / org_enc + contact_emails
+        // email_enc for the FE read-path. email_blind is server-side only
+        // — never shipped to the client.
         pool.query(`SELECT id, name, org, color, portrait_url, r2m_days, primary_email,
-                           archived_at, deleted_at, is_news, is_no_reply, is_muted, mute_reason
+                           archived_at, deleted_at, is_news, is_no_reply, is_muted, mute_reason,
+                           name_enc, org_enc
                       FROM contacts WHERE user_id = $1 ORDER BY name ASC`, [userId]),
-        pool.query(`SELECT contact_id, email, is_news, is_no_reply, is_muted
+        pool.query(`SELECT contact_id, email, is_news, is_no_reply, is_muted, email_enc
                       FROM contact_emails WHERE user_id = $1`, [userId]),
         // Hide auto-purged rows entirely (v0.0.220): they sit in DB only so
         // sync's haveSet stops them from being re-fetched, but the user
@@ -109,11 +113,20 @@ export async function registerDataRoutes(app: FastifyInstance) {
       accountsRows      = rowsWithIsoDates(accountsR.rows);
       // Merge contact_emails into each contact under the same key the FE
       // used to receive from supabase-js's nested embedded select.
-      const contactEmailsByContact = new Map<string, Array<{ email: string; is_news: boolean | null; is_no_reply: boolean | null; is_muted: boolean | null }>>();
+      // v0.0.254: include email_enc (base64) so the FE can decrypt the
+      // address client-side when unlocked.
+      type CEFlat = { email: string; is_news: boolean | null; is_no_reply: boolean | null; is_muted: boolean | null; email_enc: string | null };
+      const contactEmailsByContact = new Map<string, Array<CEFlat>>();
       contactEmailsRows = contactEmailsR.rows;
-      for (const ce of contactEmailsRows) {
+      for (const ce of contactEmailsRows as Array<{ contact_id: string; email: string; is_news: boolean | null; is_no_reply: boolean | null; is_muted: boolean | null; email_enc: Buffer | null }>) {
         const arr = contactEmailsByContact.get(ce.contact_id) ?? [];
-        arr.push({ email: ce.email, is_news: ce.is_news, is_no_reply: ce.is_no_reply, is_muted: ce.is_muted });
+        arr.push({
+          email: ce.email,
+          is_news: ce.is_news,
+          is_no_reply: ce.is_no_reply,
+          is_muted: ce.is_muted,
+          email_enc: ce.email_enc ? ce.email_enc.toString("base64") : null,
+        });
         contactEmailsByContact.set(ce.contact_id, arr);
       }
       contactsRows = rowsWithIsoDates(contactsR.rows).map(c => ({

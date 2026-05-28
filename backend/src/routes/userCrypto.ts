@@ -197,4 +197,78 @@ export async function registerUserCryptoRoutes(app: FastifyInstance) {
     const remaining = Number(remainingR.rows[0].cnt);
     return { processed, remaining };
   });
+
+  // Phase 1.5a/b/c backfill: walk contacts + contact_emails and fill
+  // name_enc / org_enc / email_blind / email_enc when missing. Same
+  // batch shape as /me/crypto/backfill — returns { processed, remaining }.
+  // v0.0.254
+  app.post<{ Querystring: { limit?: string } }>("/me/crypto/backfill-contacts", auth, async (req, reply) => {
+    const userKey = parseUserKeyHeader(req.headers["x-user-key"]);
+    if (!userKey) return reply.code(401).send({ error: "X-User-Key header required" });
+    const limit = Math.min(Math.max(1, Number(req.query.limit) || 50), 200);
+    const pool = requirePool();
+    const userId = req.authUser!.id;
+
+    type CRow = { id: string; name: string | null; org: string | null };
+    const contactsBatch = (await pool.query<CRow>(
+      `SELECT id, name, org FROM contacts
+        WHERE user_id = $1 AND (name_enc IS NULL OR (org IS NOT NULL AND org_enc IS NULL))
+        ORDER BY created_at ASC LIMIT $2`,
+      [userId, limit],
+    )).rows;
+
+    let processedContacts = 0;
+    for (const c of contactsBatch) {
+      try {
+        const [nameEnc, orgEnc] = await Promise.all([
+          encryptForUser(c.name, userKey),
+          encryptForUser(c.org,  userKey),
+        ]);
+        await pool.query(
+          `UPDATE contacts SET name_enc = $1, org_enc = $2 WHERE id = $3`,
+          [nameEnc, orgEnc, c.id],
+        );
+        processedContacts++;
+      } catch (e) {
+        req.log.warn({ err: e, contactId: c.id }, "backfill-contacts: row failed");
+      }
+    }
+
+    type ERow = { contact_id: string; email: string };
+    const emailsBatch = (await pool.query<ERow>(
+      `SELECT contact_id, email FROM contact_emails
+        WHERE user_id = $1 AND (email_blind IS NULL OR email_enc IS NULL)
+        LIMIT $2`,
+      [userId, limit],
+    )).rows;
+
+    let processedEmails = 0;
+    for (const e of emailsBatch) {
+      try {
+        const [emailBlind, emailEnc] = await Promise.all([
+          blindIndexForUser(e.email, userKey),
+          encryptForUser(e.email,    userKey),
+        ]);
+        await pool.query(
+          `UPDATE contact_emails SET email_blind = $1, email_enc = $2
+            WHERE contact_id = $3 AND email = $4`,
+          [emailBlind, emailEnc, e.contact_id, e.email],
+        );
+        processedEmails++;
+      } catch (err) {
+        req.log.warn({ err, contactId: e.contact_id }, "backfill-contacts: email row failed");
+      }
+    }
+
+    const remainingR = await pool.query<{ c_cnt: string; e_cnt: string }>(
+      `SELECT
+         (SELECT COUNT(*) FROM contacts
+           WHERE user_id = $1 AND (name_enc IS NULL OR (org IS NOT NULL AND org_enc IS NULL)))::text AS c_cnt,
+         (SELECT COUNT(*) FROM contact_emails
+           WHERE user_id = $1 AND (email_blind IS NULL OR email_enc IS NULL))::text AS e_cnt`,
+      [userId],
+    );
+    const remaining = Number(remainingR.rows[0].c_cnt) + Number(remainingR.rows[0].e_cnt);
+    return { processed: processedContacts + processedEmails, remaining };
+  });
 }

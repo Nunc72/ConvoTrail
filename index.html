@@ -193,7 +193,7 @@
        polish change is picked up by every browser as soon as the version
        is bumped — no manual cache-busters needed. Keep ?v= here in sync
        with APP_VERSION below at every deploy. -->
-  <link rel="stylesheet" href="polish.css?v=0.0.253"/>
+  <link rel="stylesheet" href="polish.css?v=0.0.254"/>
 </head>
 <body>
 <div id="root">
@@ -432,7 +432,7 @@ window.CONVOOZ_CRYPTO = CONVOOZ_CRYPTO;
 
 // ─── Constants ───────────────────────────────────────────────────────────────
 
-const APP_VERSION = "0.0.253"; // bumped on every deploy — keep in sync with version.json AND with the ?v= on polish.css above
+const APP_VERSION = "0.0.254"; // bumped on every deploy — keep in sync with version.json AND with the ?v= on polish.css above
 
 // ─── Backend + Supabase config ───────────────────────────────────────────────
 // Two stacks: prod (live testers) and staging (where new features land first).
@@ -6054,6 +6054,40 @@ function App({userId, onSignOut}) {
           s.add(d.accountEmail);
         }
 
+        // Phase 1.5b/c — pre-shape decrypt for contacts. When unlocked
+        // AND the row has _enc data, replace the plaintext fields with
+        // the decrypted values. Plaintext stays as fallback for locked
+        // sessions and for rows that haven't been back-filled yet —
+        // unlike subject/snippet, we deliberately don't base64-cue
+        // here because name/email are load-bearing for the in-FE
+        // contact matching (emailToContactId, threading, etc.). v0.0.254.
+        if (masterKeyForRead) {
+          for (const c of contacts) {
+            if (c.name_enc) {
+              try {
+                const dec = await CONVOOZ_CRYPTO.decryptString(CONVOOZ_CRYPTO.b64.toBytes(c.name_enc), masterKeyForRead);
+                if (dec !== null) c.name = dec;
+              } catch { /* keep plaintext */ }
+            }
+            if (c.org_enc) {
+              try {
+                const dec = await CONVOOZ_CRYPTO.decryptString(CONVOOZ_CRYPTO.b64.toBytes(c.org_enc), masterKeyForRead);
+                if (dec !== null) c.org = dec;
+              } catch { /* keep plaintext */ }
+            }
+            if (Array.isArray(c.contact_emails)) {
+              for (const e of c.contact_emails) {
+                if (e.email_enc) {
+                  try {
+                    const dec = await CONVOOZ_CRYPTO.decryptString(CONVOOZ_CRYPTO.b64.toBytes(e.email_enc), masterKeyForRead);
+                    if (dec !== null) e.email = dec;
+                  } catch { /* keep plaintext */ }
+                }
+              }
+            }
+          }
+        }
+
         // Shape contacts
         const shapedContacts = contacts.map(c => {
           const rawEmails = (c.contact_emails && c.contact_emails.length
@@ -6381,21 +6415,33 @@ function App({userId, onSignOut}) {
   // have this endpoint yet). Best-effort and idempotent; safe to call
   // on every unlock. v0.0.246.
   async function runEncryptionBackfill() {
+    // Messages first.
     let safety = 200; // ≤ 10k mails total
     while (safety-- > 0) {
       try {
         const r = await apiFetch('/me/crypto/backfill?limit=50', { method: 'POST' });
         if (!r || typeof r.remaining !== 'number') break;
         if (r.processed === 0 && r.remaining === 0) break;
-        console.log(`[backfill] +${r.processed} encrypted, ${r.remaining} to go`);
+        console.log(`[backfill msg] +${r.processed} encrypted, ${r.remaining} to go`);
         if (r.remaining === 0) break;
-        // 250 ms breather between batches so we don't gobble the
-        // global 800/min rate-limit budget when the user has other
-        // things going on (bootstrap refreshes, Realtime pushes,
-        // sync polls). v0.0.251.
         await new Promise(r => setTimeout(r, 250));
       } catch (e) {
-        console.warn('[backfill] aborted:', e?.message || e);
+        console.warn('[backfill msg] aborted:', e?.message || e);
+        break;
+      }
+    }
+    // Then contacts + contact_emails (Phase 1.5a/b/c).
+    safety = 200;
+    while (safety-- > 0) {
+      try {
+        const r = await apiFetch('/me/crypto/backfill-contacts?limit=50', { method: 'POST' });
+        if (!r || typeof r.remaining !== 'number') break;
+        if (r.processed === 0 && r.remaining === 0) break;
+        console.log(`[backfill contacts] +${r.processed} encrypted, ${r.remaining} to go`);
+        if (r.remaining === 0) break;
+        await new Promise(r => setTimeout(r, 250));
+      } catch (e) {
+        console.warn('[backfill contacts] aborted:', e?.message || e);
         break;
       }
     }

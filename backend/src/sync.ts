@@ -636,7 +636,7 @@ export async function syncAccount(accountId: string, userKey?: Buffer): Promise<
     // 3) Auto-extract contacts (filter out the user's own address)
     allExtractedAddrs.delete(userEmail);
     if (allExtractedAddrs.size > 0) {
-      contactsCreated = await upsertContacts(userId, allExtractedAddrs);
+      contactsCreated = await upsertContacts(userId, allExtractedAddrs, userKey);
     }
 
     // 3a) Vangnet voor "wees" mails — distinct from_emails in DB die
@@ -662,7 +662,7 @@ export async function syncAccount(accountId: string, userKey?: Buffer): Promise<
         for (const r of orphans.rows) orphanMap.set(r.from_email, null);
         orphanMap.delete(userEmail);
         if (orphanMap.size > 0) {
-          contactsCreated += await upsertContacts(userId, orphanMap);
+          contactsCreated += await upsertContacts(userId, orphanMap, userKey);
         }
       }
     } catch {
@@ -1057,8 +1057,13 @@ function parseUnsubscribeHeaders(headers: Map<string, unknown> | undefined): { u
   return { url: null, oneClick: false };
 }
 
-async function upsertContacts(userId: string, addrs: Map<string, string | null>): Promise<number> {
+async function upsertContacts(
+  userId: string,
+  addrs: Map<string, string | null>,
+  userKey?: Buffer,
+): Promise<number> {
   if (!supabaseAdmin) return 0;
+  const pool = requirePool();
   const emails = [...addrs.keys()];
   // Find already-known emails
   const { data: existingEmails } = await supabaseAdmin
@@ -1070,27 +1075,44 @@ async function upsertContacts(userId: string, addrs: Map<string, string | null>)
   const toCreate = emails.filter(e => !have.has(e));
   if (toCreate.length === 0) return 0;
 
-  // Create contacts in batch. New contacts whose email has "noreply"
-  // or "no-reply" in the local part are tagged is_no_reply=true on
-  // creation — same auto-tagging spirit as the existing newsletter
-  // detection, but applied immediately at contact birth so we don't
-  // touch any existing contacts after the fact. The FE LeftColumn
-  // tab logic puts them under the Noreply tab (News still wins if a
-  // later sync also sets is_news from a List-Unsubscribe header).
+  // Phase 1.5b/c — when the user is unlocked, fill the encrypted twins
+  // for name/org and the blind index + ciphertext for email. Plaintext
+  // stays alongside (dual-write). Insert goes through pg-pool because
+  // supabase-js mangles Node Buffers as JSON.
   const NOREPLY_LOCAL_RE = /(noreply|no-reply)/i;
-  const contactRows = toCreate.map(email => {
+  let created = 0;
+  for (const email of toCreate) {
     const localPart = email.split("@")[0] ?? "";
-    return {
-      user_id: userId,
-      name: guessNameFromEmail(email, addrs.get(email) ?? null),
-      primary_email: email,
-      is_no_reply: NOREPLY_LOCAL_RE.test(localPart),
-    };
-  });
-  const { data: created, error: cErr } = await supabaseAdmin.from("contacts").insert(contactRows).select("id, primary_email");
-  if (cErr || !created) throw new Error(`contacts insert: ${cErr?.message}`);
-  const emailRows = created.map(c => ({ contact_id: c.id, user_id: userId, email: c.primary_email as string }));
-  const { error: eErr } = await supabaseAdmin.from("contact_emails").insert(emailRows);
-  if (eErr) throw new Error(`contact_emails insert: ${eErr.message}`);
-  return created.length;
+    const name = guessNameFromEmail(email, addrs.get(email) ?? null);
+    const isNoReply = NOREPLY_LOCAL_RE.test(localPart);
+    let nameEnc: Buffer | null = null;
+    let emailBlind: Buffer | null = null;
+    let emailEnc: Buffer | null = null;
+    if (userKey) {
+      [nameEnc, emailBlind, emailEnc] = await Promise.all([
+        encryptForUser(name,    userKey),
+        blindIndexForUser(email, userKey),
+        encryptForUser(email,   userKey),
+      ]);
+    }
+    try {
+      const cRes = await pool.query<{ id: string }>(
+        `INSERT INTO contacts (user_id, name, primary_email, is_no_reply, name_enc)
+              VALUES ($1, $2, $3, $4, $5)
+            RETURNING id`,
+        [userId, name, email, isNoReply, nameEnc],
+      );
+      const cid = cRes.rows[0]?.id;
+      if (!cid) continue;
+      await pool.query(
+        `INSERT INTO contact_emails (contact_id, user_id, email, email_blind, email_enc)
+              VALUES ($1, $2, $3, $4, $5)`,
+        [cid, userId, email, emailBlind, emailEnc],
+      );
+      created++;
+    } catch (e) {
+      console.warn(`[sync] upsertContacts: failed for ${email}:`, e instanceof Error ? e.message : e);
+    }
+  }
+  return created;
 }

@@ -327,24 +327,39 @@ export async function registerMailAccountsRoutes(app: FastifyInstance) {
             [req.authUser!.id, recipientEmails],
           );
           const have = new Set(existing.rows.map(r => r.email.toLowerCase()));
+          // Phase 1.5b/c — when the sender is unlocked, fill name_enc /
+          // email_blind / email_enc alongside the plaintext columns. Same
+          // dual-write rule as sync's upsertContacts. userKey was parsed
+          // earlier in this handler for the message INSERT.
+          const sendUserKey = parseUserKeyHeader(req.headers["x-user-key"]);
           for (const email of recipientEmails) {
             if (have.has(email)) continue;
             const local = email.split("@")[0];
             const guessedName = local.split(/[._-]+/).filter(Boolean)
               .map(p => p[0].toUpperCase() + p.slice(1)).join(" ") || email;
+            let nameEncCt: Buffer | null = null;
+            let emailBlind: Buffer | null = null;
+            let emailEnc:   Buffer | null = null;
+            if (sendUserKey) {
+              [nameEncCt, emailBlind, emailEnc] = await Promise.all([
+                encryptForUser(guessedName, sendUserKey),
+                blindIndexForUser(email,    sendUserKey),
+                encryptForUser(email,       sendUserKey),
+              ]);
+            }
             const cIns = await pool.query<{ id: string }>(
-              `INSERT INTO contacts (user_id, name, primary_email)
-                 VALUES ($1, $2, $3)
+              `INSERT INTO contacts (user_id, name, primary_email, name_enc)
+                 VALUES ($1, $2, $3, $4)
                  RETURNING id`,
-              [req.authUser!.id, guessedName, email],
+              [req.authUser!.id, guessedName, email, nameEncCt],
             );
             const newContactId = cIns.rows[0]?.id;
             if (newContactId) {
               await pool.query(
-                `INSERT INTO contact_emails (contact_id, user_id, email)
-                   VALUES ($1, $2, $3)
+                `INSERT INTO contact_emails (contact_id, user_id, email, email_blind, email_enc)
+                   VALUES ($1, $2, $3, $4, $5)
                  ON CONFLICT DO NOTHING`,
-                [newContactId, req.authUser!.id, email],
+                [newContactId, req.authUser!.id, email, emailBlind, emailEnc],
               );
             }
           }

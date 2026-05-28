@@ -2,6 +2,7 @@ import type { FastifyInstance } from "fastify";
 import { authPreHandler } from "../auth.js";
 import { requirePool } from "../db.js";
 import { supabaseWithJwt } from "../supabase.js";
+import { parseUserKeyHeader, encryptForUser } from "../userCrypto.js";
 
 export async function registerContactsRoutes(app: FastifyInstance) {
   const auth = { preHandler: authPreHandler };
@@ -56,6 +57,33 @@ export async function registerContactsRoutes(app: FastifyInstance) {
     if (Object.keys(patch).length > 0) {
       const { error } = await sb.from("contacts").update(patch).eq("id", req.params.id);
       if (error) return reply.internalServerError(error.message);
+    }
+
+    // Phase 1.5b — keep _enc twins in sync. Done as a separate pg-pool
+    // UPDATE because supabase-js mangles Node Buffers. v0.0.254.
+    const userKey = parseUserKeyHeader(req.headers["x-user-key"]);
+    if (userKey && (typeof b.name === "string" || b.org !== undefined)) {
+      const pool = requirePool();
+      const setParts: string[] = [];
+      const vals: unknown[] = [];
+      if (typeof b.name === "string" && b.name.trim()) {
+        const enc = await encryptForUser(b.name.trim(), userKey);
+        vals.push(enc);
+        setParts.push(`name_enc = $${vals.length}`);
+      }
+      if (b.org !== undefined) {
+        const orgVal = (typeof b.org === "string" && b.org.trim()) ? b.org.trim() : null;
+        const enc = await encryptForUser(orgVal, userKey);
+        vals.push(enc);
+        setParts.push(`org_enc = $${vals.length}`);
+      }
+      if (setParts.length > 0) {
+        vals.push(req.params.id);
+        await pool.query(
+          `UPDATE contacts SET ${setParts.join(", ")} WHERE id = $${vals.length}`,
+          vals,
+        );
+      }
     }
 
     // primary_email is validated against contact_emails before being stored.
