@@ -111,17 +111,46 @@ export async function registerUserCryptoRoutes(app: FastifyInstance) {
   //
   // POST /me/crypto/backfill?limit=N
   //   - Requires X-User-Key (the master key). 401 without.
-  //   - Picks up to N messages where subject_enc IS NULL AND deleted_at
-  //     IS NULL, encrypts every field that has plaintext, writes back.
+  //   - Picks up to N messages where ANY plaintext-with-value still
+  //     has a NULL _enc (or _blind) counterpart, encrypts every such
+  //     field, writes back. Old gate `subject_enc IS NULL` skipped rows
+  //     where subject got encrypted at sync but the body was only
+  //     fetched later (a click while locked), leaving body_text_enc
+  //     NULL forever — see v0.0.256 below.
   //   - Returns { processed, remaining } so the FE can keep calling
   //     until remaining == 0.
-  // v0.0.246
+  // v0.0.246 — initial backfill route.
+  // v0.0.256 — broaden the gate so unread mails whose body got cached
+  //            after the initial backfill pass still get picked up.
   app.post<{ Querystring: { limit?: string } }>("/me/crypto/backfill", auth, async (req, reply) => {
     const userKey = parseUserKeyHeader(req.headers["x-user-key"]);
     if (!userKey) return reply.code(401).send({ error: "X-User-Key header required" });
     const limit = Math.min(Math.max(1, Number(req.query.limit) || 50), 200);
     const pool = requirePool();
     const userId = req.authUser!.id;
+
+    // Gate: row needs work if ANY non-empty plaintext field still has
+    // a NULL _enc (or, for from_email/to_emails, a NULL blind). The
+    // empty-string check matches encryptForUser's own short-circuit
+    // (it returns NULL for ''), so we don't keep re-selecting rows
+    // that can never close their gate.
+    const needsWorkClause = `(
+         (subject    IS NOT NULL AND subject    != '' AND subject_enc      IS NULL)
+      OR (snippet    IS NOT NULL AND snippet    != '' AND snippet_enc      IS NULL)
+      OR (body_text  IS NOT NULL AND body_text  != '' AND body_text_enc    IS NULL)
+      OR (body_html  IS NOT NULL AND body_html  != '' AND body_html_enc    IS NULL)
+      OR (from_email IS NOT NULL AND from_email != '' AND from_email_enc   IS NULL)
+      OR (from_email IS NOT NULL AND from_email != '' AND from_email_blind IS NULL)
+      OR (from_name  IS NOT NULL AND from_name  != '' AND from_name_enc    IS NULL)
+      OR (to_emails  IS NOT NULL
+            AND jsonb_typeof(to_emails) = 'array'
+            AND jsonb_array_length(to_emails) > 0
+            AND to_emails_enc IS NULL)
+      OR (to_emails  IS NOT NULL
+            AND jsonb_typeof(to_emails) = 'array'
+            AND jsonb_array_length(to_emails) > 0
+            AND to_emails_blind IS NULL)
+    )`;
 
     // Pick the next batch — oldest first so the FE banner can give a
     // sensible "X of Y" progress signal while it walks the backlog.
@@ -138,7 +167,7 @@ export async function registerUserCryptoRoutes(app: FastifyInstance) {
     const rows: Row[] = (await pool.query<Row>(
       `SELECT id, subject, snippet, body_text, body_html, from_email, from_name, to_emails
          FROM messages
-        WHERE user_id = $1 AND deleted_at IS NULL AND subject_enc IS NULL
+        WHERE user_id = $1 AND deleted_at IS NULL AND ${needsWorkClause}
         ORDER BY date ASC NULLS FIRST
         LIMIT $2`,
       [userId, limit],
@@ -191,7 +220,7 @@ export async function registerUserCryptoRoutes(app: FastifyInstance) {
 
     const remainingR = await pool.query<{ cnt: string }>(
       `SELECT COUNT(*)::text AS cnt FROM messages
-        WHERE user_id = $1 AND deleted_at IS NULL AND subject_enc IS NULL`,
+        WHERE user_id = $1 AND deleted_at IS NULL AND ${needsWorkClause}`,
       [userId],
     );
     const remaining = Number(remainingR.rows[0].cnt);
