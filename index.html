@@ -193,7 +193,7 @@
        polish change is picked up by every browser as soon as the version
        is bumped — no manual cache-busters needed. Keep ?v= here in sync
        with APP_VERSION below at every deploy. -->
-  <link rel="stylesheet" href="polish.css?v=0.0.256"/>
+  <link rel="stylesheet" href="polish.css?v=0.0.257"/>
 </head>
 <body>
 <div id="root">
@@ -432,7 +432,7 @@ window.CONVOOZ_CRYPTO = CONVOOZ_CRYPTO;
 
 // ─── Constants ───────────────────────────────────────────────────────────────
 
-const APP_VERSION = "0.0.256"; // bumped on every deploy — keep in sync with version.json AND with the ?v= on polish.css above
+const APP_VERSION = "0.0.257"; // bumped on every deploy — keep in sync with version.json AND with the ?v= on polish.css above
 
 // ─── Backend + Supabase config ───────────────────────────────────────────────
 // Two stacks: prod (live testers) and staging (where new features land first).
@@ -5931,6 +5931,38 @@ function App({userId, onSignOut}) {
               } catch { /* keep plaintext */ }
             } else {
               m.from_name = m.from_name_enc;
+            }
+          }
+          // v0.0.257 — body_text / body_html via _enc twins. The
+          // bootstrap (data.ts) now ships ONLY body_text_enc /
+          // body_html_enc; the plaintext columns are no longer read
+          // server-side. Decrypt when unlocked, surface base64 cue
+          // when locked. Result lands on m.body_text / m.body_html
+          // so the existing message-shape at the bottom of this
+          // function (lines around 6000) maps it to message.body /
+          // message.bodyHtml without further changes.
+          if (m.body_text_enc) {
+            if (masterKeyForRead) {
+              try {
+                const dec = await CONVOOZ_CRYPTO.decryptString(CONVOOZ_CRYPTO.b64.toBytes(m.body_text_enc), masterKeyForRead);
+                if (dec !== null) m.body_text = dec;
+              } catch { /* leave untouched */ }
+            } else {
+              m.body_text = m.body_text_enc; // base64 cue while locked
+            }
+          }
+          if (m.body_html_enc) {
+            if (masterKeyForRead) {
+              try {
+                const dec = await CONVOOZ_CRYPTO.decryptString(CONVOOZ_CRYPTO.b64.toBytes(m.body_html_enc), masterKeyForRead);
+                if (dec !== null) m.body_html = dec;
+              } catch { /* leave untouched */ }
+            } else {
+              // Locked: replace body_html with base64 of body_text_enc
+              // if present (so the visible cue is one consistent blob),
+              // else with body_html_enc's own base64. Either way the
+              // user sees gibberish instead of plaintext markup.
+              m.body_html = m.body_text_enc || m.body_html_enc;
             }
           }
           // For to_emails we have to_emails_enc (JSON-encrypted list)

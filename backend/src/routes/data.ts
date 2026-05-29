@@ -382,7 +382,17 @@ export async function registerDataRoutes(app: FastifyInstance) {
     const RECENT_BODY_LIMIT = 0;
     type R2mRow = { message_id: string; dismissed_at: string | null };
     type MsgMeta = { id: string; direction: string; flags: Record<string, unknown> | null; mail_account_id: string };
-    type BodyRow = { id: string; body_text: string | null; body_html: string | null };
+    // v0.0.257 — only read the encrypted twins from the DB. The plaintext
+    // body_text / body_html columns are not touched in this bootstrap path
+    // anymore. Old behaviour leaked the plaintext into the FE payload for
+    // actionable mails (unread incoming + active r2m), and the FE render
+    // path's `enriched?.html || message.bodyHtml` fallback ended up showing
+    // that plaintext on locked sessions even when the encrypted twin was
+    // available. Per the project rule "alleen encrypted velden in backend,
+    // plaintext niet aanraken voor read", this query now selects only the
+    // _enc columns. The FE pre-shape decrypts them (unlocked) or surfaces
+    // a base64 cue (locked).
+    type BodyRow = { id: string; body_text_enc: Buffer | null; body_html_enc: Buffer | null };
     const r2mTyped = r2mRows as unknown as R2mRow[];
     const messagesTyped = mergedMessages as unknown as MsgMeta[];
     const r2mActiveIds = new Set(
@@ -399,7 +409,12 @@ export async function registerDataRoutes(app: FastifyInstance) {
     // messagesTyped is already ordered by date desc, so slice the head.
     const recentIds = messagesTyped.slice(0, RECENT_BODY_LIMIT).map(m => m.id);
     const bodyTargetIds = Array.from(new Set([...actionableIds, ...recentIds]));
-    const bodiesById = new Map<string, { body_text: string | null; body_html: string | null }>();
+    // Values stored as base64 strings ready for JSON. Mails whose _enc
+    // twins are still NULL (synced while locked, never backfilled yet)
+    // simply get NULL fields here — the FE then falls through to a
+    // lazy /body fetch on first click, which fills the _enc twins if
+    // X-User-Key is present.
+    const bodiesById = new Map<string, { body_text_enc: string | null; body_html_enc: string | null }>();
     if (bodyTargetIds.length > 0) {
       // Use direct pg, not supabase-js: a 300-id .in() filter serializes
       // into a ~17 KB URL ("?id=in.(uuid1,uuid2,...)") which exceeds
@@ -410,13 +425,16 @@ export async function registerDataRoutes(app: FastifyInstance) {
       try {
         const pool = requirePool();
         const bodiesRes = await pool.query<BodyRow>(
-          `SELECT id, body_text, body_html
+          `SELECT id, body_text_enc, body_html_enc
              FROM messages
             WHERE user_id = $1 AND id = ANY($2::uuid[])`,
           [req.authUser!.id, bodyTargetIds],
         );
         for (const row of bodiesRes.rows) {
-          bodiesById.set(row.id, { body_text: row.body_text, body_html: row.body_html });
+          bodiesById.set(row.id, {
+            body_text_enc: row.body_text_enc ? row.body_text_enc.toString("base64") : null,
+            body_html_enc: row.body_html_enc ? row.body_html_enc.toString("base64") : null,
+          });
         }
       } catch (e) {
         return sendTransientOr500(reply, e);
@@ -424,7 +442,9 @@ export async function registerDataRoutes(app: FastifyInstance) {
     }
     const messagesWithBodies = messagesTyped.map(m => {
       const body = bodiesById.get(m.id);
-      return body ? { ...m, body_text: body.body_text, body_html: body.body_html } : m;
+      return body
+        ? { ...m, body_text_enc: body.body_text_enc, body_html_enc: body.body_html_enc }
+        : m;
     });
     return {
       mail_accounts: accountsRows,

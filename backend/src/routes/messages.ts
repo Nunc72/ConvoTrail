@@ -279,6 +279,12 @@ export async function registerMessagesRoutes(app: FastifyInstance) {
       // is unlocked (X-User-Key present). COALESCE keeps existing _enc
       // values if this request happens to be locked — never blow away a
       // previously-encrypted blob with NULL.
+      // v0.0.256: when locked, the response also surfaces the existing
+      // _enc twins straight from the row (instead of leaving them null),
+      // so a locked first-open shows the base64 cue immediately rather
+      // than only on the second click after cache populates. The DB
+      // update path is unchanged — encryption only happens if userKey is
+      // present, COALESCE protects the column otherwise.
       const textForCache = parsed.text || null;
       const userKey = parseUserKeyHeader(req.headers["x-user-key"]);
       let bodyTextEnc: Buffer | null = null;
@@ -288,6 +294,9 @@ export async function registerMessagesRoutes(app: FastifyInstance) {
           encryptForUser(textForCache, userKey),
           encryptForUser(html, userKey),
         ]);
+      } else {
+        bodyTextEnc = row.body_text_enc;
+        bodyHtmlEnc = row.body_html_enc;
       }
       pool.query(
         `UPDATE messages
