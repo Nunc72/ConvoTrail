@@ -18,6 +18,12 @@ function rowsWithIsoDates<T extends Record<string, unknown>>(rows: T[]): T[] {
       // base64 so the FE can decode them with atob → Uint8Array. Phase 1.4
       // read-path needs subject_enc / snippet_enc in the bootstrap payload.
       else if (Buffer.isBuffer(v)) out[k] = v.toString("base64");
+      // bytea[] columns come back as JS arrays of Buffers — e.g.
+      // to_emails_blind. Serialise as array of base64 strings.
+      // v0.0.255.
+      else if (Array.isArray(v) && v.length > 0 && Buffer.isBuffer(v[0])) {
+        out[k] = v.map(b => Buffer.isBuffer(b) ? b.toString("base64") : b);
+      }
       else out[k] = v;
     }
     return out as T;
@@ -50,7 +56,7 @@ export async function registerDataRoutes(app: FastifyInstance) {
     // Phase 2 below pulls bodies for "actionable" messages only.
     let accountsRows: Record<string, unknown>[];
     let contactsRows: Record<string, unknown>[];
-    let contactEmailsRows: Array<{ contact_id: string; email: string; is_news: boolean | null; is_no_reply: boolean | null; is_muted: boolean | null; email_enc: Buffer | null }>;
+    let contactEmailsRows: Array<{ contact_id: string; email: string; is_news: boolean | null; is_no_reply: boolean | null; is_muted: boolean | null; email_enc: Buffer | null; email_blind: Buffer | null }>;
     let messagesRows: Record<string, unknown>[];
     let draftsRows: Record<string, unknown>[];
     let tagsRows: Record<string, unknown>[];
@@ -75,20 +81,25 @@ export async function registerDataRoutes(app: FastifyInstance) {
                            archived_at, deleted_at, is_news, is_no_reply, is_muted, mute_reason,
                            name_enc, org_enc
                       FROM contacts WHERE user_id = $1 ORDER BY name ASC`, [userId]),
-        pool.query(`SELECT contact_id, email, is_news, is_no_reply, is_muted, email_enc
+        pool.query(`SELECT contact_id, email, is_news, is_no_reply, is_muted, email_enc, email_blind
                       FROM contact_emails WHERE user_id = $1`, [userId]),
         // Hide auto-purged rows entirely (v0.0.220): they sit in DB only so
         // sync's haveSet stops them from being re-fetched, but the user
         // shouldn't see them anywhere — not even in Archive.
-        // v0.0.246: include subject_enc + snippet_enc so the FE can render
-        // decrypted text once the user is unlocked. Plaintext stays in the
-        // payload as a fallback for locked sessions and as the source of
-        // truth until Phase 1.4 read-path settles and we can drop them.
+        // v0.0.255 (Phase 1.5d): also include from_email_blind /
+        // to_emails_blind for FE-side contact matching that works
+        // without the master key, plus the encrypted header twins so
+        // the FE can either decrypt (unlocked) or render a base64 cue
+        // (locked). Plaintext from_email / to_emails columns stay
+        // in the payload for back-compat but the FE no longer touches
+        // them for matching or rendering.
         pool.query(`SELECT id, mail_account_id, folder, uid, message_id, thread_id,
                            from_email, from_name, to_emails, subject, snippet, date, flags,
                            direction, deleted_at, spam, has_attachments, attachments_meta,
                            unsubscribe_url, unsubscribe_one_click,
-                           subject_enc, snippet_enc
+                           subject_enc, snippet_enc,
+                           from_email_enc, from_name_enc, to_emails_enc,
+                           from_email_blind, to_emails_blind
                       FROM messages
                      WHERE user_id = $1
                        AND NOT COALESCE((flags->>'auto_purged')::bool, false)
@@ -115,17 +126,18 @@ export async function registerDataRoutes(app: FastifyInstance) {
       // used to receive from supabase-js's nested embedded select.
       // v0.0.254: include email_enc (base64) so the FE can decrypt the
       // address client-side when unlocked.
-      type CEFlat = { email: string; is_news: boolean | null; is_no_reply: boolean | null; is_muted: boolean | null; email_enc: string | null };
+      type CEFlat = { email: string; is_news: boolean | null; is_no_reply: boolean | null; is_muted: boolean | null; email_enc: string | null; email_blind: string | null };
       const contactEmailsByContact = new Map<string, Array<CEFlat>>();
       contactEmailsRows = contactEmailsR.rows;
-      for (const ce of contactEmailsRows as Array<{ contact_id: string; email: string; is_news: boolean | null; is_no_reply: boolean | null; is_muted: boolean | null; email_enc: Buffer | null }>) {
+      for (const ce of contactEmailsRows as Array<{ contact_id: string; email: string; is_news: boolean | null; is_no_reply: boolean | null; is_muted: boolean | null; email_enc: Buffer | null; email_blind: Buffer | null }>) {
         const arr = contactEmailsByContact.get(ce.contact_id) ?? [];
         arr.push({
           email: ce.email,
           is_news: ce.is_news,
           is_no_reply: ce.is_no_reply,
           is_muted: ce.is_muted,
-          email_enc: ce.email_enc ? ce.email_enc.toString("base64") : null,
+          email_enc:   ce.email_enc   ? ce.email_enc.toString("base64")   : null,
+          email_blind: ce.email_blind ? ce.email_blind.toString("base64") : null,
         });
         contactEmailsByContact.set(ce.contact_id, arr);
       }
@@ -194,22 +206,30 @@ export async function registerDataRoutes(app: FastifyInstance) {
       // against selAccounts ("stefan") and his entire contact list
       // disappeared from the LeftColumn visibility filter. Normalising
       // here makes the comparison case-insensitive end-to-end.
+      // v0.0.255 (Phase 1.5d): match on blind index only — no longer
+      // reads plaintext email column anywhere. Outgoing mail unnests
+      // to_emails_blind (bytea[]) instead of jsonb_array_elements
+      // over the plaintext to_emails column. Mails without blind
+      // data (i.e. synced before encryption was enabled and not yet
+      // back-filled) silently drop out of this aggregate.
       const cae = await pool.query<{ contact_id: string; account_emails: string[] }>(
         `WITH per_msg AS (
            SELECT LOWER(ma.email) AS account_email, ce.contact_id
              FROM messages m
              JOIN mail_accounts ma ON ma.id = m.mail_account_id
-             JOIN contact_emails ce ON LOWER(ce.email) = LOWER(m.from_email)
+             JOIN contact_emails ce ON ce.email_blind = m.from_email_blind
             WHERE m.user_id = $1
               AND NOT COALESCE((m.flags->>'auto_purged')::bool, false)
+              AND m.from_email_blind IS NOT NULL
             UNION ALL
            SELECT LOWER(ma.email) AS account_email, ce.contact_id
              FROM messages m
              JOIN mail_accounts ma ON ma.id = m.mail_account_id
-             CROSS JOIN LATERAL jsonb_array_elements(COALESCE(m.to_emails, '[]'::jsonb)) te
-             JOIN contact_emails ce ON LOWER(ce.email) = LOWER(te->>'email')
+             CROSS JOIN LATERAL unnest(m.to_emails_blind) tb
+             JOIN contact_emails ce ON ce.email_blind = tb
             WHERE m.user_id = $1
               AND NOT COALESCE((m.flags->>'auto_purged')::bool, false)
+              AND m.to_emails_blind IS NOT NULL
          )
          SELECT contact_id, ARRAY_AGG(DISTINCT account_email) AS account_emails
            FROM per_msg
@@ -241,18 +261,20 @@ export async function registerDataRoutes(app: FastifyInstance) {
       const pool = requirePool();
       // Distinct (contact_id, message) pairs across from/to matches —
       // a single physical mail counts once per contact involvement.
+      // v0.0.255 (Phase 1.5d): match on blind only — see comment on the
+      // contactAccountEmails CTE above for rationale.
       const baseCte = `
         WITH per_msg AS (
           SELECT ce.contact_id, m.id, m.date, m.flags, m.direction, m.deleted_at
             FROM messages m
-            JOIN contact_emails ce ON LOWER(ce.email) = LOWER(m.from_email)
-           WHERE m.user_id = $1
+            JOIN contact_emails ce ON ce.email_blind = m.from_email_blind
+           WHERE m.user_id = $1 AND m.from_email_blind IS NOT NULL
           UNION
           SELECT ce.contact_id, m.id, m.date, m.flags, m.direction, m.deleted_at
             FROM messages m
-            CROSS JOIN LATERAL jsonb_array_elements(COALESCE(m.to_emails, '[]'::jsonb)) te
-            JOIN contact_emails ce ON LOWER(ce.email) = LOWER(te->>'email')
-           WHERE m.user_id = $1
+            CROSS JOIN LATERAL unnest(m.to_emails_blind) tb
+            JOIN contact_emails ce ON ce.email_blind = tb
+           WHERE m.user_id = $1 AND m.to_emails_blind IS NOT NULL
         )
       `;
       const statsRes = await pool.query<{ contact_id: string; latest_date: string | null; unread: string; r2m: string }>(
@@ -273,15 +295,17 @@ export async function registerDataRoutes(app: FastifyInstance) {
         [req.authUser!.id],
       );
       // r2m: outgoing mail to a contact with an active r2m_state row.
+      // v0.0.255: blind-only match (Phase 1.5d).
       const r2mRes = await pool.query<{ contact_id: string; r2m: string }>(
         `WITH per_msg AS (
           SELECT ce.contact_id, m.id
             FROM messages m
-            CROSS JOIN LATERAL jsonb_array_elements(COALESCE(m.to_emails, '[]'::jsonb)) te
-            JOIN contact_emails ce ON LOWER(ce.email) = LOWER(te->>'email')
+            CROSS JOIN LATERAL unnest(m.to_emails_blind) tb
+            JOIN contact_emails ce ON ce.email_blind = tb
            WHERE m.user_id = $1
              AND m.direction = 'out'
              AND m.deleted_at IS NULL
+             AND m.to_emails_blind IS NOT NULL
          )
          SELECT pm.contact_id, COUNT(*)::text AS r2m
            FROM per_msg pm
@@ -544,39 +568,44 @@ export async function registerDataRoutes(app: FastifyInstance) {
       const pool = requirePool();
       const userId = req.authUser!.id;
 
-      // Resolve the contact's emails, scoped to this user.
-      const ce = await pool.query<{ email: string }>(
-        `SELECT email FROM contact_emails
-          WHERE contact_id = $1 AND user_id = $2`,
+      // v0.0.255 (Phase 1.5d): match on blind index — no plaintext
+      // email reads. Resolve the contact's email_blind values, then
+      // filter messages by from_email_blind OR any entry in
+      // to_emails_blind. Messages without blind data (pre-backfill)
+      // silently drop out; FE shows them via plaintext fallback
+      // until 1.3c finishes encrypting them.
+      const ce = await pool.query<{ email_blind: Buffer | null }>(
+        `SELECT email_blind FROM contact_emails
+          WHERE contact_id = $1 AND user_id = $2 AND email_blind IS NOT NULL`,
         [contactId, userId],
       );
       if (ce.rows.length === 0) return { messages: [] };
-      const emails = ce.rows.map(r => r.email.toLowerCase());
+      const blinds = ce.rows.map(r => r.email_blind).filter(b => b !== null) as Buffer[];
 
-      // ANY-of array match on from_email OR any to_emails entry. Same
-      // shape as /bootstrap.messages so the FE can apply its existing
-      // shaping logic without case-splitting.
       const r = await pool.query(
         `SELECT m.id, m.mail_account_id, m.folder, m.uid, m.message_id, m.thread_id,
                 m.from_email, m.from_name, m.to_emails,
                 m.subject, m.snippet, m.date, m.flags, m.direction,
                 m.deleted_at, m.spam, m.has_attachments, m.attachments_meta,
-                m.unsubscribe_url, m.unsubscribe_one_click
+                m.unsubscribe_url, m.unsubscribe_one_click,
+                m.subject_enc, m.snippet_enc,
+                m.from_email_enc, m.from_name_enc, m.to_emails_enc,
+                m.from_email_blind, m.to_emails_blind
            FROM messages m
           WHERE m.user_id = $1
             AND NOT COALESCE((m.flags->>'auto_purged')::bool, false)
             AND (
-              LOWER(m.from_email) = ANY($2::text[])
+              m.from_email_blind = ANY($2::bytea[])
               OR EXISTS (
-                SELECT 1 FROM jsonb_array_elements(COALESCE(m.to_emails, '[]'::jsonb)) te
-                 WHERE LOWER(te->>'email') = ANY($2::text[])
+                SELECT 1 FROM unnest(m.to_emails_blind) tb
+                 WHERE tb = ANY($2::bytea[])
               )
             )
           ORDER BY m.date DESC
           LIMIT $3`,
-        [userId, emails, limit],
+        [userId, blinds, limit],
       );
-      return { messages: r.rows };
+      return { messages: rowsWithIsoDates(r.rows) };
     },
   );
 }

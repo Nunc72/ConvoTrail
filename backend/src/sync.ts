@@ -1065,14 +1065,28 @@ async function upsertContacts(
   if (!supabaseAdmin) return 0;
   const pool = requirePool();
   const emails = [...addrs.keys()];
-  // Find already-known emails
-  const { data: existingEmails } = await supabaseAdmin
-    .from("contact_emails")
-    .select("email")
-    .eq("user_id", userId)
-    .in("email", emails);
-  const have = new Set((existingEmails ?? []).map(r => (r.email as string).toLowerCase()));
-  const toCreate = emails.filter(e => !have.has(e));
+  // v0.0.255 (Phase 1.5d): existing-check via email_blind, not plaintext.
+  // Requires userKey to be present — without it we can't compute the
+  // blind and we'd risk creating duplicate contacts on every sync.
+  if (!userKey) return 0;
+  const blindByEmail = new Map<string, Buffer>();
+  for (const email of emails) {
+    const b = await blindIndexForUser(email, userKey);
+    if (b) blindByEmail.set(email, b);
+  }
+  const blinds = [...blindByEmail.values()];
+  const existingR = await pool.query<{ email_blind: Buffer | null }>(
+    `SELECT email_blind FROM contact_emails
+      WHERE user_id = $1 AND email_blind = ANY($2::bytea[])`,
+    [userId, blinds],
+  );
+  const haveBlinds = new Set(
+    existingR.rows.map(r => r.email_blind?.toString("base64")).filter(Boolean) as string[],
+  );
+  const toCreate = emails.filter(e => {
+    const b = blindByEmail.get(e);
+    return b && !haveBlinds.has(b.toString("base64"));
+  });
   if (toCreate.length === 0) return 0;
 
   // Phase 1.5b/c — when the user is unlocked, fill the encrypted twins

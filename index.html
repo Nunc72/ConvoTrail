@@ -193,7 +193,7 @@
        polish change is picked up by every browser as soon as the version
        is bumped — no manual cache-busters needed. Keep ?v= here in sync
        with APP_VERSION below at every deploy. -->
-  <link rel="stylesheet" href="polish.css?v=0.0.254"/>
+  <link rel="stylesheet" href="polish.css?v=0.0.255"/>
 </head>
 <body>
 <div id="root">
@@ -432,7 +432,7 @@ window.CONVOOZ_CRYPTO = CONVOOZ_CRYPTO;
 
 // ─── Constants ───────────────────────────────────────────────────────────────
 
-const APP_VERSION = "0.0.254"; // bumped on every deploy — keep in sync with version.json AND with the ?v= on polish.css above
+const APP_VERSION = "0.0.255"; // bumped on every deploy — keep in sync with version.json AND with the ?v= on polish.css above
 
 // ─── Backend + Supabase config ───────────────────────────────────────────────
 // Two stacks: prod (live testers) and staging (where new features land first).
@@ -5750,7 +5750,20 @@ function App({userId, onSignOut}) {
         const accountEmailById = new Map();
         for (const a of mail_accounts) accountEmailById.set(a.id, (a.email || '').toLowerCase());
 
-        // email → contact_id lookup
+        // Phase 1.5d — blind-only contact matching. Builds a map from
+        // email_blind (base64) → contact_id; the FE doesn't read the
+        // plaintext email column anywhere in the matching path. Same
+        // function whether the user is unlocked or locked, since blind
+        // indices don't need the master key to compare. v0.0.255.
+        const blindToContactId = new Map();
+        for (const c of contacts) {
+          for (const ce of c.contact_emails || []) {
+            if (ce.email_blind) blindToContactId.set(ce.email_blind, c.id);
+          }
+        }
+        // Legacy plaintext map kept only for backwards-compat fallback
+        // on rows that haven't been back-filled yet — TODO drop once
+        // backfill is verified at 100%.
         const emailToContactId = new Map();
         for (const c of contacts) {
           for (const ce of c.contact_emails || []) {
@@ -5795,7 +5808,12 @@ function App({userId, onSignOut}) {
           // they follow the same path as any other reply.
           const fromLower = (m.from_email || '').toLowerCase();
           if (m.thread_id) repliedRfcIds.add(stripBrackets(m.thread_id));
-          const cid = emailToContactId.get(fromLower);
+          // Phase 1.5d: prefer blind match for the contact lookup so
+          // this works regardless of decryption status. Plaintext is
+          // only the fallback for pre-backfill rows. v0.0.255.
+          const cid =
+            (m.from_email_blind && blindToContactId.get(m.from_email_blind))
+            ?? emailToContactId.get(fromLower);
           if (cid == null) continue;
           if (!incomingByContact.has(cid)) incomingByContact.set(cid, []);
           incomingByContact.get(cid).push({ date: m.date || '', subjKey: subjectKey(m.subject) });
@@ -5892,6 +5910,54 @@ function App({userId, onSignOut}) {
               m.snippet = m.snippet_enc; // raw base64 cue while locked
             }
           }
+          // Phase 1.5d — from_email / from_name. Matching uses
+          // from_email_blind so we can safely replace the displayed
+          // address with the ciphertext cue when locked. v0.0.255.
+          if (m.from_email_enc) {
+            if (masterKeyForRead) {
+              try {
+                const dec = await CONVOOZ_CRYPTO.decryptString(CONVOOZ_CRYPTO.b64.toBytes(m.from_email_enc), masterKeyForRead);
+                if (dec !== null) m.from_email = dec;
+              } catch { /* keep plaintext */ }
+            } else {
+              m.from_email = m.from_email_enc;
+            }
+          }
+          if (m.from_name_enc) {
+            if (masterKeyForRead) {
+              try {
+                const dec = await CONVOOZ_CRYPTO.decryptString(CONVOOZ_CRYPTO.b64.toBytes(m.from_name_enc), masterKeyForRead);
+                if (dec !== null) m.from_name = dec;
+              } catch { /* keep plaintext */ }
+            } else {
+              m.from_name = m.from_name_enc;
+            }
+          }
+          // For to_emails we have to_emails_enc (JSON-encrypted list)
+          // and to_emails_blind (parallel array of HMACs). When
+          // unlocked we decrypt to a real {email, name, role}[].
+          // When locked we keep the jsonb plaintext's structure
+          // (so the shape can still read role) but blank the email
+          // string out — the corresponding blind already drives the
+          // matching, no plaintext address is needed.
+          if (m.to_emails_enc && masterKeyForRead) {
+            try {
+              const dec = await CONVOOZ_CRYPTO.decryptString(CONVOOZ_CRYPTO.b64.toBytes(m.to_emails_enc), masterKeyForRead);
+              if (dec !== null) {
+                try { m.to_emails = JSON.parse(dec); } catch { /* keep */ }
+              }
+            } catch { /* keep plaintext */ }
+          } else if (m.to_emails_enc && !masterKeyForRead && Array.isArray(m.to_emails)) {
+            // Locked + we have encrypted twins: replace each address
+            // with the per-recipient blind so the rendered text is
+            // clearly encrypted, but keep role intact so the shape
+            // can still tag TO vs CC vs BCC.
+            const blinds = Array.isArray(m.to_emails_blind) ? m.to_emails_blind : [];
+            m.to_emails = m.to_emails.map((r, i) => ({
+              ...r,
+              email: blinds[i] || r.email,
+            }));
+          }
         }
         const shapedMessages = messages.flatMap(m => {
           const accountEmail = accountEmailById.get(m.mail_account_id) ?? '';
@@ -5942,17 +6008,29 @@ function App({userId, onSignOut}) {
             sender,
           };
           if (m.direction === 'in') {
-            const contactId = emailToContactId.get(fromEmail) ?? null;
+            // Phase 1.5d: match by blind first, plaintext only as a
+            // back-compat fallback for rows not yet back-filled. v0.0.255.
+            const contactId =
+              (m.from_email_blind && blindToContactId.get(m.from_email_blind))
+              ?? emailToContactId.get(fromEmail)
+              ?? null;
             if (contactId === null) return [];
             if (hiddenPairsBoot.has(m.id + '::' + contactId)) return [];
             const r2mActive = isR2mActive(r2mRow) && !hasReply(m, contactId);
             return [{ ...baseFields, contactId, role: null, revert2me: r2mActive }];
           }
-          // Outgoing — fan out across recipients.
+          // Outgoing — fan out across recipients. Blind-based matching
+          // with the parallel to_emails_blind array; falls back to the
+          // plaintext email only when blind is missing (pre-backfill).
+          const toBlinds = Array.isArray(m.to_emails_blind) ? m.to_emails_blind : [];
           const entries = [];
           const seen = new Set();
-          for (const r of allRecipients) {
-            const cid = emailToContactId.get((r.email || '').toLowerCase());
+          for (let __i = 0; __i < allRecipients.length; __i++) {
+            const r = allRecipients[__i];
+            const blind = toBlinds[__i] || null;
+            const cid =
+              (blind && blindToContactId.get(blind))
+              ?? emailToContactId.get((r.email || '').toLowerCase());
             if (!cid || seen.has(cid)) continue;
             seen.add(cid);
             if (hiddenPairsBoot.has(m.id + '::' + cid)) continue;
@@ -6054,34 +6132,45 @@ function App({userId, onSignOut}) {
           s.add(d.accountEmail);
         }
 
-        // Phase 1.5b/c — pre-shape decrypt for contacts. When unlocked
-        // AND the row has _enc data, replace the plaintext fields with
-        // the decrypted values. Plaintext stays as fallback for locked
-        // sessions and for rows that haven't been back-filled yet —
-        // unlike subject/snippet, we deliberately don't base64-cue
-        // here because name/email are load-bearing for the in-FE
-        // contact matching (emailToContactId, threading, etc.). v0.0.254.
-        if (masterKeyForRead) {
-          for (const c of contacts) {
-            if (c.name_enc) {
+        // Phase 1.5b/c — pre-shape decrypt for contacts. Three cases:
+        //   1. Unlocked + _enc present → decrypt, show plaintext
+        //   2. Locked + _enc present   → show the raw base64 ciphertext
+        //      as a visible cue that decryption is off. This works for
+        //      name/org/email *because* matching now runs on blind
+        //      indices server- and FE-side (v0.0.255 Phase 1.5d), so
+        //      no longer depends on the plaintext column.
+        //   3. No _enc → keep the plaintext column as-is.
+        for (const c of contacts) {
+          if (c.name_enc) {
+            if (masterKeyForRead) {
               try {
                 const dec = await CONVOOZ_CRYPTO.decryptString(CONVOOZ_CRYPTO.b64.toBytes(c.name_enc), masterKeyForRead);
                 if (dec !== null) c.name = dec;
               } catch { /* keep plaintext */ }
+            } else {
+              c.name = c.name_enc;
             }
-            if (c.org_enc) {
+          }
+          if (c.org_enc) {
+            if (masterKeyForRead) {
               try {
                 const dec = await CONVOOZ_CRYPTO.decryptString(CONVOOZ_CRYPTO.b64.toBytes(c.org_enc), masterKeyForRead);
                 if (dec !== null) c.org = dec;
               } catch { /* keep plaintext */ }
+            } else {
+              c.org = c.org_enc;
             }
-            if (Array.isArray(c.contact_emails)) {
-              for (const e of c.contact_emails) {
-                if (e.email_enc) {
+          }
+          if (Array.isArray(c.contact_emails)) {
+            for (const e of c.contact_emails) {
+              if (e.email_enc) {
+                if (masterKeyForRead) {
                   try {
                     const dec = await CONVOOZ_CRYPTO.decryptString(CONVOOZ_CRYPTO.b64.toBytes(e.email_enc), masterKeyForRead);
                     if (dec !== null) e.email = dec;
                   } catch { /* keep plaintext */ }
+                } else {
+                  e.email = e.email_enc;
                 }
               }
             }
