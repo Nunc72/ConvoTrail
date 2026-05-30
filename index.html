@@ -193,7 +193,7 @@
        polish change is picked up by every browser as soon as the version
        is bumped — no manual cache-busters needed. Keep ?v= here in sync
        with APP_VERSION below at every deploy. -->
-  <link rel="stylesheet" href="polish.css?v=0.0.258"/>
+  <link rel="stylesheet" href="polish.css?v=0.0.259"/>
 </head>
 <body>
 <div id="root">
@@ -432,7 +432,7 @@ window.CONVOOZ_CRYPTO = CONVOOZ_CRYPTO;
 
 // ─── Constants ───────────────────────────────────────────────────────────────
 
-const APP_VERSION = "0.0.258"; // bumped on every deploy — keep in sync with version.json AND with the ?v= on polish.css above
+const APP_VERSION = "0.0.259"; // bumped on every deploy — keep in sync with version.json AND with the ?v= on polish.css above
 
 // ─── Backend + Supabase config ───────────────────────────────────────────────
 // Two stacks: prod (live testers) and staging (where new features land first).
@@ -6217,12 +6217,24 @@ function App({userId, onSignOut}) {
           // Primary (if known) always leads the list so the UI shows it first.
           const primary = c.primary_email && rawEmails.includes(c.primary_email) ? c.primary_email : rawEmails[0];
           const emails = primary ? [primary, ...rawEmails.filter(e => e !== primary)] : rawEmails;
+          // v0.0.259 — carry email_blind values into the shaped contact.
+          // The lazy-fetch path (lazyFetchContactMessages) needs blind-
+          // first matching to resolve contactId in locked sessions; the
+          // contacts pre-shape mutates `e.email` to the base64 cue when
+          // locked, so a plaintext-only lookup misses every match. The
+          // bootstrap shape already does blind-first matching via the
+          // blindToContactId map built at line ~5758 — lazy-fetch was
+          // the only path still depending on plaintext.
+          const emailBlinds = (c.contact_emails || [])
+            .map(e => e.email_blind)
+            .filter(Boolean);
           const accEmails = [...(contactAccounts.get(c.id) || [])];
           return {
             id: c.id,
             name: c.name || emails[0] || '(unknown)',
             org: c.org || '',
             emails,
+            emailBlinds,
             avatar: initialsOf(c.name || emails[0] || ''),
             color: c.color || colorFromSeed(c.name || emails[0] || ''),
             portrait: c.portrait_url || null,
@@ -7273,9 +7285,19 @@ function App({userId, onSignOut}) {
       // hijack projectlinnaeus's thread the moment that contact was the
       // first one clicked. Now the FE shape decides per-mail.
       const emailToContactId = new Map();
+      const blindToContactId = new Map();
       for (const c of contactList) {
         for (const e of (c.emails || [])) {
           if (e) emailToContactId.set(e.toLowerCase(), c.id);
+        }
+        // v0.0.259 — blind lookup is the primary key. Plaintext is a
+        // fallback for pre-backfill rows. In locked sessions the
+        // contacts pre-shape has replaced c.emails with the base64
+        // cue, so emailToContactId's keys are no longer real emails
+        // — without this blind map every lazy-fetched mail's lookup
+        // would miss and the contact's conversation would render empty.
+        for (const blind of (c.emailBlinds || [])) {
+          if (blind) blindToContactId.set(blind, c.id);
         }
       }
       const shaped = rows.flatMap(m => {
@@ -7314,15 +7336,27 @@ function App({userId, onSignOut}) {
           sender,
         };
         if (m.direction === 'in') {
-          const cid = emailToContactId.get(fromEmail) ?? null;
+          // v0.0.259 — blind-first, plaintext fallback (mirrors the
+          // bootstrap shape at line ~6046). Without this, locked
+          // sessions miss every match because emailToContactId's keys
+          // are base64 cues, not real emails.
+          const cid =
+            (m.from_email_blind && blindToContactId.get(m.from_email_blind))
+            ?? emailToContactId.get(fromEmail)
+            ?? null;
           if (cid === null) return [];
           return [{ ...baseFields, contactId: cid, role: null }];
         }
         // outgoing → fan out per recipient
+        const toBlinds = Array.isArray(m.to_emails_blind) ? m.to_emails_blind : [];
         const entries = [];
         const seen = new Set();
-        for (const r of allRecipients) {
-          const cid = emailToContactId.get((r.email || '').toLowerCase());
+        for (let __i = 0; __i < allRecipients.length; __i++) {
+          const r = allRecipients[__i];
+          const blind = toBlinds[__i] || null;
+          const cid =
+            (blind && blindToContactId.get(blind))
+            ?? emailToContactId.get((r.email || '').toLowerCase());
           if (!cid || seen.has(cid)) continue;
           seen.add(cid);
           entries.push({ ...baseFields, contactId: cid, role: r.role || 'to' });
