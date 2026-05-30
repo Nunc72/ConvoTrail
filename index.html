@@ -193,7 +193,7 @@
        polish change is picked up by every browser as soon as the version
        is bumped — no manual cache-busters needed. Keep ?v= here in sync
        with APP_VERSION below at every deploy. -->
-  <link rel="stylesheet" href="polish.css?v=0.0.263"/>
+  <link rel="stylesheet" href="polish.css?v=0.0.264"/>
 </head>
 <body>
 <div id="root">
@@ -432,7 +432,7 @@ window.CONVOOZ_CRYPTO = CONVOOZ_CRYPTO;
 
 // ─── Constants ───────────────────────────────────────────────────────────────
 
-const APP_VERSION = "0.0.263"; // bumped on every deploy — keep in sync with version.json AND with the ?v= on polish.css above
+const APP_VERSION = "0.0.264"; // bumped on every deploy — keep in sync with version.json AND with the ?v= on polish.css above
 
 // ─── Backend + Supabase config ───────────────────────────────────────────────
 // Two stacks: prod (live testers) and staging (where new features land first).
@@ -6719,6 +6719,18 @@ function App({userId, onSignOut}) {
     setUserKeyHeader(null);
     if (cryptoMaterial) setCryptoStatus('locked');
     else setCryptoStatus('unset');
+    // v0.0.264 — wipe the live in-memory snapshot of messageList and
+    // contactList BEFORE the bootstrap re-fetch starts. Without this,
+    // any mail or contact shape that was decrypted to plaintext during
+    // the previous unlocked session stays rendered for the 500ms-2s
+    // window between this synchronous call and the moment the new
+    // /bootstrap response lands with the locked-state pre-shape. The
+    // user sees plaintext subjects / snippets / from-addresses during
+    // that window — a regel-overtreding. Clearing the lists keeps the
+    // UI briefly empty (a few hundred ms) which is the right trade.
+    // The new bootstrap response will refill both with base64 cues.
+    setMessageList([]);
+    setContactList([]);
     // Re-fetch so the shape pass re-runs without the master key in scope
     // — swaps the decrypted plaintext back to the raw base64 cues. v0.0.250.
     refreshData();
