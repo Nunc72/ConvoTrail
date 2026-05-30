@@ -193,7 +193,7 @@
        polish change is picked up by every browser as soon as the version
        is bumped — no manual cache-busters needed. Keep ?v= here in sync
        with APP_VERSION below at every deploy. -->
-  <link rel="stylesheet" href="polish.css?v=0.0.262"/>
+  <link rel="stylesheet" href="polish.css?v=0.0.263"/>
 </head>
 <body>
 <div id="root">
@@ -432,7 +432,7 @@ window.CONVOOZ_CRYPTO = CONVOOZ_CRYPTO;
 
 // ─── Constants ───────────────────────────────────────────────────────────────
 
-const APP_VERSION = "0.0.262"; // bumped on every deploy — keep in sync with version.json AND with the ?v= on polish.css above
+const APP_VERSION = "0.0.263"; // bumped on every deploy — keep in sync with version.json AND with the ?v= on polish.css above
 
 // ─── Backend + Supabase config ───────────────────────────────────────────────
 // Two stacks: prod (live testers) and staging (where new features land first).
@@ -3002,7 +3002,7 @@ function fibSnoozeDays(count) {
   return b;
 }
 
-function MessageDetail({message,contact,isDeleted,msgTags,allTags,onReply,onReplyAll,onForward,onDelete,onRecover,onDismissR2m,onR2mSeen,onR2mSnooze,onMarkRead,onSnooze,onSpam,onUnsubscribe,snoozeCount=0,onAddTag,onRemoveTag,onSelectContact,selAccounts=[],fadeOut=false,fadeOutFast=false,slideIn=false,slideOut=false,fadingAlert=null,onHeaderHeight,mobileBack,mobileBackLabel}) {
+function MessageDetail({message,contact,isDeleted,msgTags,allTags,onReply,onReplyAll,onForward,onDelete,onRecover,onDismissR2m,onR2mSeen,onR2mSnooze,onMarkRead,onSnooze,onSpam,onUnsubscribe,snoozeCount=0,onAddTag,onRemoveTag,onSelectContact,selAccounts=[],fadeOut=false,fadeOutFast=false,slideIn=false,slideOut=false,fadingAlert=null,onHeaderHeight,mobileBack,mobileBackLabel,cryptoStatus='idle'}) {
   const isMobile = typeof window !== 'undefined' && window.innerWidth < 768;
   const headerRef = useRef(null);
   const [headerH, setHeaderH] = useState(0);
@@ -3082,7 +3082,17 @@ function MessageDetail({message,contact,isDeleted,msgTags,allTags,onReply,onRepl
       .catch(e => { if (!cancelled) setEnrichedErr(e?.message || 'Failed to load full message'); })
       .finally(() => { if (!cancelled) setEnrichedLoading(false); });
     return () => { cancelled = true; };
-  },[message?.id]);
+    // v0.0.263 — cryptoStatus added to deps so a lock-toggle re-fires
+    // the /body fetch with the current key state. Without it the
+    // enriched state stayed in whatever lock state the initial fetch
+    // landed under, so a mail opened while locked kept rendering its
+    // base64 cue even after the user unlocked, until they clicked the
+    // mail row again. Unread actionable mails get their body from the
+    // bootstrap pre-shape on messageList (and so don't hit /body at
+    // all) — the needsBodyFetch guard above skips the network call
+    // for them. The bug surfaces for read top-500 mails and lazy-
+    // fetched older mails, where /body is the only body source.
+  },[message?.id, cryptoStatus]);
   async function downloadAttachment(att) {
     try {
       // Reuse the blob fetcher so the same 401/503 retry plumbing applies
@@ -9011,6 +9021,7 @@ function App({userId, onSignOut}) {
                     isDeleted={selMsg!==null&&deletedIds.includes(selMsg)}
                     msgTags={msgTags[selMsg]||[]} allTags={allKnownTags}
                     selAccounts={selAccounts}
+                    cryptoStatus={cryptoStatus}
                     onReply={()=>handleReply(selectedMsg)} onReplyAll={()=>handleReplyAll(selectedMsg)} onForward={()=>handleForward(selectedMsg)}
                     onDelete={()=>handleDelete(selMsg)} onRecover={()=>handleRecover(selMsg)}
                     onDismissR2m={handleDismissR2m} onR2mSeen={handleR2mSeen} onR2mSnooze={handleR2mSnooze}
@@ -9074,6 +9085,7 @@ function App({userId, onSignOut}) {
                   isDeleted={selMsg!==null&&deletedIds.includes(selMsg)}
                   msgTags={msgTags[selMsg]||[]} allTags={allKnownTags}
                   selAccounts={selAccounts}
+                  cryptoStatus={cryptoStatus}
                   onReply={()=>handleReply(selectedMsg)} onReplyAll={()=>handleReplyAll(selectedMsg)} onForward={()=>handleForward(selectedMsg)}
                   onDelete={()=>handleDelete(selMsg)} onRecover={()=>handleRecover(selMsg)}
                   onDismissR2m={handleDismissR2m} onR2mSeen={handleR2mSeen} onR2mSnooze={handleR2mSnooze}
