@@ -219,11 +219,25 @@ export async function syncAccount(accountId: string, userKey?: Buffer): Promise<
     const allMail = mailboxes.find(m => m.specialUse === "\\All");
     const trash   = mailboxes.find(m => m.specialUse === "\\Trash");
     let targets: { path: string }[];
+    // v0.0.258 — capture inbox + sent paths so buildMessageRow can
+    // determine direction by folder (not just by from-vs-userEmail).
+    // Self-send mails (e.g. rik@tuithof.com → rik@tuithof.com) live in
+    // BOTH INBOX and INBOX.Sent: the INBOX copy is the received side
+    // (direction=in), the Sent copy is the sent side (direction=out).
+    // Old logic looked only at the from-address and classified both as
+    // "out", which made the INBOX-copy invisible in the inbox view.
+    // Gmail All-Mail target combines incoming + outgoing into a single
+    // folder, so for that path we leave inboxPath/sentPath undefined and
+    // fall back to the from-check inside buildMessageRow.
+    let inboxPath: string | undefined;
+    let sentPath:  string | undefined;
     if (allMail) {
       targets = [allMail];
     } else {
       const inbox = mailboxes.find(m => m.specialUse === "\\Inbox") || mailboxes.find(m => m.path.toUpperCase() === "INBOX");
       const sent  = mailboxes.find(m => m.specialUse === "\\Sent");
+      inboxPath = inbox?.path;
+      sentPath  = sent?.path;
       targets = [inbox, sent].filter(Boolean) as { path: string }[];
     }
     if (trash) targets.push(trash);
@@ -419,7 +433,7 @@ export async function syncAccount(accountId: string, userKey?: Buffer): Promise<
         for await (const msg of client.fetch(toFetch, { envelope: true, flags: true, source: true, internalDate: true, uid: true }, { uid: true })) {
           stat.fetched++;
           try {
-            const row = await buildMessageRow(msg, acc.id, userId, box.path, uidvalidity, userEmail, userKey);
+            const row = await buildMessageRow(msg, acc.id, userId, box.path, uidvalidity, userEmail, userKey, inboxPath, sentPath);
             rows.push(row);
             // Collect addresses for contact extraction. Rule:
             //   • Incoming mail → only the SENDER (from_email) becomes a
@@ -633,8 +647,11 @@ export async function syncAccount(accountId: string, userKey?: Buffer): Promise<
       }
     }
 
-    // 3) Auto-extract contacts (filter out the user's own address)
-    allExtractedAddrs.delete(userEmail);
+    // 3) Auto-extract contacts. v0.0.258: the user's OWN address is no
+    // longer filtered out — self-send mails (rik@me → rik@me) need a
+    // self-contact so the INBOX-copy (direction=in) has someone to
+    // attach to in the FE shape. Without a self-contact the shape's
+    // contactId lookup returns null and the mail is silently dropped.
     if (allExtractedAddrs.size > 0) {
       contactsCreated = await upsertContacts(userId, allExtractedAddrs, userKey);
     }
@@ -660,7 +677,9 @@ export async function syncAccount(accountId: string, userKey?: Buffer): Promise<
       if (orphans.rows.length > 0) {
         const orphanMap = new Map<string, string | null>();
         for (const r of orphans.rows) orphanMap.set(r.from_email, null);
-        orphanMap.delete(userEmail);
+        // v0.0.258 — userEmail no longer excluded; orphan-recovery now
+        // backfills a self-contact for accounts that have existing
+        // self-send rows in DB without a matching contact_emails entry.
         if (orphanMap.size > 0) {
           contactsCreated += await upsertContacts(userId, orphanMap, userKey);
         }
@@ -881,13 +900,25 @@ async function buildMessageRow(
   uidvalidity: bigint,
   userEmail: string,
   userKey?: Buffer,
+  inboxPath?: string,
+  sentPath?: string,
 ): Promise<Record<string, unknown>> {
   const parsed: ParsedMail | null = msg.source ? await simpleParser(msg.source) : null;
   const envelope = msg.envelope;
   const from = addrList(parsed?.from)[0] || (envelope?.from?.[0] ? { email: envelope.from[0].address?.toLowerCase() ?? "", name: envelope.from[0].name ?? null } : null);
   const tos = addrList(parsed?.to).map(a => ({ email: a.email, name: a.name, role: "to" }));
   const ccs = addrList(parsed?.cc).map(a => ({ email: a.email, name: a.name, role: "cc" }));
-  const direction = from?.email === userEmail ? "out" : "in";
+  // v0.0.258 — direction by folder when we can identify it (Inbox vs
+  // Sent on conventional IMAP), with the from-vs-userEmail check as the
+  // fallback for Gmail All-Mail (no inbox/sent distinction) and the
+  // Trash folder (could be either direction depending on what got moved
+  // there). Self-send (from = userEmail) used to be classified as "out"
+  // by the from-check alone — for the INBOX copy that's wrong; the
+  // user *received* that mail, so the folder pin is authoritative.
+  const direction: "in" | "out" =
+    (sentPath  && folder === sentPath)  ? "out" :
+    (inboxPath && folder === inboxPath) ? "in"  :
+    (from?.email === userEmail ? "out" : "in");
 
   const references = parsed?.references ? (Array.isArray(parsed.references) ? parsed.references : [parsed.references]) : [];
   const threadId = references[0] || parsed?.inReplyTo || envelope?.messageId || null;
