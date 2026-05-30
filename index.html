@@ -193,7 +193,7 @@
        polish change is picked up by every browser as soon as the version
        is bumped — no manual cache-busters needed. Keep ?v= here in sync
        with APP_VERSION below at every deploy. -->
-  <link rel="stylesheet" href="polish.css?v=0.0.264"/>
+  <link rel="stylesheet" href="polish.css?v=0.0.265"/>
 </head>
 <body>
 <div id="root">
@@ -432,7 +432,7 @@ window.CONVOOZ_CRYPTO = CONVOOZ_CRYPTO;
 
 // ─── Constants ───────────────────────────────────────────────────────────────
 
-const APP_VERSION = "0.0.264"; // bumped on every deploy — keep in sync with version.json AND with the ?v= on polish.css above
+const APP_VERSION = "0.0.265"; // bumped on every deploy — keep in sync with version.json AND with the ?v= on polish.css above
 
 // ─── Backend + Supabase config ───────────────────────────────────────────────
 // Two stacks: prod (live testers) and staging (where new features land first).
@@ -7343,7 +7343,17 @@ function App({userId, onSignOut}) {
   async function lazyFetchContactMessages(contactId) {
     setLazyFetchingContactId(contactId);
     try {
+      // v0.0.265 — snapshot the lock state at fetch start. If the user
+      // toggles lock during the await, abandon this run so the auto-
+      // lazy-fetch useEffect from v0.0.261 can fire a fresh attempt
+      // under the new key state. Without this check the captured
+      // masterKeyForRead below kept the OLD key after a mid-flight
+      // toggle: pre-shape decrypted with the unlocked key, plaintext
+      // subjects/snippets leaked into messageList, and the locked-
+      // state UI rendered them straight from there.
+      const startKey = masterKeyRef.current;
       const r = await apiFetch(`/messages-for-contact?contact=${encodeURIComponent(contactId)}`);
+      if (masterKeyRef.current !== startKey) return;
       const rows = r?.messages || [];
       if (rows.length === 0) return;
 
@@ -7505,6 +7515,12 @@ function App({userId, onSignOut}) {
         }
         return entries;
       });
+      // v0.0.265 — second lock-state check after the pre-shape loop.
+      // decryptString is async; a toggle could land between iterations
+      // (most likely toggle TO locked, since unlock requires a modal).
+      // If state changed, throw the shaped result away — the auto-
+      // lazy-fetch useEffect will fire again under the new state.
+      if (masterKeyRef.current !== startKey) return;
       setMessageList(prev => {
         // Dedup by composite (id, contactId) key — a mail with multiple
         // recipients legitimately lives under multiple contactIds.
