@@ -193,7 +193,7 @@
        polish change is picked up by every browser as soon as the version
        is bumped — no manual cache-busters needed. Keep ?v= here in sync
        with APP_VERSION below at every deploy. -->
-  <link rel="stylesheet" href="polish.css?v=0.0.265"/>
+  <link rel="stylesheet" href="polish.css?v=0.0.266"/>
 </head>
 <body>
 <div id="root">
@@ -432,7 +432,7 @@ window.CONVOOZ_CRYPTO = CONVOOZ_CRYPTO;
 
 // ─── Constants ───────────────────────────────────────────────────────────────
 
-const APP_VERSION = "0.0.265"; // bumped on every deploy — keep in sync with version.json AND with the ?v= on polish.css above
+const APP_VERSION = "0.0.266"; // bumped on every deploy — keep in sync with version.json AND with the ?v= on polish.css above
 
 // ─── Backend + Supabase config ───────────────────────────────────────────────
 // Two stacks: prod (live testers) and staging (where new features land first).
@@ -6048,6 +6048,21 @@ function App({userId, onSignOut}) {
             unsubscribeUrl: m.unsubscribe_url || null,
             unsubscribeOneClick: !!m.unsubscribe_one_click,
             sender,
+            // v0.0.266 — carry the encrypted twins through the shape so
+            // lockedMsgShape() can swap visible fields in place on a
+            // lock-toggle. Cheap: each is a short base64 string except
+            // body_*_enc which only flows in for actionable mails
+            // (unread incoming + active r2m). The role array preserves
+            // the to/cc/bcc tag for each recipient so the locked
+            // shape can rebuild the per-role lists from to_emails_blind.
+            subject_enc:    m.subject_enc    ?? null,
+            snippet_enc:    m.snippet_enc    ?? null,
+            from_email_enc: m.from_email_enc ?? null,
+            from_name_enc:  m.from_name_enc  ?? null,
+            body_text_enc:  m.body_text_enc  ?? null,
+            body_html_enc:  m.body_html_enc  ?? null,
+            to_emails_blind: Array.isArray(m.to_emails_blind) ? m.to_emails_blind : null,
+            toEmailsRaw: allRecipients.map(e => ({ role: e.role || 'to', name: e.name ?? null })),
           };
           if (m.direction === 'in') {
             // Phase 1.5d: match by blind first, plaintext only as a
@@ -6239,12 +6254,26 @@ function App({userId, onSignOut}) {
             .map(e => e.email_blind)
             .filter(Boolean);
           const accEmails = [...(contactAccounts.get(c.id) || [])];
+          // v0.0.266 — emailEncs parallel to emails so lockedContactShape
+          // can swap each address to its ciphertext cue. The pre-shape
+          // pass above already replaced e.email with e.email_enc in
+          // locked sessions, so for a bootstrap done while LOCKED the
+          // entries here line up. For a bootstrap done while UNLOCKED
+          // e.email is the decrypted plaintext but e.email_enc is the
+          // raw base64 — that's what lockedContactShape uses.
+          const emailEncs = (c.contact_emails && c.contact_emails.length)
+            ? c.contact_emails.map(e => e.email_enc ?? null)
+            : (c.primary_email ? [null] : []);
           return {
             id: c.id,
             name: c.name || emails[0] || '(unknown)',
             org: c.org || '',
             emails,
             emailBlinds,
+            // v0.0.266 — encrypted twins for in-place lock-toggle swap.
+            name_enc: c.name_enc ?? null,
+            org_enc:  c.org_enc  ?? null,
+            emailEncs,
             avatar: initialsOf(c.name || emails[0] || ''),
             color: c.color || colorFromSeed(c.name || emails[0] || ''),
             portrait: c.portrait_url || null,
@@ -6719,21 +6748,70 @@ function App({userId, onSignOut}) {
     setUserKeyHeader(null);
     if (cryptoMaterial) setCryptoStatus('locked');
     else setCryptoStatus('unset');
-    // v0.0.264 — wipe the live in-memory snapshot of messageList and
-    // contactList BEFORE the bootstrap re-fetch starts. Without this,
-    // any mail or contact shape that was decrypted to plaintext during
-    // the previous unlocked session stays rendered for the 500ms-2s
-    // window between this synchronous call and the moment the new
-    // /bootstrap response lands with the locked-state pre-shape. The
-    // user sees plaintext subjects / snippets / from-addresses during
-    // that window — a regel-overtreding. Clearing the lists keeps the
-    // UI briefly empty (a few hundred ms) which is the right trade.
-    // The new bootstrap response will refill both with base64 cues.
-    setMessageList([]);
-    setContactList([]);
+    // v0.0.266 — replaces v0.0.264's setMessageList([])/setContactList([])
+    // brute clear. That earlier approach prevented plaintext from
+    // surviving the bootstrap-fetch window but cost the user's mail-
+    // detail focus and the contact-list scroll position. Instead, swap
+    // the visible fields IN PLACE on every existing entry using the
+    // _enc/blind values we now carry on the shaped objects. The shape
+    // additions are in the bootstrap and lazy-fetch shape blocks
+    // around lines ~6033 and ~7505 respectively. Once swapped, the
+    // bootstrap re-fetch lands and redundantly produces the same
+    // base64 cues — no flicker for the user.
+    setMessageList(prev => prev.map(m => lockedMsgShape(m)));
+    setContactList(prev => prev.map(c => lockedContactShape(c)));
     // Re-fetch so the shape pass re-runs without the master key in scope
     // — swaps the decrypted plaintext back to the raw base64 cues. v0.0.250.
     refreshData();
+  }
+  // Helper used by handleCryptoLock and elsewhere to derive a locked-
+  // state view of a shaped message without re-running the bootstrap.
+  // Requires the shape to carry subject_enc / snippet_enc / etc. — see
+  // shapedMessages / lazy-fetch shape.
+  function lockedMsgShape(m) {
+    const result = { ...m };
+    if (m.subject_enc)    result.subject = m.subject_enc;
+    if (m.snippet_enc)    result.snippet = m.snippet_enc;
+    if (m.from_email_enc) result.from    = m.from_email_enc;
+    // Body fields: drop to undefined when the _enc twin is present
+    // so MessageDetail's /body fetch (re-runs on cryptoStatus change
+    // per v0.0.263) refills them with the locked-state base64 cue.
+    // Otherwise leave unset (lazy-fetched mails never had body in
+    // their shape to begin with — they trigger the same /body fetch).
+    if (m.body_text_enc || m.body_html_enc) {
+      result.body = undefined;
+      result.bodyHtml = undefined;
+    }
+    // Recipient lists: rebuild from the blind array if present so the
+    // detail-view headers don't keep showing plaintext to/cc/bcc
+    // addresses. Falls back to whatever was there otherwise.
+    if (Array.isArray(m.toEmailsRaw) && Array.isArray(m.to_emails_blind)
+        && m.toEmailsRaw.length > 0) {
+      const blindByIdx = m.to_emails_blind;
+      const rebuilt = m.toEmailsRaw.map((r, i) => ({
+        ...r,
+        email: blindByIdx[i] || r.email,
+      }));
+      result.toList  = rebuilt.filter(e => (e.role || 'to') === 'to') .map(e => e.email).filter(Boolean);
+      result.ccList  = rebuilt.filter(e => e.role === 'cc') .map(e => e.email).filter(Boolean);
+      result.bccList = rebuilt.filter(e => e.role === 'bcc').map(e => e.email).filter(Boolean);
+      result.to      = result.toList[0] || rebuilt[0]?.email || '';
+    }
+    return result;
+  }
+  function lockedContactShape(c) {
+    const result = { ...c };
+    if (c.name_enc) result.name = c.name_enc;
+    if (c.org_enc)  result.org  = c.org_enc;
+    // contact emails: derive from emailEncs (parallel to emails) when
+    // available so per-contact email lists in the UI no longer show
+    // plaintext. emailBlinds is a different array (used for matching),
+    // not the display version.
+    if (Array.isArray(c.emailEncs) && Array.isArray(c.emails)
+        && c.emailEncs.length === c.emails.length) {
+      result.emails = c.emails.map((e, i) => c.emailEncs[i] || e);
+    }
+    return result;
   }
 
   const [updateStatus,     setUpdateStatus]     = useState(null); // null | 'checking' | 'uptodate' | 'error'
@@ -7472,6 +7550,17 @@ function App({userId, onSignOut}) {
           from: m.from_email || '',
           to: toList[0] || allRecipients[0]?.email || '',
           toList, ccList, bccList,
+          // v0.0.266 — same _enc payload as bootstrap shape so the
+          // in-place lockedMsgShape swap works for lazy-fetched mails
+          // too (rank > 500 contacts like the Fitbit thread).
+          subject_enc:    m.subject_enc    ?? null,
+          snippet_enc:    m.snippet_enc    ?? null,
+          from_email_enc: m.from_email_enc ?? null,
+          from_name_enc:  m.from_name_enc  ?? null,
+          body_text_enc:  m.body_text_enc  ?? null,
+          body_html_enc:  m.body_html_enc  ?? null,
+          to_emails_blind: Array.isArray(m.to_emails_blind) ? m.to_emails_blind : null,
+          toEmailsRaw: allRecipients.map(e => ({ role: e.role || 'to', name: e.name ?? null })),
           date: m.date,
           read: !!m.flags?.seen,
           revert2me: false,   // r2m signals don't survive a lazy-fetch
