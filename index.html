@@ -193,7 +193,7 @@
        polish change is picked up by every browser as soon as the version
        is bumped — no manual cache-busters needed. Keep ?v= here in sync
        with APP_VERSION below at every deploy. -->
-  <link rel="stylesheet" href="polish.css?v=0.0.261"/>
+  <link rel="stylesheet" href="polish.css?v=0.0.262"/>
 </head>
 <body>
 <div id="root">
@@ -432,7 +432,7 @@ window.CONVOOZ_CRYPTO = CONVOOZ_CRYPTO;
 
 // ─── Constants ───────────────────────────────────────────────────────────────
 
-const APP_VERSION = "0.0.261"; // bumped on every deploy — keep in sync with version.json AND with the ?v= on polish.css above
+const APP_VERSION = "0.0.262"; // bumped on every deploy — keep in sync with version.json AND with the ?v= on polish.css above
 
 // ─── Backend + Supabase config ───────────────────────────────────────────────
 // Two stacks: prod (live testers) and staging (where new features land first).
@@ -6378,9 +6378,32 @@ function App({userId, onSignOut}) {
   useEffect(() => {
     if (!selMsg) return;
     const m = messageList.find(x => x.id === selMsg);
-    if (!m) { setSelMsg(null); return; }
-    if (m.accountEmail && !selAccounts.includes(m.accountEmail)) setSelMsg(null);
-  }, [selAccounts, messageList, selMsg]);
+    if (m) {
+      // Found in messageList — apply account-filter check.
+      if (m.accountEmail && !selAccounts.includes(m.accountEmail)) setSelMsg(null);
+      return;
+    }
+    // Not in messageList. Could be a hard delete OR a transient gap
+    // during bootstrap rebuild (lock-toggle, sync, Realtime refresh
+    // all replace messageList wholesale with top-500). For "cold"
+    // contacts whose mails sit below the bootstrap cutoff, the gap
+    // closes as soon as the auto-lazy-fetch useEffect below lands the
+    // older mails. Clearing selMsg eagerly here used to send the
+    // user back to the empty-state mail-detail right after every
+    // lock-toggle, even though the mail was only milliseconds away
+    // from reappearing. v0.0.262 — keep selMsg if the selected
+    // contact still has scope-relevant accountEmails; the
+    // lazy-fetch will reconcile and the next useEffect tick lands on
+    // m being found. If the contact has no overlap with selAccounts
+    // (genuinely gone from view), clear as before.
+    if (selContact !== null) {
+      const c = contactList.find(x => x.id === selContact);
+      if (c && (c.accountEmails || []).some(ae => selAccounts.includes(ae))) {
+        return;
+      }
+    }
+    setSelMsg(null);
+  }, [selAccounts, messageList, selMsg, selContact, contactList]);
   // Same idea for selContact: when the user switches the account selector
   // away from any account this contact has mail in, col 2 (thread) and
   // col 3 (detail) should both empty out together. We mirror the same
