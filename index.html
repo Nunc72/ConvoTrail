@@ -193,7 +193,7 @@
        polish change is picked up by every browser as soon as the version
        is bumped — no manual cache-busters needed. Keep ?v= here in sync
        with APP_VERSION below at every deploy. -->
-  <link rel="stylesheet" href="polish.css?v=0.0.266"/>
+  <link rel="stylesheet" href="polish.css?v=0.0.267"/>
 </head>
 <body>
 <div id="root">
@@ -432,7 +432,7 @@ window.CONVOOZ_CRYPTO = CONVOOZ_CRYPTO;
 
 // ─── Constants ───────────────────────────────────────────────────────────────
 
-const APP_VERSION = "0.0.266"; // bumped on every deploy — keep in sync with version.json AND with the ?v= on polish.css above
+const APP_VERSION = "0.0.267"; // bumped on every deploy — keep in sync with version.json AND with the ?v= on polish.css above
 
 // ─── Backend + Supabase config ───────────────────────────────────────────────
 // Two stacks: prod (live testers) and staging (where new features land first).
@@ -3075,6 +3075,33 @@ function MessageDetail({message,contact,isDeleted,msgTags,allTags,onReply,onRepl
             // Already null'd above if body_text_enc was present. Locked +
             // html-only? Surface the html base64 as text instead.
             if (!r.body_text_enc) r = { ...r, text: r.body_html_enc, html: null };
+          }
+        }
+        // v0.0.267 — Tier 3 step 1: attachment metadata pre-shape for the
+        // /body response. Same logic as the bootstrap pre-shape, applied
+        // to the freshly-returned attachments list.
+        if (Array.isArray(r.attachments)) {
+          for (const att of r.attachments) {
+            if (att.filename_enc) {
+              if (masterKey) {
+                try {
+                  const dec = await CONVOOZ_CRYPTO.decryptString(CONVOOZ_CRYPTO.b64.toBytes(att.filename_enc), masterKey);
+                  if (dec !== null) att.filename = dec;
+                } catch { /* keep */ }
+              } else {
+                att.filename = att.filename_enc;
+              }
+            }
+            if (att.contentType_enc) {
+              if (masterKey) {
+                try {
+                  const dec = await CONVOOZ_CRYPTO.decryptString(CONVOOZ_CRYPTO.b64.toBytes(att.contentType_enc), masterKey);
+                  if (dec !== null) att.contentType = dec;
+                } catch { /* keep */ }
+              } else {
+                att.contentType = att.contentType_enc;
+              }
+            }
           }
         }
         if (!cancelled) setEnriched(r);
@@ -6000,6 +6027,38 @@ function App({userId, onSignOut}) {
               email: blinds[i] || r.email,
             }));
           }
+          // v0.0.267 — Tier 3 step 1: attachment metadata pre-shape.
+          // /body cache-miss writes filename_enc / contentType_enc when
+          // the user is unlocked; same flow as subject/snippet. We
+          // mutate the in-memory entries here so the downstream shape
+          // (attachmentsMeta: m.attachments_meta) ships locked or
+          // unlocked filenames as the user would expect. Old entries
+          // (no _enc) keep plaintext until the future backfill route
+          // catches them up.
+          if (Array.isArray(m.attachments_meta)) {
+            for (const att of m.attachments_meta) {
+              if (att.filename_enc) {
+                if (masterKeyForRead) {
+                  try {
+                    const dec = await CONVOOZ_CRYPTO.decryptString(CONVOOZ_CRYPTO.b64.toBytes(att.filename_enc), masterKeyForRead);
+                    if (dec !== null) att.filename = dec;
+                  } catch { /* keep */ }
+                } else {
+                  att.filename = att.filename_enc;
+                }
+              }
+              if (att.contentType_enc) {
+                if (masterKeyForRead) {
+                  try {
+                    const dec = await CONVOOZ_CRYPTO.decryptString(CONVOOZ_CRYPTO.b64.toBytes(att.contentType_enc), masterKeyForRead);
+                    if (dec !== null) att.contentType = dec;
+                  } catch { /* keep */ }
+                } else {
+                  att.contentType = att.contentType_enc;
+                }
+              }
+            }
+          }
         }
         const shapedMessages = messages.flatMap(m => {
           const accountEmail = accountEmailById.get(m.mail_account_id) ?? '';
@@ -6797,6 +6856,17 @@ function App({userId, onSignOut}) {
       result.bccList = rebuilt.filter(e => e.role === 'bcc').map(e => e.email).filter(Boolean);
       result.to      = result.toList[0] || rebuilt[0]?.email || '';
     }
+    // v0.0.267 — attachment metadata: swap filename/contentType to
+    // their _enc base64 cue if present. Entries without the _enc
+    // twins (legacy, pre-backfill) stay as plaintext — those need
+    // the backfill route to be encrypted.
+    if (Array.isArray(m.attachmentsMeta)) {
+      result.attachmentsMeta = m.attachmentsMeta.map(att => ({
+        ...att,
+        filename:    att.filename_enc    || att.filename,
+        contentType: att.contentType_enc || att.contentType,
+      }));
+    }
     return result;
   }
   function lockedContactShape(c) {
@@ -7501,6 +7571,31 @@ function App({userId, onSignOut}) {
             ...r,
             email: blinds[i] || r.email,
           }));
+        }
+        // v0.0.267 — same attachment-metadata pre-shape as bootstrap.
+        if (Array.isArray(m.attachments_meta)) {
+          for (const att of m.attachments_meta) {
+            if (att.filename_enc) {
+              if (masterKeyForRead) {
+                try {
+                  const dec = await CONVOOZ_CRYPTO.decryptString(CONVOOZ_CRYPTO.b64.toBytes(att.filename_enc), masterKeyForRead);
+                  if (dec !== null) att.filename = dec;
+                } catch { /* keep */ }
+              } else {
+                att.filename = att.filename_enc;
+              }
+            }
+            if (att.contentType_enc) {
+              if (masterKeyForRead) {
+                try {
+                  const dec = await CONVOOZ_CRYPTO.decryptString(CONVOOZ_CRYPTO.b64.toBytes(att.contentType_enc), masterKeyForRead);
+                  if (dec !== null) att.contentType = dec;
+                } catch { /* keep */ }
+              } else {
+                att.contentType = att.contentType_enc;
+              }
+            }
+          }
         }
       }
 

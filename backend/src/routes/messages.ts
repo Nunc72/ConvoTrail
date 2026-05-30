@@ -168,6 +168,13 @@ export async function registerMessagesRoutes(app: FastifyInstance) {
     index: number;
     filename: string;
     contentType: string;
+    // v0.0.267 — Tier 3 attachment encryption step 1: per-attachment
+    // metadata twins, populated when sync or /body cache-miss runs
+    // with X-User-Key. NULL for entries written before this commit
+    // (the backfill route will fill them in later). FE prefers _enc
+    // in locked state, falls back to plaintext otherwise.
+    filename_enc?: string | null;
+    contentType_enc?: string | null;
     size: number;
     isInline: boolean;
     cid: string | null;
@@ -256,20 +263,44 @@ export async function registerMessagesRoutes(app: FastifyInstance) {
         });
       }
 
+      const textForCache = parsed.text || null;
+      const userKey = parseUserKeyHeader(req.headers["x-user-key"]);
+
       // Pass 3: build the public attachment list. isInline now requires
       // both a cid AND that cid being actually consumed by the HTML, so
       // a misclassification can no longer make a real attachment vanish.
-      const publicList = attachments.map((att: Attachment, index: number) => {
+      // v0.0.267 — first step of Tier 3 attachment encryption: when the
+      // user is unlocked (X-User-Key present), encrypt the filename and
+      // contentType so locked sessions render base64 cues instead of
+      // plaintext metadata. The plaintext fields stay alongside for
+      // back-compat with rows already in DB, and so that a later
+      // sessions cache-hit response still has them. Body bytes
+      // themselves come in a later step.
+      const publicList = await Promise.all(attachments.map(async (att: Attachment, index: number) => {
         const cidBare = att.cid ? stripAngleBrackets(att.cid) : null;
+        const filename = att.filename || `attachment-${index + 1}`;
+        const contentType = att.contentType || "application/octet-stream";
+        let filename_enc: string | null = null;
+        let contentType_enc: string | null = null;
+        if (userKey) {
+          const [fnEnc, ctEnc] = await Promise.all([
+            encryptForUser(filename, userKey),
+            encryptForUser(contentType, userKey),
+          ]);
+          filename_enc    = fnEnc ? fnEnc.toString("base64") : null;
+          contentType_enc = ctEnc ? ctEnc.toString("base64") : null;
+        }
         return {
           index,
-          filename: att.filename || `attachment-${index + 1}`,
-          contentType: att.contentType || "application/octet-stream",
+          filename,
+          contentType,
+          filename_enc,
+          contentType_enc,
           size: att.size ?? att.content?.length ?? 0,
           isInline: !!cidBare && usedCids.has(cidBare),
           cid: cidBare,
         };
-      });
+      }));
 
       // Write the parsed result back to messages so the next /body
       // call returns instantly from pg. Failure here is non-fatal — we
@@ -285,8 +316,6 @@ export async function registerMessagesRoutes(app: FastifyInstance) {
       // than only on the second click after cache populates. The DB
       // update path is unchanged — encryption only happens if userKey is
       // present, COALESCE protects the column otherwise.
-      const textForCache = parsed.text || null;
-      const userKey = parseUserKeyHeader(req.headers["x-user-key"]);
       let bodyTextEnc: Buffer | null = null;
       let bodyHtmlEnc: Buffer | null = null;
       if (userKey) {
