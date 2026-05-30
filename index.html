@@ -193,7 +193,7 @@
        polish change is picked up by every browser as soon as the version
        is bumped — no manual cache-busters needed. Keep ?v= here in sync
        with APP_VERSION below at every deploy. -->
-  <link rel="stylesheet" href="polish.css?v=0.0.259"/>
+  <link rel="stylesheet" href="polish.css?v=0.0.260"/>
 </head>
 <body>
 <div id="root">
@@ -432,7 +432,7 @@ window.CONVOOZ_CRYPTO = CONVOOZ_CRYPTO;
 
 // ─── Constants ───────────────────────────────────────────────────────────────
 
-const APP_VERSION = "0.0.259"; // bumped on every deploy — keep in sync with version.json AND with the ?v= on polish.css above
+const APP_VERSION = "0.0.260"; // bumped on every deploy — keep in sync with version.json AND with the ?v= on polish.css above
 
 // ─── Backend + Supabase config ───────────────────────────────────────────────
 // Two stacks: prod (live testers) and staging (where new features land first).
@@ -7274,6 +7274,76 @@ function App({userId, onSignOut}) {
       const r = await apiFetch(`/messages-for-contact?contact=${encodeURIComponent(contactId)}`);
       const rows = r?.messages || [];
       if (rows.length === 0) return;
+
+      // v0.0.260 — apply the same pre-shape decrypt pass that runs on
+      // bootstrap messages (line ~5882). Without this, locked sessions
+      // would render the raw plaintext from the DB straight into the
+      // FE state (subject, snippet, from_email, from_name, to_emails),
+      // which is exactly what the project rule "in locked state, never
+      // fall back to plaintext" forbids. Body fields are intentionally
+      // skipped here — lazy-fetch leaves baseFields.body = undefined
+      // so MessageDetail's on-demand /body fetch fills them later
+      // (and that path already pre-shapes via its own /body handler).
+      const masterKeyForRead = masterKeyRef.current;
+      for (const m of rows) {
+        if (m.subject_enc) {
+          if (masterKeyForRead) {
+            try {
+              const dec = await CONVOOZ_CRYPTO.decryptString(CONVOOZ_CRYPTO.b64.toBytes(m.subject_enc), masterKeyForRead);
+              if (dec !== null) m.subject = dec;
+            } catch { /* keep plaintext */ }
+          } else {
+            m.subject = m.subject_enc;
+          }
+        }
+        if (m.snippet_enc) {
+          if (masterKeyForRead) {
+            try {
+              const dec = await CONVOOZ_CRYPTO.decryptString(CONVOOZ_CRYPTO.b64.toBytes(m.snippet_enc), masterKeyForRead);
+              if (dec !== null) m.snippet = dec;
+            } catch { /* keep plaintext */ }
+          } else {
+            m.snippet = m.snippet_enc;
+          }
+        }
+        if (m.from_email_enc) {
+          if (masterKeyForRead) {
+            try {
+              const dec = await CONVOOZ_CRYPTO.decryptString(CONVOOZ_CRYPTO.b64.toBytes(m.from_email_enc), masterKeyForRead);
+              if (dec !== null) m.from_email = dec;
+            } catch { /* keep plaintext */ }
+          } else {
+            m.from_email = m.from_email_enc;
+          }
+        }
+        if (m.from_name_enc) {
+          if (masterKeyForRead) {
+            try {
+              const dec = await CONVOOZ_CRYPTO.decryptString(CONVOOZ_CRYPTO.b64.toBytes(m.from_name_enc), masterKeyForRead);
+              if (dec !== null) m.from_name = dec;
+            } catch { /* keep plaintext */ }
+          } else {
+            m.from_name = m.from_name_enc;
+          }
+        }
+        if (m.to_emails_enc && masterKeyForRead) {
+          try {
+            const dec = await CONVOOZ_CRYPTO.decryptString(CONVOOZ_CRYPTO.b64.toBytes(m.to_emails_enc), masterKeyForRead);
+            if (dec !== null) {
+              try { m.to_emails = JSON.parse(dec); } catch { /* keep */ }
+            }
+          } catch { /* keep plaintext */ }
+        } else if (m.to_emails_enc && !masterKeyForRead && Array.isArray(m.to_emails)) {
+          // Locked: replace each address with its blind so the rendered
+          // string is clearly encrypted while role is preserved.
+          const blinds = Array.isArray(m.to_emails_blind) ? m.to_emails_blind : [];
+          m.to_emails = m.to_emails.map((r, i) => ({
+            ...r,
+            email: blinds[i] || r.email,
+          }));
+        }
+      }
+
       const accountEmailById = new Map(mailAccounts.map(a => [a.id, (a.email || '').toLowerCase()]));
       const accountById = new Map(mailAccounts.map(a => [a.id, a]));
       // Build emailToContactId from the current contactList so we attribute
