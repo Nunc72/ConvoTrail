@@ -193,7 +193,7 @@
        polish change is picked up by every browser as soon as the version
        is bumped — no manual cache-busters needed. Keep ?v= here in sync
        with APP_VERSION below at every deploy. -->
-  <link rel="stylesheet" href="polish.css?v=0.0.260"/>
+  <link rel="stylesheet" href="polish.css?v=0.0.261"/>
 </head>
 <body>
 <div id="root">
@@ -432,7 +432,7 @@ window.CONVOOZ_CRYPTO = CONVOOZ_CRYPTO;
 
 // ─── Constants ───────────────────────────────────────────────────────────────
 
-const APP_VERSION = "0.0.260"; // bumped on every deploy — keep in sync with version.json AND with the ?v= on polish.css above
+const APP_VERSION = "0.0.261"; // bumped on every deploy — keep in sync with version.json AND with the ?v= on polish.css above
 
 // ─── Backend + Supabase config ───────────────────────────────────────────────
 // Two stacks: prod (live testers) and staging (where new features land first).
@@ -6407,6 +6407,33 @@ function App({userId, onSignOut}) {
     const visibleInSelAccounts = (c.accountEmails || []).some(ae => selAccounts.includes(ae));
     if (!visibleInSelAccounts) { setSelContact(null); setSelMsg(null); }
   }, [selAccounts, contactList, selContact, lazyFetchingContactId]);
+
+  // v0.0.261 — auto-refire lazy-fetch when bootstrap completes (sync,
+  // lock-toggle, Realtime refresh) and the selected contact has no mails
+  // in the freshly-rebuilt messageList. Previously a lock-toggle wiped
+  // every lazy-fetched older mail from state — setMessageList replaces
+  // the array wholesale with bootstrap top-500 — and the user only got
+  // them back by clicking the contact row a second time. The click
+  // handler at handleSelectContact already runs this exact check; here
+  // we mirror it on contactList / selContact / selAccounts changes so
+  // the user doesn't have to.
+  //
+  // Excluded from deps on purpose: messageList. We don't want to
+  // re-fire after the fetch lands (which mutates messageList) — that
+  // would loop forever. contactList being a fresh reference after each
+  // bootstrap is the trigger we want.
+  useEffect(() => {
+    if (selContact === null) return;
+    if (lazyFetchingContactId === selContact) return;
+    const hasMail = messageList.some(m =>
+      m.contactId === selContact &&
+      (!m.accountEmail || selAccounts.includes(m.accountEmail))
+    );
+    if (!hasMail) {
+      lazyFetchContactMessages(selContact);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [contactList, selContact, selAccounts]);
   const [selTag,       setSelTag]       = useState(null);
   const [editingContact,setEditingContact]=useState(null);
   const [archivedContacts, setArchivedContacts] = useState(()=>bootstrapCache?.archivedContacts ?? new Set());
