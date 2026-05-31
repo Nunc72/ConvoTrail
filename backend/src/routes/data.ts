@@ -212,15 +212,25 @@ export async function registerDataRoutes(app: FastifyInstance) {
       // over the plaintext to_emails column. Mails without blind
       // data (i.e. synced before encryption was enabled and not yet
       // back-filled) silently drop out of this aggregate.
+      // v0.0.268: re-introduce a plaintext fallback path for accounts
+      // where encryption has not been set up (prod deployed v0.0.258
+      // without crypto setup ever happening — sync writes from_email
+      // plaintext but from_email_blind NULL, and the blind-only join
+      // here returned zero rows for every contact). The fallback only
+      // fires when the message itself has NULL from_email_blind, so it
+      // never overrides a blind match and never reads plaintext for
+      // rows that have an encrypted twin.
       const cae = await pool.query<{ contact_id: string; account_emails: string[] }>(
         `WITH per_msg AS (
            SELECT LOWER(ma.email) AS account_email, ce.contact_id
              FROM messages m
              JOIN mail_accounts ma ON ma.id = m.mail_account_id
-             JOIN contact_emails ce ON ce.email_blind = m.from_email_blind
+             JOIN contact_emails ce ON
+               ce.email_blind = m.from_email_blind
+               OR (m.from_email_blind IS NULL AND LOWER(ce.email) = LOWER(m.from_email))
             WHERE m.user_id = $1
               AND NOT COALESCE((m.flags->>'auto_purged')::bool, false)
-              AND m.from_email_blind IS NOT NULL
+              AND m.from_email IS NOT NULL AND m.from_email <> ''
             UNION ALL
            SELECT LOWER(ma.email) AS account_email, ce.contact_id
              FROM messages m
@@ -230,6 +240,19 @@ export async function registerDataRoutes(app: FastifyInstance) {
             WHERE m.user_id = $1
               AND NOT COALESCE((m.flags->>'auto_purged')::bool, false)
               AND m.to_emails_blind IS NOT NULL
+            UNION ALL
+           -- Plaintext to-list fallback: same conditional as the
+           -- from-side above. Only fires when the message side has no
+           -- blind array at all (= pre-encryption row).
+           SELECT LOWER(ma.email) AS account_email, ce.contact_id
+             FROM messages m
+             JOIN mail_accounts ma ON ma.id = m.mail_account_id
+             CROSS JOIN LATERAL jsonb_array_elements(m.to_emails) elem
+             JOIN contact_emails ce ON LOWER(ce.email) = LOWER(elem->>'email')
+            WHERE m.user_id = $1
+              AND NOT COALESCE((m.flags->>'auto_purged')::bool, false)
+              AND m.to_emails_blind IS NULL
+              AND jsonb_typeof(m.to_emails) = 'array'
          )
          SELECT contact_id, ARRAY_AGG(DISTINCT account_email) AS account_emails
            FROM per_msg
@@ -594,13 +617,20 @@ export async function registerDataRoutes(app: FastifyInstance) {
       // to_emails_blind. Messages without blind data (pre-backfill)
       // silently drop out; FE shows them via plaintext fallback
       // until 1.3c finishes encrypting them.
-      const ce = await pool.query<{ email_blind: Buffer | null }>(
-        `SELECT email_blind FROM contact_emails
-          WHERE contact_id = $1 AND user_id = $2 AND email_blind IS NOT NULL`,
+      // v0.0.268: also fetch the plaintext emails so we can fall back
+      // to LOWER(email) matching for messages whose from_email_blind
+      // is NULL (= pre-encryption instances like prod where Phase 1.5
+      // setup never ran). Without the fallback this endpoint returned
+      // zero rows for every contact on those instances and the FE
+      // lazy-fetch path looked broken.
+      const ce = await pool.query<{ email: string; email_blind: Buffer | null }>(
+        `SELECT email, email_blind FROM contact_emails
+          WHERE contact_id = $1 AND user_id = $2`,
         [contactId, userId],
       );
       if (ce.rows.length === 0) return { messages: [] };
       const blinds = ce.rows.map(r => r.email_blind).filter(b => b !== null) as Buffer[];
+      const plainEmails = ce.rows.map(r => r.email.toLowerCase());
 
       const r = await pool.query(
         `SELECT m.id, m.mail_account_id, m.folder, m.uid, m.message_id, m.thread_id,
@@ -615,15 +645,26 @@ export async function registerDataRoutes(app: FastifyInstance) {
           WHERE m.user_id = $1
             AND NOT COALESCE((m.flags->>'auto_purged')::bool, false)
             AND (
-              m.from_email_blind = ANY($2::bytea[])
+              -- Blind match (preferred when message has encryption columns)
+              (array_length($2::bytea[], 1) > 0 AND m.from_email_blind = ANY($2::bytea[]))
               OR EXISTS (
                 SELECT 1 FROM unnest(m.to_emails_blind) tb
                  WHERE tb = ANY($2::bytea[])
               )
+              -- Plaintext fallback for messages WITHOUT a blind:
+              OR (m.from_email_blind IS NULL AND LOWER(m.from_email) = ANY($3::text[]))
+              OR (
+                m.to_emails_blind IS NULL
+                AND jsonb_typeof(m.to_emails) = 'array'
+                AND EXISTS (
+                  SELECT 1 FROM jsonb_array_elements(m.to_emails) elem
+                   WHERE LOWER(elem->>'email') = ANY($3::text[])
+                )
+              )
             )
           ORDER BY m.date DESC
-          LIMIT $3`,
-        [userId, blinds, limit],
+          LIMIT $4`,
+        [userId, blinds, plainEmails, limit],
       );
       return { messages: rowsWithIsoDates(r.rows) };
     },

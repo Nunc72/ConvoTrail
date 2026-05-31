@@ -1096,28 +1096,50 @@ async function upsertContacts(
   if (!supabaseAdmin) return 0;
   const pool = requirePool();
   const emails = [...addrs.keys()];
-  // v0.0.255 (Phase 1.5d): existing-check via email_blind, not plaintext.
-  // Requires userKey to be present — without it we can't compute the
-  // blind and we'd risk creating duplicate contacts on every sync.
-  if (!userKey) return 0;
-  const blindByEmail = new Map<string, Buffer>();
-  for (const email of emails) {
-    const b = await blindIndexForUser(email, userKey);
-    if (b) blindByEmail.set(email, b);
+  if (emails.length === 0) return 0;
+
+  // v0.0.268 — restore the plaintext-existing-check path for instances
+  // that haven't set up encryption (prod was deployed v0.0.258 without
+  // ever running the Phase 1.5 setup, so userKey never flows through
+  // sync). The earlier hard `if (!userKey) return 0` silently dropped
+  // every new sender on those instances — including veraramer's
+  // "Fwd: een goed jaar!" that lit this up. We now branch:
+  //   • userKey present (staging): blind-only match, same as v0.0.255.
+  //   • userKey absent  (prod, pre-encryption): plaintext (LOWER) match
+  //     against the same column. _enc + blind columns stay NULL for
+  //     these rows; the existing backfill route picks them up the
+  //     moment the user sets up encryption.
+  let toCreate: string[];
+  if (userKey) {
+    const blindByEmail = new Map<string, Buffer>();
+    for (const email of emails) {
+      const b = await blindIndexForUser(email, userKey);
+      if (b) blindByEmail.set(email, b);
+    }
+    const blinds = [...blindByEmail.values()];
+    if (blinds.length === 0) return 0;
+    const existingR = await pool.query<{ email_blind: Buffer | null }>(
+      `SELECT email_blind FROM contact_emails
+        WHERE user_id = $1 AND email_blind = ANY($2::bytea[])`,
+      [userId, blinds],
+    );
+    const haveBlinds = new Set(
+      existingR.rows.map(r => r.email_blind?.toString("base64")).filter(Boolean) as string[],
+    );
+    toCreate = emails.filter(e => {
+      const b = blindByEmail.get(e);
+      return b && !haveBlinds.has(b.toString("base64"));
+    });
+  } else {
+    const lowered = emails.map(e => e.toLowerCase());
+    const existingR = await pool.query<{ email: string }>(
+      `SELECT email FROM contact_emails
+        WHERE user_id = $1 AND LOWER(email) = ANY($2::text[])`,
+      [userId, lowered],
+    );
+    const haveEmails = new Set(existingR.rows.map(r => r.email.toLowerCase()));
+    toCreate = emails.filter(e => !haveEmails.has(e.toLowerCase()));
   }
-  const blinds = [...blindByEmail.values()];
-  const existingR = await pool.query<{ email_blind: Buffer | null }>(
-    `SELECT email_blind FROM contact_emails
-      WHERE user_id = $1 AND email_blind = ANY($2::bytea[])`,
-    [userId, blinds],
-  );
-  const haveBlinds = new Set(
-    existingR.rows.map(r => r.email_blind?.toString("base64")).filter(Boolean) as string[],
-  );
-  const toCreate = emails.filter(e => {
-    const b = blindByEmail.get(e);
-    return b && !haveBlinds.has(b.toString("base64"));
-  });
   if (toCreate.length === 0) return 0;
 
   // Phase 1.5b/c — when the user is unlocked, fill the encrypted twins
