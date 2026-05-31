@@ -193,7 +193,7 @@
        polish change is picked up by every browser as soon as the version
        is bumped — no manual cache-busters needed. Keep ?v= here in sync
        with APP_VERSION below at every deploy. -->
-  <link rel="stylesheet" href="polish.css?v=0.0.269"/>
+  <link rel="stylesheet" href="polish.css?v=0.0.270"/>
 </head>
 <body>
 <div id="root">
@@ -432,7 +432,7 @@ window.CONVOOZ_CRYPTO = CONVOOZ_CRYPTO;
 
 // ─── Constants ───────────────────────────────────────────────────────────────
 
-const APP_VERSION = "0.0.269"; // bumped on every deploy — keep in sync with version.json AND with the ?v= on polish.css above
+const APP_VERSION = "0.0.270"; // bumped on every deploy — keep in sync with version.json AND with the ?v= on polish.css above
 
 // ─── Backend + Supabase config ───────────────────────────────────────────────
 // Two stacks: prod (live testers) and staging (where new features land first).
@@ -4114,7 +4114,21 @@ function GlobalSearchResults({messages, contacts, deletedIds, msgTags, msgMatche
       seenIds.add(x.id);
       deduped.push(x);
     }
-    return deduped.sort((a,b)=>filter==='draft'?(b.modifiedAt||b.date).localeCompare(a.modifiedAt||a.date):b.date.localeCompare(a.date));
+    return deduped.sort((a,b) => {
+      const sortA = filter === 'draft' ? (a.modifiedAt || a.date) : a.date;
+      const sortB = filter === 'draft' ? (b.modifiedAt || b.date) : b.date;
+      const dateCmp = sortB.localeCompare(sortA);  // newest first
+      if (dateCmp !== 0) return dateCmp;
+      // v0.0.270 — tiebreaker for identical timestamps (mostly self-
+      // send, where the IN copy and the OUT copy share the same Date:
+      // header from the SMTP envelope). Render the IN copy first
+      // because in real-world order it lands after the OUT copy was
+      // saved to Sent. Stable thread ordering matters: the user was
+      // seeing OUT-on-top → IN-below for self-sends, which read as
+      // "the reply is older than the send".
+      if (a.dir !== b.dir) return a.dir === 'in' ? -1 : 1;
+      return 0;
+    });
   },[messages,deletedIds,filter,msgMatchesSearch]);
 
   // "Older mail" section: server-search hits that aren't already in the
@@ -4131,7 +4145,13 @@ function GlobalSearchResults({messages, contacts, deletedIds, msgTags, msgMatche
     else if(filter==='draft')   m = m.filter(x=>x.draft&&!del(x));
     else if(filter==='deleted') m = m.filter(x=>del(x));
     else m = m.filter(x=>!del(x));
-    return [...m].sort((a,b)=>(b.date||'').localeCompare(a.date||''));
+    return [...m].sort((a,b) => {
+      const dateCmp = (b.date || '').localeCompare(a.date || '');
+      if (dateCmp !== 0) return dateCmp;
+      // v0.0.270 — same tiebreaker as the main thread sort above.
+      if (a.dir !== b.dir) return a.dir === 'in' ? -1 : 1;
+      return 0;
+    });
   },[serverHits,filtered,deletedIds,filter]);
 
   return (
