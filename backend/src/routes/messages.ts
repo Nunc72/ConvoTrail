@@ -380,10 +380,29 @@ export async function registerMessagesRoutes(app: FastifyInstance) {
       const att = parsed.attachments?.[index];
       if (!att || !att.content) return reply.notFound("attachment not found");
 
-      const safeName = (att.filename || `attachment-${index + 1}`).replace(/"/g, "");
+      // v0.0.269 — bulletproof Content-Disposition filename. The legacy
+      // ASCII `filename=` attribute must be HTTP-safe (no CR/LF, no
+      // control bytes, no non-ASCII), or Node throws
+      // ERR_INVALID_CHAR and the whole download 500s. Andrea's
+      // "De Zitting" screenshot attachment hit this — mailparser
+      // sometimes returns filenames with a stray non-printable byte
+      // that survives our previous quote-strip. We now replace any
+      // non-printable / non-ASCII char with underscore in the
+      // ASCII fallback and rely on the RFC 5987 `filename*` attribute
+      // (UTF-8 percent-encoded) for the real name.
+      const rawName = att.filename || `attachment-${index + 1}`;
+      const asciiSafe = (rawName
+        .replace(/[\r\n\t]/g, " ")
+        .replace(/[^\x20-\x7E]/g, "_")
+        .replace(/"/g, "'")
+        .replace(/\\/g, "_")
+        .trim()) || `attachment-${index + 1}`;
+      const utf8Encoded = encodeURIComponent(rawName).replace(/[\r\n]/g, "");
+      const safeContentType = (att.contentType || "application/octet-stream")
+        .replace(/[^\x20-\x7E]/g, "_");
       reply
-        .type(att.contentType || "application/octet-stream")
-        .header("Content-Disposition", `attachment; filename="${safeName}"; filename*=UTF-8''${encodeURIComponent(safeName)}`)
+        .type(safeContentType)
+        .header("Content-Disposition", `attachment; filename="${asciiSafe}"; filename*=UTF-8''${utf8Encoded}`)
         .header("Content-Length", String(att.content.length));
       return reply.send(att.content);
     },
