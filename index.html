@@ -193,7 +193,7 @@
        polish change is picked up by every browser as soon as the version
        is bumped — no manual cache-busters needed. Keep ?v= here in sync
        with APP_VERSION below at every deploy. -->
-  <link rel="stylesheet" href="polish.css?v=0.0.270"/>
+  <link rel="stylesheet" href="polish.css?v=0.0.271"/>
 </head>
 <body>
 <div id="root">
@@ -432,7 +432,7 @@ window.CONVOOZ_CRYPTO = CONVOOZ_CRYPTO;
 
 // ─── Constants ───────────────────────────────────────────────────────────────
 
-const APP_VERSION = "0.0.270"; // bumped on every deploy — keep in sync with version.json AND with the ?v= on polish.css above
+const APP_VERSION = "0.0.271"; // bumped on every deploy — keep in sync with version.json AND with the ?v= on polish.css above
 
 // ─── Backend + Supabase config ───────────────────────────────────────────────
 // Two stacks: prod (live testers) and staging (where new features land first).
@@ -3544,7 +3544,18 @@ function ThreadColumn({contact,allMsgs,deletedIds,selectedMsgId,msgTags,onSelect
     else if(filter==="deleted")m=m.filter(x=>del(x));
     else m=m.filter(x=>!del(x));
     const sortKey=x=>x.draft?(x.modifiedAt||x.date):x.date;
-    return [...m].sort((a,b)=>sortKey(b).localeCompare(sortKey(a)));
+    return [...m].sort((a,b) => {
+      const dateCmp = sortKey(b).localeCompare(sortKey(a));  // newest first
+      if (dateCmp !== 0) return dateCmp;
+      // v0.0.271 — tiebreaker for identical timestamps. Self-send mails
+      // share the SMTP envelope Date: header between the INBOX (IN) and
+      // INBOX.Sent (OUT) copies, so without a tiebreaker the bootstrap
+      // insertion order decided the visual order — and it happened to
+      // put OUT above IN. Read as "the received copy is older than the
+      // sent one". Render IN first so the natural flow matches reality.
+      if (a.dir !== b.dir) return a.dir === 'in' ? -1 : 1;
+      return 0;
+    });
   },[allMsgs,filter,deletedIds]);
 
   // Arrow up / arrow down: walk through the visible (already-filtered
