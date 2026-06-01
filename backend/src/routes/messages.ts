@@ -9,6 +9,7 @@ import { authPreHandler } from "../auth.js";
 import { logAudit } from "../audit.js";
 import { decrypt } from "../crypto.js";
 import { parseUserKeyHeader, encryptForUser } from "../userCrypto.js";
+import { downloadAttachmentBytes } from "../storage.js";
 import { requirePool } from "../db.js";
 
 interface MessageImapRow {
@@ -178,6 +179,12 @@ export async function registerMessagesRoutes(app: FastifyInstance) {
     size: number;
     isInline: boolean;
     cid: string | null;
+    // v0.0.272 — Tier 3 step 2: sync uploads the encrypted attachment
+    // bytes to Supabase Storage at this key. step 3 (v0.0.273) uses
+    // this on the /attachments path to serve the encrypted blob
+    // straight from Storage instead of re-IMAPing.
+    storage_key?: string | null;
+    encrypted?: boolean;
   }
   app.get<{ Params: { id: string } }>(
     "/messages/:id/body", auth, async (req, reply) => {
@@ -209,17 +216,15 @@ export async function registerMessagesRoutes(app: FastifyInstance) {
       // v0.0.247: also ship body_text_enc / body_html_enc as base64 so
       // the FE can decrypt client-side when unlocked. Plaintext stays
       // as the fallback for locked sessions.
-      // v0.0.272 — when sync now writes attachments_meta at IMAP time,
-      // body_html still carries raw `cid:` refs because the inline-image
-      // rewrite is owned by the cache-miss branch below. If we returned
-      // early here on such a row, the browser would render broken
-      // images. Fall through to cache-miss for cid: resolution; that
-      // path UPDATEs body_html with the inlined data-URIs and the next
-      // /body call cache-hits cleanly.
-      const bodyHtmlHasUnresolvedCid = typeof row.body_html === "string" && /cid:/i.test(row.body_html);
-      if (row.attachments_meta !== null
-          && (row.body_text !== null || row.body_html !== null)
-          && !bodyHtmlHasUnresolvedCid) {
+      // v0.0.273: with step 3 of Tier 3 attachment encryption, the FE
+      // now resolves cid: refs client-side via /attachments. body_html
+      // can carry raw `cid:` references for mails whose attachments
+      // were uploaded to Storage (sync step 2) — the FE fetches +
+      // decrypts each and substitutes object-URLs. Legacy mails (no
+      // storage_key) get their data-URIs inlined by the cache-miss
+      // path below and never reach this branch with a raw cid: again.
+      // No more cid-aware fall-through here.
+      if (row.attachments_meta !== null && (row.body_text !== null || row.body_html !== null)) {
         return {
           html: row.body_html,
           text: row.body_text,
@@ -241,36 +246,23 @@ export async function registerMessagesRoutes(app: FastifyInstance) {
       }
 
       const attachments = parsed.attachments || [];
-      // Pass 1: build the cid → data-uri map so the HTML rewrite below can
-      // inline images. We do this for every attachment that carries a
-      // Content-ID, regardless of disposition — the cid might still be
-      // referenced in HTML even if the disposition is "attachment".
-      const cidToDataUri = new Map<string, string>();
-      for (const att of attachments as Attachment[]) {
-        const cidBare = att.cid ? stripAngleBrackets(att.cid) : null;
-        if (cidBare && att.content) {
-          const type = att.contentType || "application/octet-stream";
-          cidToDataUri.set(cidBare, `data:${type};base64,${att.content.toString("base64")}`);
-        }
-      }
-
-      // Pass 2: rewrite the HTML and remember which cids were actually
-      // consumed by an <img src="cid:..."> reference. Only those are truly
-      // inline (visible in the body, no need to list separately). Anything
-      // else — including attachments that happen to have a Content-ID but
-      // aren't referenced in the markup — gets shown as a downloadable
-      // attachment. This fixes the old behaviour where a Content-ID alone
-      // hid the attachment from the user, which is how some mail clients
-      // stamp every attachment.
+      // v0.0.273 — Tier 3 step 3 simplification. We no longer rewrite
+      // cid: refs into data: URIs here. The FE owns cid: → object-URL
+      // resolution (step 5): it fetches each attachment via
+      // /messages/:id/attachments/:index, decrypts the response if
+      // X-Convooz-Encrypted is set, and replaces cid: refs in body_html
+      // with createObjectURL() blobs. The only thing we still do here
+      // is classify each attachment's isInline by scanning body_html
+      // for a matching cid: reference — same logic as sync's
+      // attachments_meta builder so both producers agree.
+      const html: string | null = typeof parsed.html === "string" ? parsed.html : null;
       const usedCids = new Set<string>();
-      let html: string | null = typeof parsed.html === "string" ? parsed.html : null;
       if (html) {
-        html = html.replace(/cid:<?([^"'\s>]+?)>?(?=["'\s>])/gi, (m, cid) => {
-          const bare = stripAngleBrackets(cid);
-          const replacement = cidToDataUri.get(bare);
-          if (replacement) usedCids.add(bare);
-          return replacement || m;
-        });
+        const cidRefs = html.match(/cid:<?([^"'\s>]+?)>?(?=["'\s>])/gi) || [];
+        for (const ref of cidRefs) {
+          const bare = stripAngleBrackets(ref.replace(/^cid:/i, ""));
+          usedCids.add(bare);
+        }
       }
 
       const textForCache = parsed.text || null;
@@ -370,8 +362,8 @@ export async function registerMessagesRoutes(app: FastifyInstance) {
       if (!Number.isInteger(index) || index < 0) return reply.badRequest("invalid index");
 
       const pool = requirePool();
-      const r = await pool.query<MessageImapRow>(
-        `SELECT m.user_id, m.mail_account_id, m.folder, m.uid,
+      const r = await pool.query<MessageImapRow & { attachments_meta: AttMeta[] | null }>(
+        `SELECT m.user_id, m.mail_account_id, m.folder, m.uid, m.attachments_meta,
                 a.imap_host, a.imap_port, a.imap_user, a.imap_cred_enc
            FROM messages m
            JOIN mail_accounts a ON a.id = m.mail_account_id
@@ -381,6 +373,29 @@ export async function registerMessagesRoutes(app: FastifyInstance) {
       if (r.rows.length === 0) return reply.notFound();
       const row = r.rows[0];
       if (row.user_id !== req.authUser!.id) return reply.forbidden();
+
+      // v0.0.273 — Tier 3 attachment encryption step 3: serve the
+      // encrypted blob directly from Storage when sync uploaded it
+      // (step 2). The FE then decrypts client-side via the
+      // X-Convooz-Encrypted response header signal. Falls through to
+      // the legacy re-IMAP path for rows without storage_key, or when
+      // the Storage download fails for any reason.
+      const stored = Array.isArray(row.attachments_meta) ? row.attachments_meta[index] : null;
+      if (stored?.storage_key && stored?.encrypted) {
+        try {
+          const enc = await downloadAttachmentBytes(stored.storage_key);
+          reply
+            .type("application/octet-stream")
+            .header("X-Convooz-Encrypted", "aes-gcm")
+            .header("Content-Length", String(enc.length));
+          return reply.send(enc);
+        } catch (e) {
+          req.log.warn({ err: e, key: stored.storage_key },
+            "/attachments: Storage download failed, falling back to IMAP re-fetch");
+          // intentional fall-through to IMAP path below
+        }
+      }
+
       if (!row.imap_host || !row.imap_port || !row.imap_cred_enc) {
         return reply.badRequest("IMAP not configured for this account");
       }

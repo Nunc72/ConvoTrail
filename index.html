@@ -193,7 +193,7 @@
        polish change is picked up by every browser as soon as the version
        is bumped — no manual cache-busters needed. Keep ?v= here in sync
        with APP_VERSION below at every deploy. -->
-  <link rel="stylesheet" href="polish.css?v=0.0.272"/>
+  <link rel="stylesheet" href="polish.css?v=0.0.273"/>
 </head>
 <body>
 <div id="root">
@@ -432,7 +432,7 @@ window.CONVOOZ_CRYPTO = CONVOOZ_CRYPTO;
 
 // ─── Constants ───────────────────────────────────────────────────────────────
 
-const APP_VERSION = "0.0.272"; // bumped on every deploy — keep in sync with version.json AND with the ?v= on polish.css above
+const APP_VERSION = "0.0.273"; // bumped on every deploy — keep in sync with version.json AND with the ?v= on polish.css above
 
 // ─── Backend + Supabase config ───────────────────────────────────────────────
 // Two stacks: prod (live testers) and staging (where new features land first).
@@ -2611,6 +2611,22 @@ async function fetchAttachmentBlob(messageId, index) {
     res = await doFetch();
   }
   if (!res.ok) throw new Error(`${res.status} ${res.statusText}`);
+  // v0.0.273 — Tier 3 step 5: backend may now serve the AES-GCM
+  // encrypted blob straight from Storage (when sync uploaded it in
+  // step 2). The X-Convooz-Encrypted: aes-gcm header is the signal.
+  // We decrypt with the active master key here so callers (inline
+  // image resolver + download buttons) see a plain Blob no matter
+  // which storage path the backend took.
+  const encHeader = res.headers.get('x-convooz-encrypted');
+  if (encHeader === 'aes-gcm') {
+    if (!_masterKeyForDecrypt) {
+      throw new Error('attachment is encrypted but session is locked');
+    }
+    const arr = new Uint8Array(await res.arrayBuffer());
+    const decrypted = await CONVOOZ_CRYPTO.decryptBytes(arr, _masterKeyForDecrypt);
+    if (!decrypted) throw new Error('attachment decrypt failed (wrong key?)');
+    return new Blob([decrypted]);
+  }
   return res.blob();
 }
 
@@ -3015,6 +3031,14 @@ function MessageDetail({message,contact,isDeleted,msgTags,allTags,onReply,onRepl
   const [enrichedLoading, setEnrichedLoading] = useState(false);
   const [enrichedErr, setEnrichedErr] = useState('');
   const [previewIdx, setPreviewIdx] = useState(null); // position in non-inline attachments list
+  // v0.0.273 — Tier 3 step 5: FE-side cid: → object-URL resolution.
+  // /body now returns body_html with raw cid: references for mails
+  // whose attachments live in Storage (sync step 2). This state holds
+  // a copy of enriched.html with cid:abc rewritten to blob:...
+  // URLs for each inline attachment, fetched + decrypted via
+  // fetchAttachmentBlob. Falls back to enriched.html when no cid:
+  // refs need resolving (legacy mails with already-inlined data URIs).
+  const [resolvedHtml, setResolvedHtml] = useState(null);
   useEffect(()=>{
     setEnriched(null); setEnrichedErr(''); setPreviewIdx(null);
     if (!message || message.draft) return;
@@ -3120,6 +3144,69 @@ function MessageDetail({message,contact,isDeleted,msgTags,allTags,onReply,onRepl
     // for them. The bug surfaces for read top-500 mails and lazy-
     // fetched older mails, where /body is the only body source.
   },[message?.id, cryptoStatus]);
+  // v0.0.273 — Tier 3 step 5 resolver. Watches enriched + cryptoStatus.
+  // When enriched.html carries raw cid: refs (sync-uploaded Storage
+  // path), fetch each inline attachment, decrypt it via the shared
+  // fetchAttachmentBlob helper, mint a blob: object-URL, and rewrite
+  // every matching `cid:...` reference in the HTML. Object URLs are
+  // tracked in a local list and revoked on unmount / lock-toggle to
+  // free memory and prevent stale-blob leaks. Locked state: skips
+  // resolution (cant decrypt without masterKey) and falls back to
+  // enriched.html — the browser shows broken images, consistent with
+  // the rest of the locked-state UX.
+  useEffect(() => {
+    if (!enriched?.html) { setResolvedHtml(null); return; }
+    if (!/cid:/i.test(enriched.html)) {
+      // No cid: refs to resolve — either a legacy mail with already-
+      // inlined data URIs, or just no inline images. Use the html
+      // straight through.
+      setResolvedHtml(enriched.html);
+      return;
+    }
+    if (cryptoStatus !== 'unlocked' || !_masterKeyForDecrypt) {
+      // Locked: don't fetch encrypted blobs (we can't decrypt them).
+      // Render html as-is; cid: refs will show broken-image icons.
+      setResolvedHtml(enriched.html);
+      return;
+    }
+    const attachments = Array.isArray(enriched.attachments) ? enriched.attachments : [];
+    const cidsToResolve = [];
+    for (const att of attachments) {
+      if (att.cid && att.isInline) {
+        cidsToResolve.push({ cid: att.cid, index: att.index });
+      }
+    }
+    if (cidsToResolve.length === 0) { setResolvedHtml(enriched.html); return; }
+    let cancelled = false;
+    const createdUrls = [];
+    (async () => {
+      const replacements = await Promise.all(cidsToResolve.map(async ({ cid, index }) => {
+        try {
+          const blob = await fetchAttachmentBlob(message.id, index);
+          const url = URL.createObjectURL(blob);
+          createdUrls.push(url);
+          return { cid, url };
+        } catch {
+          return { cid, url: null };
+        }
+      }));
+      if (cancelled) {
+        createdUrls.forEach(u => URL.revokeObjectURL(u));
+        return;
+      }
+      let html = enriched.html;
+      for (const { cid, url } of replacements) {
+        if (!url) continue;
+        const esc = cid.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+        html = html.replace(new RegExp(`cid:<?${esc}>?`, 'gi'), url);
+      }
+      setResolvedHtml(html);
+    })();
+    return () => {
+      cancelled = true;
+      createdUrls.forEach(u => URL.revokeObjectURL(u));
+    };
+  }, [enriched, message?.id, cryptoStatus]);
   async function downloadAttachment(att) {
     try {
       // Reuse the blob fetcher so the same 401/503 retry plumbing applies
@@ -3373,7 +3460,11 @@ function MessageDetail({message,contact,isDeleted,msgTags,allTags,onReply,onRepl
               <span>Loading full message…</span>
             </div>
           );
-          const htmlToRender = enriched?.html || message.bodyHtml;
+          // v0.0.273 — prefer resolvedHtml (cid: refs swapped for blob:
+          // object-URLs by the resolver useEffect) when present. Falls
+          // back to enriched.html during the brief async resolve window
+          // and to message.bodyHtml when /body hasn't returned yet.
+          const htmlToRender = (resolvedHtml ?? enriched?.html) || message.bodyHtml;
           if (htmlToRender) return <HtmlMessageBody html={htmlToRender}/>;
           // Plain-text body: each newline becomes its own <p>. Fall back to
           // enriched.text when the cache-stripped message has no body of
