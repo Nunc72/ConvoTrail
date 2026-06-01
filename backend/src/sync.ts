@@ -1,11 +1,19 @@
 import { ImapFlow, type FetchMessageObject } from "imapflow";
-import { simpleParser, type ParsedMail, type AddressObject } from "mailparser";
+import { simpleParser, type ParsedMail, type AddressObject, type Attachment } from "mailparser";
 import { supabaseAdmin } from "./supabase.js";
 import { decrypt } from "./crypto.js";
 import { requirePool } from "./db.js";
 import { cleanupOrphanContacts } from "./contactCleanup.js";
-import { encryptForUser, blindIndexForUser } from "./userCrypto.js";
+import { encryptForUser, encryptBytesForUser, blindIndexForUser } from "./userCrypto.js";
+import { uploadAttachment } from "./storage.js";
+import { randomUUID } from "node:crypto";
 import type pg from "pg";
+
+// Local helper duplicated from messages.ts — keeps cid normalisation
+// rules identical between the read-path and the sync-side rewrite.
+function stripAngleBrackets(s: string): string {
+  return s.replace(/^<+|>+$/g, "");
+}
 
 export interface FolderSyncStat {
   folder: string;
@@ -810,6 +818,7 @@ const MESSAGE_INSERT_COLS = [
   'from_email_enc', 'from_name_enc', 'to_emails_enc',
   'from_email_blind', 'to_emails_blind',
   'date', 'flags', 'direction', 'has_attachments',
+  'attachments_meta',
   'unsubscribe_url', 'unsubscribe_one_click', 'deleted_at',
 ] as const;
 
@@ -820,6 +829,7 @@ const MESSAGE_INSERT_COLS = [
 const MESSAGE_INSERT_CASTS: Record<string, string> = {
   to_emails: '::jsonb',
   flags: '::jsonb',
+  attachments_meta: '::jsonb',
   to_emails_blind: '::bytea[]',
   uidvalidity: '::bigint',
 };
@@ -992,6 +1002,98 @@ async function buildMessageRow(
     to_emails_blind = blinds.length ? blinds : null;
   }
 
+  // v0.0.272 — Tier 3 attachment encryption step 2. Build the
+  // attachments_meta payload at sync time. For each attachment we
+  //   (a) record the public-facing metadata (filename, contentType,
+  //       size, cid, isInline) plus the _enc twins when userKey is
+  //       present, and
+  //   (b) if userKey + content are both available, AES-GCM encrypt
+  //       the binary and POST it to Supabase Storage at a fresh UUID
+  //       key. That key is recorded in attachments_meta so the future
+  //       step-3 /attachments endpoint can stream the encrypted blob
+  //       straight from Storage instead of re-IMAPing every request.
+  //
+  // isInline tracks whether the attachments cid actually appears in
+  // body_html. We do NOT rewrite cid: refs here — the /body cache-miss
+  // path still owns the cid:→data: inline step (kept for back-compat
+  // with locked sessions and the step-4 FE-side resolve). Once /body
+  // cache-miss runs it stops finding cid: refs, so the next /body
+  // call cache-hits from that point on.
+  type AttMetaEntry = {
+    index: number;
+    filename: string;
+    contentType: string;
+    filename_enc: string | null;
+    contentType_enc: string | null;
+    size: number;
+    isInline: boolean;
+    cid: string | null;
+    storage_key: string | null;
+    encrypted: boolean;
+  };
+  const parsedAttachments: Attachment[] = parsed?.attachments ?? [];
+  // Scan body_html for cid: refs so we can classify isInline without
+  // doing the data-URI rewrite (kept in /body for now).
+  const cidsInBody = new Set<string>();
+  if (bodyHtml) {
+    const matches = bodyHtml.match(/cid:<?([^"'\s>]+?)>?(?=["'\s>])/gi) || [];
+    for (const ref of matches) {
+      const bare = stripAngleBrackets(ref.replace(/^cid:/i, ""));
+      cidsInBody.add(bare);
+    }
+  }
+  const attachmentsMeta: AttMetaEntry[] = [];
+  for (let i = 0; i < parsedAttachments.length; i++) {
+    const att = parsedAttachments[i];
+    const cidBare = att.cid ? stripAngleBrackets(att.cid) : null;
+    const filename = att.filename || `attachment-${i + 1}`;
+    const contentType = att.contentType || "application/octet-stream";
+    let filename_enc: string | null = null;
+    let contentType_enc: string | null = null;
+    let storage_key: string | null = null;
+    let encrypted = false;
+    if (userKey) {
+      try {
+        const [fnEnc, ctEnc] = await Promise.all([
+          encryptForUser(filename,    userKey),
+          encryptForUser(contentType, userKey),
+        ]);
+        filename_enc    = fnEnc ? fnEnc.toString("base64") : null;
+        contentType_enc = ctEnc ? ctEnc.toString("base64") : null;
+      } catch (e) {
+        console.warn(`[sync] attachment metadata enc failed for "${filename}":`, e instanceof Error ? e.message : e);
+      }
+      if (att.content && att.content.length > 0) {
+        try {
+          const blobEnc = await encryptBytesForUser(att.content, userKey);
+          if (blobEnc) {
+            const key = `mail/${userId}/${randomUUID()}.enc`;
+            await uploadAttachment(key, blobEnc, "application/octet-stream");
+            storage_key = key;
+            encrypted = true;
+          }
+        } catch (e) {
+          // Upload failures fall back to the legacy re-IMAP path in
+          // /messages/:id/attachments/:index — nothing user-visible
+          // breaks, we just don't have the at-rest copy for this row.
+          console.warn(`[sync] attachment storage upload failed for "${filename}":`, e instanceof Error ? e.message : e);
+        }
+      }
+    }
+    attachmentsMeta.push({
+      index: i,
+      filename,
+      contentType,
+      filename_enc,
+      contentType_enc,
+      size: att.size ?? att.content?.length ?? 0,
+      isInline: !!cidBare && cidsInBody.has(cidBare),
+      cid: cidBare,
+      storage_key,
+      encrypted,
+    });
+  }
+
   // Runs everything through stripNulBytes before returning so a sloppy
   // sender's NUL-laden header / body can't take out the whole INSERT
   // batch with a "invalid input syntax for type json" error. Buffer
@@ -1025,7 +1127,8 @@ async function buildMessageRow(
     date: new Date(envelope?.date || msg.internalDate || parsed?.date || Date.now()).toISOString(),
     flags,
     direction,
-    has_attachments: (parsed?.attachments?.length ?? 0) > 0,
+    has_attachments: parsedAttachments.length > 0,
+    attachments_meta: JSON.stringify(attachmentsMeta),
     // Empty string means "we checked, no List-Unsubscribe header". Stays
     // distinct from NULL ("not checked yet") so the backfill pass below
     // can target only the unchecked rows.

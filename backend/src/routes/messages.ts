@@ -209,7 +209,17 @@ export async function registerMessagesRoutes(app: FastifyInstance) {
       // v0.0.247: also ship body_text_enc / body_html_enc as base64 so
       // the FE can decrypt client-side when unlocked. Plaintext stays
       // as the fallback for locked sessions.
-      if (row.attachments_meta !== null && (row.body_text !== null || row.body_html !== null)) {
+      // v0.0.272 — when sync now writes attachments_meta at IMAP time,
+      // body_html still carries raw `cid:` refs because the inline-image
+      // rewrite is owned by the cache-miss branch below. If we returned
+      // early here on such a row, the browser would render broken
+      // images. Fall through to cache-miss for cid: resolution; that
+      // path UPDATEs body_html with the inlined data-URIs and the next
+      // /body call cache-hits cleanly.
+      const bodyHtmlHasUnresolvedCid = typeof row.body_html === "string" && /cid:/i.test(row.body_html);
+      if (row.attachments_meta !== null
+          && (row.body_text !== null || row.body_html !== null)
+          && !bodyHtmlHasUnresolvedCid) {
         return {
           html: row.body_html,
           text: row.body_text,
@@ -327,11 +337,16 @@ export async function registerMessagesRoutes(app: FastifyInstance) {
         bodyTextEnc = row.body_text_enc;
         bodyHtmlEnc = row.body_html_enc;
       }
+      // v0.0.272 — attachments_meta is COALESCE'd so we don't overwrite
+      // the storage_key + encrypted-byte references sync wrote at
+      // IMAP-fetch time. The new publicList here may have richer
+      // isInline tracking (computed from usedCids during the rewrite)
+      // but lacks Storage info; trust syncs version when present.
       pool.query(
         `UPDATE messages
             SET body_text = $1,
                 body_html = $2,
-                attachments_meta = $3,
+                attachments_meta = COALESCE(attachments_meta, $3),
                 body_text_enc = COALESCE($4, body_text_enc),
                 body_html_enc = COALESCE($5, body_html_enc)
           WHERE id = $6`,
