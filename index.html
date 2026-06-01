@@ -193,7 +193,7 @@
        polish change is picked up by every browser as soon as the version
        is bumped — no manual cache-busters needed. Keep ?v= here in sync
        with APP_VERSION below at every deploy. -->
-  <link rel="stylesheet" href="polish.css?v=0.0.273"/>
+  <link rel="stylesheet" href="polish.css?v=0.0.274"/>
 </head>
 <body>
 <div id="root">
@@ -432,7 +432,7 @@ window.CONVOOZ_CRYPTO = CONVOOZ_CRYPTO;
 
 // ─── Constants ───────────────────────────────────────────────────────────────
 
-const APP_VERSION = "0.0.273"; // bumped on every deploy — keep in sync with version.json AND with the ?v= on polish.css above
+const APP_VERSION = "0.0.274"; // bumped on every deploy — keep in sync with version.json AND with the ?v= on polish.css above
 
 // ─── Backend + Supabase config ───────────────────────────────────────────────
 // Two stacks: prod (live testers) and staging (where new features land first).
@@ -2617,15 +2617,26 @@ async function fetchAttachmentBlob(messageId, index) {
   // We decrypt with the active master key here so callers (inline
   // image resolver + download buttons) see a plain Blob no matter
   // which storage path the backend took.
+  // v0.0.274 — when the session is LOCKED and the response is
+  // encrypted, we DON'T throw. Instead we hand the caller the raw
+  // ciphertext Blob. That way a user clicking "download" on a locked
+  // attachment gets a real file out of the browser — its just
+  // garbled bytes (the AES-GCM envelope: 12-byte IV + ciphertext +
+  // 16-byte tag), demonstrating that decryption is genuinely off.
+  // Inline-image resolution still skips encrypted attachments in
+  // locked state via its own cryptoStatus guard.
   const encHeader = res.headers.get('x-convooz-encrypted');
   if (encHeader === 'aes-gcm') {
-    if (!_masterKeyForDecrypt) {
-      throw new Error('attachment is encrypted but session is locked');
-    }
     const arr = new Uint8Array(await res.arrayBuffer());
-    const decrypted = await CONVOOZ_CRYPTO.decryptBytes(arr, _masterKeyForDecrypt);
-    if (!decrypted) throw new Error('attachment decrypt failed (wrong key?)');
-    return new Blob([decrypted]);
+    if (_masterKeyForDecrypt) {
+      const decrypted = await CONVOOZ_CRYPTO.decryptBytes(arr, _masterKeyForDecrypt);
+      if (!decrypted) throw new Error('attachment decrypt failed (wrong key?)');
+      return new Blob([decrypted]);
+    }
+    // Locked: hand over the ciphertext untouched. Caller writes it
+    // out as a regular download — name comes from the (also
+    // encrypted) filename field on the attachment list.
+    return new Blob([arr]);
   }
   return res.blob();
 }
