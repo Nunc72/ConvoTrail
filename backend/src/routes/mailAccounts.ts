@@ -189,6 +189,32 @@ export async function registerMailAccountsRoutes(app: FastifyInstance) {
     // locked. The key is held only in the request handler's heap and
     // is forwarded directly to syncAccount → buildMessageRow.
     const userKey = parseUserKeyHeader(req.headers["x-user-key"]);
+
+    // v0.0.275 — same locked-state guard as /send. Once a user has
+    // opted into Pad A (user_crypto row exists), running sync without
+    // X-User-Key would land plaintext-only message rows that the
+    // backfill route can't fully encrypt (body_text → body_text_enc
+    // works, but the attachment binaries never get uploaded to
+    // Storage and the per-attachment filename_enc/storage_key columns
+    // stay NULL forever). Reject early so the FE knows to prompt for
+    // an unlock instead of silently writing leaky rows.
+    if (!userKey) {
+      const hasCrypto = await pool.query<{ exists: boolean }>(
+        `SELECT EXISTS(SELECT 1 FROM user_crypto WHERE user_id = $1) AS exists`,
+        [req.authUser!.id],
+      );
+      if (hasCrypto.rows[0]?.exists) {
+        return reply.code(423).send({
+          ok: false,
+          error: "locked",
+          message:
+            "Encryption is on for this account but the session is locked. " +
+            "Unlock the passphrase and try again — syncing without the key " +
+            "would write plaintext rows that can't be fully back-encrypted.",
+        });
+      }
+    }
+
     const result = await syncAccount(req.params.id, userKey ?? undefined);
     if (!result.ok) return reply.code(400).send(result);
     return result;
@@ -233,6 +259,32 @@ export async function registerMailAccountsRoutes(app: FastifyInstance) {
     if (!b.to || !b.to.trim()) return reply.badRequest("to required");
 
     const pool = requirePool();
+
+    // v0.0.275 — block plaintext sends for accounts that have opted in
+    // to Pad A encryption. Without this, a user composing while locked
+    // would write a message row with NULL _enc twins; viewing that row
+    // later in locked state then leaks subject / snippet / body /
+    // attachment filenames straight from the plaintext columns. Sync
+    // hits the same trap via the X-User-Key header — see the matching
+    // guard in syncAccount call below.
+    const hasCrypto = await pool.query<{ exists: boolean }>(
+      `SELECT EXISTS(SELECT 1 FROM user_crypto WHERE user_id = $1) AS exists`,
+      [req.authUser!.id],
+    );
+    if (hasCrypto.rows[0]?.exists) {
+      const hdr = req.headers["x-user-key"];
+      if (!hdr || (typeof hdr === "string" && hdr.trim() === "")) {
+        return reply.code(423).send({
+          ok: false,
+          error: "locked",
+          message:
+            "Encryption is on for this account but the session is locked. " +
+            "Unlock the passphrase and try again — sending plaintext would " +
+            "leave a permanently un-encryptable row in the database.",
+        });
+      }
+    }
+
     const r = await pool.query<{
       user_id: string; email: string; display_name: string | null;
       imap_host: string | null; imap_port: number | null; imap_user: string | null; imap_cred_enc: Buffer | null;

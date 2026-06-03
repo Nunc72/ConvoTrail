@@ -193,7 +193,7 @@
        polish change is picked up by every browser as soon as the version
        is bumped — no manual cache-busters needed. Keep ?v= here in sync
        with APP_VERSION below at every deploy. -->
-  <link rel="stylesheet" href="polish.css?v=0.0.274"/>
+  <link rel="stylesheet" href="polish.css?v=0.0.275"/>
 </head>
 <body>
 <div id="root">
@@ -432,7 +432,7 @@ window.CONVOOZ_CRYPTO = CONVOOZ_CRYPTO;
 
 // ─── Constants ───────────────────────────────────────────────────────────────
 
-const APP_VERSION = "0.0.274"; // bumped on every deploy — keep in sync with version.json AND with the ?v= on polish.css above
+const APP_VERSION = "0.0.275"; // bumped on every deploy — keep in sync with version.json AND with the ?v= on polish.css above
 
 // ─── Backend + Supabase config ───────────────────────────────────────────────
 // Two stacks: prod (live testers) and staging (where new features land first).
@@ -2643,10 +2643,18 @@ async function fetchAttachmentBlob(messageId, index) {
 
 // Image thumbnail tile: fetches its own blob lazily + revokes on unmount.
 // Clicking opens the full preview modal (via the onClick prop).
-function AttachmentThumb({messageId, att, onClick}) {
+function AttachmentThumb({messageId, att, onClick, cryptoStatus='idle'}) {
   const [blobUrl, setBlobUrl] = useState(null);
   const [err, setErr] = useState(false);
+  // v0.0.275 — in locked state we do NOT fetch the binary. Fetching
+  // would land plaintext bytes for legacy attachments (no storage_key
+  // = backend falls through to IMAP and returns plaintext), and even
+  // for new mails it would expose either decrypted (we have no key)
+  // or noisy-blob previews. Show a lock-glyph placeholder instead so
+  // the user sees "there is an attachment here, decrypt-to-view".
+  const locked = cryptoStatus !== 'unlocked';
   useEffect(() => {
+    if (locked) { setBlobUrl(null); setErr(false); return; }
     let cancelled = false; let createdUrl = null;
     (async () => {
       try {
@@ -2656,11 +2664,12 @@ function AttachmentThumb({messageId, att, onClick}) {
       } catch { if (!cancelled) setErr(true); }
     })();
     return () => { cancelled = true; if (createdUrl) URL.revokeObjectURL(createdUrl); };
-  }, [messageId, att.index]);
+  }, [messageId, att.index, locked]);
   return (
     <button onClick={onClick} title={att.filename}
       className="w-28 h-28 rounded-lg border border-gray-200 bg-gray-50 overflow-hidden hover:border-indigo-300 hover:shadow-sm transition-all flex items-center justify-center flex-shrink-0">
-      {err ? <span className="text-xs text-gray-400 px-2 text-center">Can't load</span>
+      {locked ? <span aria-hidden className="text-2xl text-gray-400">🔒</span>
+       : err ? <span className="text-xs text-gray-400 px-2 text-center">Can't load</span>
        : blobUrl ? <img src={blobUrl} alt={att.filename} className="w-full h-full object-cover" loading="lazy"/>
        : <span className="text-xs text-gray-400">…</span>}
     </button>
@@ -2669,7 +2678,7 @@ function AttachmentThumb({messageId, att, onClick}) {
 
 // Full-screen preview modal. Handles image / pdf / text / video / audio.
 // Keyboard: Esc closes, ← / → step through the (non-inline) attachment list.
-function AttachmentPreviewModal({messageId, attachment, attachments, onClose, onPrev, onNext, onDownload}) {
+function AttachmentPreviewModal({messageId, attachment, attachments, onClose, onPrev, onNext, onDownload, cryptoStatus='idle'}) {
   const [blobUrl, setBlobUrl] = useState(null);
   const [text, setText] = useState(null);
   const [err, setErr] = useState('');
@@ -2766,6 +2775,13 @@ function AttachmentPreviewModal({messageId, attachment, attachments, onClose, on
 
   useEffect(() => {
     if (!attachment || !messageId) return;
+    // v0.0.275 — locked-state preview shows a placeholder, no fetch.
+    // Skips the leak path where /attachments would otherwise stream
+    // back plaintext bytes for legacy (no storage_key) attachments.
+    if (cryptoStatus !== 'unlocked') {
+      setLoading(false); setErr(''); setBlobUrl(null); setText(null);
+      return;
+    }
     let cancelled = false; let createdUrl = null;
     setLoading(true); setErr(''); setBlobUrl(null); setText(null);
     (async () => {
@@ -2821,13 +2837,22 @@ function AttachmentPreviewModal({messageId, attachment, attachments, onClose, on
           className="min-w-[44px] min-h-[44px] rounded hover:bg-white/10 text-white text-3xl leading-none flex items-center justify-center flex-shrink-0">×</button>
       </div>
       <div className="flex-1 min-h-0 relative flex items-center justify-center p-4 overflow-hidden">
-        {loading && (
+        {/* v0.0.275 — locked-state placeholder. We skip the fetch above
+            and show the user a clear "unlock to view" message instead
+            of accidentally streaming plaintext bytes from /attachments. */}
+        {cryptoStatus !== 'unlocked' && (
+          <div className="flex flex-col items-center gap-3 text-white/70 text-sm">
+            <span className="text-5xl" aria-hidden>🔒</span>
+            <span>Unlock decryption to preview this attachment.</span>
+          </div>
+        )}
+        {cryptoStatus === 'unlocked' && loading && (
           <div className="flex items-center gap-2 text-white/70 text-sm">
             <Spinner size={18} className="!text-white/80"/>
             <span>Loading preview…</span>
           </div>
         )}
-        {!loading && err && <div className="text-red-300 text-sm">Preview failed: {err}</div>}
+        {cryptoStatus === 'unlocked' && !loading && err && <div className="text-red-300 text-sm">Preview failed: {err}</div>}
         {!loading && !err && kind === 'image' && blobUrl && (
           // Zoom UX:
           //  • Mobile pinch: spread 2 fingers to zoom in, pinch to zoom out.
@@ -3517,6 +3542,7 @@ function MessageDetail({message,contact,isDeleted,msgTags,allTags,onReply,onRepl
                 <div className="flex flex-wrap gap-2 mb-3">
                   {images.map(a => (
                     <AttachmentThumb key={a.index} messageId={message.id} att={a}
+                      cryptoStatus={cryptoStatus}
                       onClick={()=>setPreviewIdx(atts.findIndex(x=>x.index===a.index))}/>
                   ))}
                 </div>
@@ -3560,6 +3586,7 @@ function MessageDetail({message,contact,isDeleted,msgTags,allTags,onReply,onRepl
           messageId={message.id}
           attachment={active}
           attachments={atts}
+          cryptoStatus={cryptoStatus}
           onClose={()=>setPreviewIdx(null)}
           onPrev={hasPrev ? ()=>setPreviewIdx(i=>i-1) : null}
           onNext={hasNext ? ()=>setPreviewIdx(i=>i+1) : null}
@@ -8245,6 +8272,13 @@ function App({userId, onSignOut}) {
       if (totalSeenDrift >= 20) {
         setSyncDriftWarning(`Synchronisatieprobleem opgemerkt: ${totalSeenDrift} mails liepen achter op IMAP, nu gerepareerd. Mogelijk een IMAP-server hapering — als dit blijft terugkomen, laat het me weten.`);
       }
+      // v0.0.275 — backfill kicks in right after a user-triggered Get
+      // Mail run when the session is unlocked. Sync may have inserted
+      // fresh plaintext fields the backfill needs to encrypt (subject
+      // / snippet / body_text on the IN copy that came in from IMAP)
+      // before the user toggles back to locked. The route is
+      // idempotent and rate-limited so the extra invocation is cheap.
+      if (cryptoStatus === 'unlocked') runEncryptionBackfill();
     }
   }
   async function handleAutoSync() {
@@ -8383,6 +8417,15 @@ function App({userId, onSignOut}) {
     handleCloseCompose();
     setActionToast(result.warning || 'Message sent');
     refreshData();
+    // v0.0.275 — kick the encryption backfill as soon as a sent row
+    // could have landed. With v0.0.275's locked-state guard on /send,
+    // we know the user must have been unlocked for the request to
+    // succeed — but the FRESH DB row may carry NULL _enc on fields
+    // the FE write path doesn't fill (body_html / attachments_meta
+    // storage_keys / per-attachment _enc twins). Backfill walks any
+    // remaining NULL _enc cells and closes the gap before the next
+    // lock sees them.
+    if (cryptoStatus === 'unlocked') runEncryptionBackfill();
   }
   // Returns the draft id (new or existing). Pane keeps it locally for subsequent PATCHes.
   async function handleSaveDraft({from, to, cc, bcc, subject, body, reply_to_id, tags}, existingId) {
