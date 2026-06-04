@@ -239,6 +239,11 @@ export async function registerMailAccountsRoutes(app: FastifyInstance) {
     Params: { id: string };
     Body: {
       to: string; cc?: string; bcc?: string; subject?: string; body?: string;
+      // v0.0.280 — when present, send as multipart/alternative with
+      // both text/plain (`body`) and text/html (`body_html`) parts so
+      // forwarded newsletters render at the recipient's end. The FE
+      // builds the html with inline images embedded as data: URIs.
+      body_html?: string;
       reply_to_id?: string;
       // When set, arm revert-to-me on the new outgoing message. 0 days =
       // active immediately (useful for testing); higher values delay until
@@ -348,6 +353,7 @@ export async function registerMailAccountsRoutes(app: FastifyInstance) {
       bcc: b.bcc,
       subject: b.subject || "",
       text: b.body || "",
+      html: b.body_html && b.body_html.trim() ? b.body_html : undefined,
       inReplyTo,
       references: inReplyTo,
       attachments: draftAttachments,
@@ -428,19 +434,22 @@ export async function registerMailAccountsRoutes(app: FastifyInstance) {
       const userKey = parseUserKeyHeader(req.headers["x-user-key"]);
       const subjectPlain = b.subject || "";
       const bodyPlain    = b.body || "";
+      const bodyHtmlPlain = (b.body_html && b.body_html.trim()) ? b.body_html : null;
       let subjectEnc:      Buffer | null = null;
       let snippetEnc:      Buffer | null = null;
       let bodyTextEnc:     Buffer | null = null;
+      let bodyHtmlEnc:     Buffer | null = null;
       let fromEmailEnc:    Buffer | null = null;
       let fromNameEnc:     Buffer | null = null;
       let toEmailsEnc:     Buffer | null = null;
       let fromEmailBlind:  Buffer | null = null;
       let toEmailsBlind:   Buffer[] | null = null;
       if (userKey) {
-        [subjectEnc, snippetEnc, bodyTextEnc, fromEmailEnc, fromNameEnc, toEmailsEnc, fromEmailBlind] = await Promise.all([
+        [subjectEnc, snippetEnc, bodyTextEnc, bodyHtmlEnc, fromEmailEnc, fromNameEnc, toEmailsEnc, fromEmailBlind] = await Promise.all([
           encryptForUser(subjectPlain,                            userKey),
           encryptForUser(snippet,                                 userKey),
           encryptForUser(bodyPlain,                               userKey),
+          encryptForUser(bodyHtmlPlain,                           userKey),
           encryptForUser(acc.email,                               userKey),
           encryptForUser(acc.display_name,                        userKey),
           encryptForUser(toList.length ? JSON.stringify(toList) : null, userKey),
@@ -458,23 +467,23 @@ export async function registerMailAccountsRoutes(app: FastifyInstance) {
         const ins = await pool.query<{ id: string }>(
           `INSERT INTO messages (
              user_id, mail_account_id, folder, uid, uidvalidity, message_id,
-             from_email, from_name, to_emails, subject, body_text, snippet,
+             from_email, from_name, to_emails, subject, body_text, body_html, snippet,
              date, flags, direction, has_attachments,
-             subject_enc, snippet_enc, body_text_enc,
+             subject_enc, snippet_enc, body_text_enc, body_html_enc,
              from_email_enc, from_name_enc, to_emails_enc,
              from_email_blind, to_emails_blind
-           ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9::jsonb,$10,$11,$12, now(), $13::jsonb, 'out', $14,
-             $15, $16, $17, $18, $19, $20, $21, $22::bytea[])
+           ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9::jsonb,$10,$11,$12,$13, now(), $14::jsonb, 'out', $15,
+             $16, $17, $18, $19, $20, $21, $22, $23, $24::bytea[])
            ON CONFLICT DO NOTHING
            RETURNING id`,
           [
             req.authUser!.id, id,
             result.appended.folder, result.appended.uid, result.appended.uidValidity, result.messageId || null,
             acc.email, acc.display_name,
-            JSON.stringify(toList), subjectPlain, bodyPlain, snippet,
+            JSON.stringify(toList), subjectPlain, bodyPlain, bodyHtmlPlain, snippet,
             JSON.stringify({ seen: true }),
             draftAttachments.length > 0,
-            subjectEnc, snippetEnc, bodyTextEnc,
+            subjectEnc, snippetEnc, bodyTextEnc, bodyHtmlEnc,
             fromEmailEnc, fromNameEnc, toEmailsEnc,
             fromEmailBlind, toEmailsBlind,
           ],

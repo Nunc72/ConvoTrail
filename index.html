@@ -193,7 +193,7 @@
        polish change is picked up by every browser as soon as the version
        is bumped — no manual cache-busters needed. Keep ?v= here in sync
        with APP_VERSION below at every deploy. -->
-  <link rel="stylesheet" href="polish.css?v=0.0.279"/>
+  <link rel="stylesheet" href="polish.css?v=0.0.280"/>
 </head>
 <body>
 <div id="root">
@@ -432,7 +432,7 @@ window.CONVOOZ_CRYPTO = CONVOOZ_CRYPTO;
 
 // ─── Constants ───────────────────────────────────────────────────────────────
 
-const APP_VERSION = "0.0.279"; // bumped on every deploy — keep in sync with version.json AND with the ?v= on polish.css above
+const APP_VERSION = "0.0.280"; // bumped on every deploy — keep in sync with version.json AND with the ?v= on polish.css above
 
 // ─── Backend + Supabase config ───────────────────────────────────────────────
 // Two stacks: prod (live testers) and staging (where new features land first).
@@ -793,6 +793,35 @@ function quoteHeader(msg) {
   const myName = msg.sender?.name || (msg.from || '').split('@')[0];
   const sender = msg.dir==="out" ? `${msg.from} (${myName})` : msg.from;
   return `—————————————————————————————————\n${DAYS[d.getDay()]} ${date} ${time}  ${sender}\n\n${msg.body||''}`;
+}
+// v0.0.280 — HTML-side helpers for Option X reply/forward. quoteHtmlHeader
+// emits the same date+sender divider as quoteHeader but as a styled
+// HTML block, ready to concatenate with the original body_html below.
+function htmlEscape(s) {
+  return String(s ?? '')
+    .replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')
+    .replace(/"/g,'&quot;').replace(/'/g,'&#39;');
+}
+function userTextToHtmlParagraphs(text) {
+  // Plain text → minimally-marked-up HTML. We escape user input then map
+  // newlines to <br>, paragraph-breaks (blank lines) to <p> blocks. Good
+  // enough for the user's typed reply on top of the quoted original.
+  const esc = htmlEscape(text);
+  const paragraphs = esc.split(/\n{2,}/g).map(p => p.replace(/\n/g, '<br>')).join('</p><p>');
+  return paragraphs ? `<p>${paragraphs}</p>` : '';
+}
+function quoteHtmlHeader(msg) {
+  const d = new Date(msg.date);
+  const date = `${pad(d.getDate())}-${pad(d.getMonth()+1)}-${d.getFullYear()}`;
+  const time = `${pad(d.getHours())}:${pad(d.getMinutes())}`;
+  const myName = msg.sender?.name || (msg.from || '').split('@')[0];
+  const sender = msg.dir === "out" ? `${msg.from} (${myName})` : msg.from;
+  return (
+    `<hr style="border:none;border-top:1px solid #ddd;margin:16px 0;"/>` +
+    `<div style="font-size:12px;color:#666;margin-bottom:8px;">` +
+      `${DAYS[d.getDay()]} ${date} ${time}&nbsp;&nbsp;${htmlEscape(sender)}` +
+    `</div>`
+  );
 }
 function softBg(hex) {
   const r=parseInt(hex.slice(1,3),16),g=parseInt(hex.slice(3,5),16),b=parseInt(hex.slice(5,7),16);
@@ -1869,7 +1898,14 @@ function ComposePane({replyTo, replyKind='reply', toContact, draft, initTo:initT
     replyTo ? "Re: " + (replyTo.subject || '') :
     ""
   );
-  const initBody = draft?.body ?? (replyTo ? "\n\n" + quoteHeader(replyTo) : "");
+  // v0.0.280 — Option X compose. The textarea now holds ONLY the
+  // user's new content; the original mail (incl. inline images) lands
+  // in a read-only iframe BELOW the textarea via `replyTo.bodyHtml`
+  // (resolved by ensureBodyForQuote). The textarea-quote dance is
+  // moved to send-time: text/plain part appends a plaintext quote so
+  // text-only clients still see the trail. html part stitches the
+  // user content + the original body_html into multipart/alternative.
+  const initBody = draft?.body ?? "";
 
   // Compute initial auto-signature (only for new messages, not replies/drafts).
   // For a reply, the from-address must match the account the original mail
@@ -2015,9 +2051,27 @@ function ComposePane({replyTo, replyKind='reply', toContact, draft, initTo:initT
     }
     setSending(true); setSendErr('');
     try {
+      // v0.0.280 — assemble the bodies the backend will multipart together.
+      //
+      // body (text/plain): the user's textarea + the divider + the
+      //   plaintext rendering of the original (via quoteHeader which
+      //   pastes either replyTo.body or the HTML→plaintext fallback that
+      //   ensureBodyForQuote already filled in).
+      // body_html (text/html): the user's text rendered as a small HTML
+      //   block + the HTML divider + the original body_html. Inline
+      //   images in replyTo.bodyHtml were already resolved cid: → data:
+      //   URIs in ensureBodyForQuote, so the recipient sees them.
+      const plainBody = replyTo ? `${body}\n\n${quoteHeader(replyTo)}` : body;
+      let htmlBody = '';
+      if (replyTo && replyTo.bodyHtml) {
+        htmlBody = userTextToHtmlParagraphs(body)
+          + quoteHtmlHeader(replyTo)
+          + replyTo.bodyHtml;
+      }
       await onSend?.({
         from, to, cc: showCC ? cc : '', bcc: showBCC ? bcc : '',
-        subject: subj, body,
+        subject: subj, body: plainBody,
+        body_html: htmlBody || undefined,
         reply_to_id: replyTo?.id,
         // When we have attachments, they live on the draft — the backend needs
         // the draft id to pull them into the MIME and clean up afterwards.
@@ -2332,6 +2386,26 @@ function ComposePane({replyTo, replyKind='reply', toContact, draft, initTo:initT
             e.target.style.height = Math.max(260, e.target.scrollHeight) + 'px';
           }
         }} placeholder="Write your message…"/>
+      {/* v0.0.280 — Option X preview: original mail rendered below the
+          textarea when forwarding/replying to an HTML mail. Read-only
+          sandboxed iframe so styles + scripts in the quoted body can't
+          mess with the compose pane. Inline images already inlined as
+          data: URIs by ensureBodyForQuote so the iframe renders them
+          without further network hops. */}
+      {replyTo?.bodyHtml && (
+        <div className="border-t border-gray-200 flex-shrink-0">
+          <div className="px-4 py-2 text-xs text-gray-500 bg-gray-50 flex items-center gap-2">
+            <span className="font-medium">Original message</span>
+            <span className="text-gray-400">— will be included in the {isForward ? 'forward' : 'reply'}</span>
+          </div>
+          <iframe
+            sandbox=""
+            srcDoc={`<!doctype html><html><head><meta charset="utf-8"><base target="_blank"><style>html,body{margin:0;padding:8px 16px;font-family:-apple-system,system-ui,sans-serif;font-size:13px;color:#333;line-height:1.4;}img{max-width:100%;height:auto;}a{color:#4f46e5;}</style></head><body>${replyTo.bodyHtml}</body></html>`}
+            style={{width:'100%',height:isMobile?280:400,border:'none'}}
+            title="Original message preview"
+          />
+        </div>
+      )}
       {/* Signature selector — shown when from-account has linked signatures */}
       {linkedSigs.length>0&&(
         <div className="px-4 py-2 flex-shrink-0">
@@ -8276,7 +8350,10 @@ function App({userId, onSignOut}) {
   // body_text alternative the sender shipped (newsletters typically
   // ship near-empty body_text).
   async function ensureBodyForQuote(msg) {
-    if (!msg || typeof msg.body === 'string' || msg.draft) return msg;
+    if (!msg || msg.draft) return msg;
+    // If we already have body filled in but no bodyHtml, we still want to
+    // try fetching HTML for the iframe preview. Otherwise short-circuit.
+    if (typeof msg.body === 'string' && typeof msg.bodyHtml === 'string') return msg;
     try {
       const r = await apiFetch(`/messages/${msg.id}/body`);
       if (!r) return msg;
@@ -8323,7 +8400,50 @@ function App({userId, onSignOut}) {
         }
       }
 
-      return { ...msg, body: quoteBody };
+      // v0.0.280 — Option X: resolve cid: → data: URIs in the HTML body
+      // so the iframe preview AND the outgoing forwarded mail render
+      // inline images without needing the recipient to fetch from our
+      // backend. data: URIs blow up the message size, but for a single
+      // forwarded newsletter that's acceptable; the alternative (no
+      // images in the forward) is what Rik wanted to avoid.
+      let bodyHtml = '';
+      if (html && /cid:/i.test(html)) {
+        const attachments = Array.isArray(r.attachments) ? r.attachments : [];
+        const inline = attachments.filter(a => a.cid && a.isInline);
+        // Locked: can't decrypt encrypted attachments, leave cid refs
+        // unresolved (broken-image icons) — consistent with rest of
+        // locked-state UX.
+        if (inline.length > 0 && masterKey) {
+          const replacements = await Promise.all(inline.map(async (att) => {
+            try {
+              const blob = await fetchAttachmentBlob(msg.id, att.index);
+              const dataUri = await new Promise((resolve, reject) => {
+                const reader = new FileReader();
+                reader.onload = () => resolve(reader.result);
+                reader.onerror = reject;
+                reader.readAsDataURL(blob);
+              });
+              return { cid: att.cid, url: dataUri };
+            } catch (e) {
+              console.warn('[reply/forward] inline image fetch failed:', att.cid, e?.message || e);
+              return { cid: att.cid, url: null };
+            }
+          }));
+          let resolved = html;
+          for (const { cid, url } of replacements) {
+            if (!url) continue;
+            const esc = cid.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+            resolved = resolved.replace(new RegExp(`cid:<?${esc}>?`, 'gi'), url);
+          }
+          bodyHtml = resolved;
+        } else {
+          bodyHtml = html;
+        }
+      } else if (html) {
+        bodyHtml = html;
+      }
+
+      return { ...msg, body: quoteBody, bodyHtml };
     } catch (e) {
       console.warn('[reply/forward] /body fetch failed:', e?.message || e);
       return msg;
@@ -8520,7 +8640,7 @@ function App({userId, onSignOut}) {
       else setMobileCol(0);
     }
   }
-  async function handleSend({from, to, cc, bcc, subject, body, reply_to_id, draft_id, draft_id_to_delete, tags, revert2me_days}) {
+  async function handleSend({from, to, cc, bcc, subject, body, body_html, reply_to_id, draft_id, draft_id_to_delete, tags, revert2me_days}) {
     const acc = mailAccounts.find(a => (a.email||'').toLowerCase() === (from||'').toLowerCase());
     if (!acc) throw new Error(`Sending account "${from}" not found`);
     const result = await apiFetch(`/mail-accounts/${acc.id}/send`, {
@@ -8531,6 +8651,11 @@ function App({userId, onSignOut}) {
         bcc: bcc || undefined,
         subject: subject || '',
         body: body || '',
+        // v0.0.280 — when forwarding/replying to an HTML mail the
+        // compose pane builds a body_html with the user's text + a
+        // divider + the original HTML (inline images already inlined
+        // as data: URIs). Backend turns it into multipart/alternative.
+        body_html: (typeof body_html === 'string' && body_html.length > 0) ? body_html : undefined,
         reply_to_id: reply_to_id || undefined,
         // When the draft has attachments we let the backend pull them into
         // the MIME and delete the draft itself (keys cleaned up after send).

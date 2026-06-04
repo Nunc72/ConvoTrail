@@ -16,6 +16,11 @@ export interface SendInput {
   bcc?: string;
   subject: string;
   text: string;
+  // v0.0.280 — when set, MailComposer emits multipart/alternative with
+  // text/plain + text/html parts. Inline images should already be
+  // embedded as data: URIs in this string; the FE side
+  // ensureBodyForQuote handles cid: → data: resolution before send.
+  html?: string;
   inReplyTo?: string | null;   // RFC822 Message-ID of original, e.g. "<abc@example.com>"
   references?: string | null;
   sentFolder?: string;
@@ -61,6 +66,11 @@ export async function sendMail(input: SendInput): Promise<SendResult> {
     bcc: input.bcc || undefined,
     subject: input.subject,
     text: input.text,
+    // v0.0.280 — optional HTML alternative. MailComposer emits a
+    // multipart/alternative envelope with text/plain + text/html so
+    // recipients see a rendered version when their client supports it,
+    // falling back to the text part on text-only clients.
+    ...(input.html ? { html: input.html } : {}),
   };
   if (input.inReplyTo) {
     mailOpts.inReplyTo = input.inReplyTo;
