@@ -193,7 +193,7 @@
        polish change is picked up by every browser as soon as the version
        is bumped — no manual cache-busters needed. Keep ?v= here in sync
        with APP_VERSION below at every deploy. -->
-  <link rel="stylesheet" href="polish.css?v=0.0.278"/>
+  <link rel="stylesheet" href="polish.css?v=0.0.279"/>
 </head>
 <body>
 <div id="root">
@@ -432,7 +432,7 @@ window.CONVOOZ_CRYPTO = CONVOOZ_CRYPTO;
 
 // ─── Constants ───────────────────────────────────────────────────────────────
 
-const APP_VERSION = "0.0.278"; // bumped on every deploy — keep in sync with version.json AND with the ?v= on polish.css above
+const APP_VERSION = "0.0.279"; // bumped on every deploy — keep in sync with version.json AND with the ?v= on polish.css above
 
 // ─── Backend + Supabase config ───────────────────────────────────────────────
 // Two stacks: prod (live testers) and staging (where new features land first).
@@ -8216,6 +8216,53 @@ function App({userId, onSignOut}) {
     setActionToast(`Mail was snoozed for ${days} days`);
     persistSeen(id);
   }
+  // v0.0.279 — convert HTML to readable plaintext for the quote trail.
+  // Newsletters typically ship a sparse body_text alongside a rich
+  // body_html. quoteHeader was inserting the sparse plaintext, so the
+  // forwarded mail looked half-empty. This stripper renders the HTML
+  // down to a textarea-friendly approximation: line-breaks for block
+  // elements, `[image: alt]` for images, `text (url)` for links, then
+  // strips remaining tags and decodes common entities. Not perfect —
+  // tables and complex layouts collapse — but a real upgrade over the
+  // sparse plaintext alternative most senders ship.
+  function htmlToPlaintextForQuote(html) {
+    if (!html) return '';
+    let s = html;
+    // Drop <style> / <script> blocks (content too).
+    s = s.replace(/<(style|script)[^>]*>[\s\S]*?<\/\1>/gi, '');
+    // <br> → newline.
+    s = s.replace(/<br\s*\/?>/gi, '\n');
+    // Block-closer → blank line so paragraphs are separated.
+    s = s.replace(/<\/(p|div|tr|li|h[1-6]|blockquote|pre|article|section|header|footer)>/gi, '\n\n');
+    // Bullet for <li> opens.
+    s = s.replace(/<li[^>]*>/gi, '- ');
+    // Images: prefer alt text when present, else "[image]".
+    s = s.replace(/<img[^>]*\balt="([^"]*)"[^>]*>/gi, (_m, alt) => alt ? `[image: ${alt}]` : '[image]');
+    s = s.replace(/<img[^>]*>/gi, '[image]');
+    // Links: keep the visible text + parenthetical URL. Skip in-page
+    // anchors, mailto: refs and javascript: handlers.
+    s = s.replace(/<a\s+[^>]*href="([^"]+)"[^>]*>([\s\S]*?)<\/a>/gi, (_m, url, inner) => {
+      if (/^(mailto:|#|javascript:)/i.test(url)) return inner;
+      return `${inner} (${url})`;
+    });
+    // Strip every remaining tag.
+    s = s.replace(/<[^>]+>/g, '');
+    // Decode common HTML entities. (Numeric entities + uncommon names
+    // remain as-is for now; can extend later if newsletters break.)
+    s = s.replace(/&nbsp;/g, ' ')
+         .replace(/&amp;/g, '&')
+         .replace(/&lt;/g, '<')
+         .replace(/&gt;/g, '>')
+         .replace(/&quot;/g, '"')
+         .replace(/&#39;/g, "'")
+         .replace(/&apos;/g, "'");
+    // Collapse stretches of 3+ newlines into two (paragraph break).
+    s = s.replace(/\n{3,}/g, '\n\n');
+    // Trim trailing whitespace per line.
+    s = s.split('\n').map(l => l.replace(/\s+$/, '')).join('\n');
+    return s.trim();
+  }
+
   // v0.0.278 — ensure replyTo carries the original body before the
   // compose pane opens. messageList only fills `body` for mails in
   // the bootstrap actionable set (unread incoming + active r2m); for
@@ -8224,14 +8271,20 @@ function App({userId, onSignOut}) {
   // /body here when needed and pick the decrypted plaintext (unlocked
   // staging) or the plaintext field (prod / no encryption). Locked
   // staging: leave the trail empty rather than paste the base64 cue.
+  // v0.0.279 — also pulls body_html and prefers the HTML→plaintext
+  // conversion when it carries substantially more content than the
+  // body_text alternative the sender shipped (newsletters typically
+  // ship near-empty body_text).
   async function ensureBodyForQuote(msg) {
     if (!msg || typeof msg.body === 'string' || msg.draft) return msg;
     try {
       const r = await apiFetch(`/messages/${msg.id}/body`);
       if (!r) return msg;
+      const masterKey = _masterKeyForDecrypt;
+
+      // Resolve the plaintext body (decrypt if needed; empty on locked).
       let text = typeof r.text === 'string' ? r.text : '';
       if (r.body_text_enc) {
-        const masterKey = _masterKeyForDecrypt;
         if (masterKey) {
           try {
             const dec = await CONVOOZ_CRYPTO.decryptString(
@@ -8239,12 +8292,38 @@ function App({userId, onSignOut}) {
             if (dec !== null) text = dec;
           } catch { /* fall back to r.text */ }
         } else {
-          // Locked: cannot decrypt; pasting ciphertext as the quoted
-          // trail would be useless. Empty the trail instead.
           text = '';
         }
       }
-      return { ...msg, body: text };
+
+      // Resolve the HTML body (decrypt if needed; empty on locked).
+      let html = typeof r.html === 'string' ? r.html : '';
+      if (r.body_html_enc) {
+        if (masterKey) {
+          try {
+            const dec = await CONVOOZ_CRYPTO.decryptString(
+              CONVOOZ_CRYPTO.b64.toBytes(r.body_html_enc), masterKey);
+            if (dec !== null) html = dec;
+          } catch { /* fall back to r.html */ }
+        } else {
+          html = '';
+        }
+      }
+
+      // Pick the richer representation for the quote. HTML→text usually
+      // gives more content for newsletters; the plaintext alternative
+      // is sometimes just "click here to view in browser". Fall through
+      // to body_text when the HTML conversion comes up empty (e.g.
+      // text-only mails).
+      let quoteBody = text;
+      if (html) {
+        const fromHtml = htmlToPlaintextForQuote(html);
+        if (fromHtml && (fromHtml.length > text.length * 1.5 || !text.trim())) {
+          quoteBody = fromHtml;
+        }
+      }
+
+      return { ...msg, body: quoteBody };
     } catch (e) {
       console.warn('[reply/forward] /body fetch failed:', e?.message || e);
       return msg;
