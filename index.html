@@ -193,7 +193,7 @@
        polish change is picked up by every browser as soon as the version
        is bumped — no manual cache-busters needed. Keep ?v= here in sync
        with APP_VERSION below at every deploy. -->
-  <link rel="stylesheet" href="polish.css?v=0.0.276"/>
+  <link rel="stylesheet" href="polish.css?v=0.0.277"/>
 </head>
 <body>
 <div id="root">
@@ -432,7 +432,7 @@ window.CONVOOZ_CRYPTO = CONVOOZ_CRYPTO;
 
 // ─── Constants ───────────────────────────────────────────────────────────────
 
-const APP_VERSION = "0.0.276"; // bumped on every deploy — keep in sync with version.json AND with the ?v= on polish.css above
+const APP_VERSION = "0.0.277"; // bumped on every deploy — keep in sync with version.json AND with the ?v= on polish.css above
 
 // ─── Backend + Supabase config ───────────────────────────────────────────────
 // Two stacks: prod (live testers) and staging (where new features land first).
@@ -2652,7 +2652,13 @@ function AttachmentThumb({messageId, att, onClick, cryptoStatus='idle'}) {
   // for new mails it would expose either decrypted (we have no key)
   // or noisy-blob previews. Show a lock-glyph placeholder instead so
   // the user sees "there is an attachment here, decrypt-to-view".
-  const locked = cryptoStatus !== 'unlocked';
+  // v0.0.277 — only gate on the actual 'locked' status. Prod users
+  // who haven't opted into encryption have cryptoStatus = 'unset',
+  // and the original `!== 'unlocked'` check accidentally caught them
+  // too — every attachment turned into a lock glyph. The placeholder
+  // is exclusively a "decryption is configured but currently off"
+  // signal.
+  const locked = cryptoStatus === 'locked';
   useEffect(() => {
     if (locked) { setBlobUrl(null); setErr(false); return; }
     let cancelled = false; let createdUrl = null;
@@ -2778,7 +2784,12 @@ function AttachmentPreviewModal({messageId, attachment, attachments, onClose, on
     // v0.0.275 — locked-state preview shows a placeholder, no fetch.
     // Skips the leak path where /attachments would otherwise stream
     // back plaintext bytes for legacy (no storage_key) attachments.
-    if (cryptoStatus !== 'unlocked') {
+    // v0.0.277 — narrow the trigger to cryptoStatus === 'locked'. The
+    // previous `!== 'unlocked'` over-fired on 'unset' (no encryption
+    // configured), turning every prod attachment into a locked
+    // placeholder. The gate is only meaningful when decryption IS
+    // configured but currently off.
+    if (cryptoStatus === 'locked') {
       setLoading(false); setErr(''); setBlobUrl(null); setText(null);
       return;
     }
@@ -2839,20 +2850,23 @@ function AttachmentPreviewModal({messageId, attachment, attachments, onClose, on
       <div className="flex-1 min-h-0 relative flex items-center justify-center p-4 overflow-hidden">
         {/* v0.0.275 — locked-state placeholder. We skip the fetch above
             and show the user a clear "unlock to view" message instead
-            of accidentally streaming plaintext bytes from /attachments. */}
-        {cryptoStatus !== 'unlocked' && (
+            of accidentally streaming plaintext bytes from /attachments.
+            v0.0.277 — narrowed from `!== 'unlocked'` to specifically
+            `=== 'locked'` so 'unset' (no encryption configured, the
+            prod default) keeps the normal preview flow. */}
+        {cryptoStatus === 'locked' && (
           <div className="flex flex-col items-center gap-3 text-white/70 text-sm">
             <span className="text-5xl" aria-hidden>🔒</span>
             <span>Unlock decryption to preview this attachment.</span>
           </div>
         )}
-        {cryptoStatus === 'unlocked' && loading && (
+        {cryptoStatus !== 'locked' && loading && (
           <div className="flex items-center gap-2 text-white/70 text-sm">
             <Spinner size={18} className="!text-white/80"/>
             <span>Loading preview…</span>
           </div>
         )}
-        {cryptoStatus === 'unlocked' && !loading && err && <div className="text-red-300 text-sm">Preview failed: {err}</div>}
+        {cryptoStatus !== 'locked' && !loading && err && <div className="text-red-300 text-sm">Preview failed: {err}</div>}
         {!loading && !err && kind === 'image' && blobUrl && (
           // Zoom UX:
           //  • Mobile pinch: spread 2 fingers to zoom in, pinch to zoom out.
