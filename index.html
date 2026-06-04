@@ -193,7 +193,7 @@
        polish change is picked up by every browser as soon as the version
        is bumped — no manual cache-busters needed. Keep ?v= here in sync
        with APP_VERSION below at every deploy. -->
-  <link rel="stylesheet" href="polish.css?v=0.0.275"/>
+  <link rel="stylesheet" href="polish.css?v=0.0.276"/>
 </head>
 <body>
 <div id="root">
@@ -432,7 +432,7 @@ window.CONVOOZ_CRYPTO = CONVOOZ_CRYPTO;
 
 // ─── Constants ───────────────────────────────────────────────────────────────
 
-const APP_VERSION = "0.0.275"; // bumped on every deploy — keep in sync with version.json AND with the ?v= on polish.css above
+const APP_VERSION = "0.0.276"; // bumped on every deploy — keep in sync with version.json AND with the ?v= on polish.css above
 
 // ─── Backend + Supabase config ───────────────────────────────────────────────
 // Two stacks: prod (live testers) and staging (where new features land first).
@@ -7435,7 +7435,18 @@ function App({userId, onSignOut}) {
         // current account-selector scope and react instantly to local
         // mark-read / snooze / delete actions.
         const stats = contactStats[contact.id];
-        const sortLastDate = (stats?.latest_date) || localLastDate;
+        // v0.0.276 — drafts are stored in a separate table (`drafts`) so
+        // the server-side latest_date stat doesn't see them. Fold the
+        // newest in-scope draft's modifiedAt into the sort key here so
+        // a contact whose only recent activity is an open compose pane
+        // bubbles to the top of the non-actionable group instead of
+        // dropping to wherever its last sent/received mail sits.
+        const draftMsgs = all.filter(m => m.draft);
+        const latestDraftDate = draftMsgs.length > 0
+          ? draftMsgs.reduce((a, b) => a.date > b.date ? a : b).date
+          : '';
+        const baseSortDate = (stats?.latest_date) || localLastDate;
+        const sortLastDate = latestDraftDate > baseSortDate ? latestDraftDate : baseSortDate;
         const sortIsActionable = stats
           ? (stats.unread > 0 || stats.r2m > 0)
           : (unread > 0 || hasR2m);
