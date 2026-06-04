@@ -193,7 +193,7 @@
        polish change is picked up by every browser as soon as the version
        is bumped — no manual cache-busters needed. Keep ?v= here in sync
        with APP_VERSION below at every deploy. -->
-  <link rel="stylesheet" href="polish.css?v=0.0.277"/>
+  <link rel="stylesheet" href="polish.css?v=0.0.278"/>
 </head>
 <body>
 <div id="root">
@@ -432,7 +432,7 @@ window.CONVOOZ_CRYPTO = CONVOOZ_CRYPTO;
 
 // ─── Constants ───────────────────────────────────────────────────────────────
 
-const APP_VERSION = "0.0.277"; // bumped on every deploy — keep in sync with version.json AND with the ?v= on polish.css above
+const APP_VERSION = "0.0.278"; // bumped on every deploy — keep in sync with version.json AND with the ?v= on polish.css above
 
 // ─── Backend + Supabase config ───────────────────────────────────────────────
 // Two stacks: prod (live testers) and staging (where new features land first).
@@ -8216,9 +8216,43 @@ function App({userId, onSignOut}) {
     setActionToast(`Mail was snoozed for ${days} days`);
     persistSeen(id);
   }
-  function handleReply(msg){setReplyTo(msg);setReplyKind('reply');setComposeContact(null);setComposeDraft(null);setShowCompose(true);setMergeContact(null);if(isMobile)setMobileCol(2);}
-  function handleReplyAll(msg){setReplyTo(msg);setReplyKind('reply-all');setComposeContact(null);setComposeDraft(null);setShowCompose(true);setMergeContact(null);if(isMobile)setMobileCol(2);}
-  function handleForward(msg){setReplyTo(msg);setReplyKind('forward');setComposeContact(null);setComposeDraft(null);setShowCompose(true);setMergeContact(null);if(isMobile)setMobileCol(2);}
+  // v0.0.278 — ensure replyTo carries the original body before the
+  // compose pane opens. messageList only fills `body` for mails in
+  // the bootstrap actionable set (unread incoming + active r2m); for
+  // everything else (read / lazy-fetched) message.body is undefined
+  // and quoteHeader rendered the reply with an empty trail. Fetch
+  // /body here when needed and pick the decrypted plaintext (unlocked
+  // staging) or the plaintext field (prod / no encryption). Locked
+  // staging: leave the trail empty rather than paste the base64 cue.
+  async function ensureBodyForQuote(msg) {
+    if (!msg || typeof msg.body === 'string' || msg.draft) return msg;
+    try {
+      const r = await apiFetch(`/messages/${msg.id}/body`);
+      if (!r) return msg;
+      let text = typeof r.text === 'string' ? r.text : '';
+      if (r.body_text_enc) {
+        const masterKey = _masterKeyForDecrypt;
+        if (masterKey) {
+          try {
+            const dec = await CONVOOZ_CRYPTO.decryptString(
+              CONVOOZ_CRYPTO.b64.toBytes(r.body_text_enc), masterKey);
+            if (dec !== null) text = dec;
+          } catch { /* fall back to r.text */ }
+        } else {
+          // Locked: cannot decrypt; pasting ciphertext as the quoted
+          // trail would be useless. Empty the trail instead.
+          text = '';
+        }
+      }
+      return { ...msg, body: text };
+    } catch (e) {
+      console.warn('[reply/forward] /body fetch failed:', e?.message || e);
+      return msg;
+    }
+  }
+  async function handleReply(msg){const m=await ensureBodyForQuote(msg);setReplyTo(m);setReplyKind('reply');setComposeContact(null);setComposeDraft(null);setShowCompose(true);setMergeContact(null);if(isMobile)setMobileCol(2);}
+  async function handleReplyAll(msg){const m=await ensureBodyForQuote(msg);setReplyTo(m);setReplyKind('reply-all');setComposeContact(null);setComposeDraft(null);setShowCompose(true);setMergeContact(null);if(isMobile)setMobileCol(2);}
+  async function handleForward(msg){const m=await ensureBodyForQuote(msg);setReplyTo(m);setReplyKind('forward');setComposeContact(null);setComposeDraft(null);setShowCompose(true);setMergeContact(null);if(isMobile)setMobileCol(2);}
   function handleNewMsg(contact=null){setReplyTo(null);setReplyKind(null);setComposeContact(contact);setComposeDraft(null);setShowCompose(true);setMergeContact(null);setTagComposeInit(null);if(isMobile)setMobileCol(2);}
 
   // ── Account sync plumbing ────────────────────────────────────────────────
