@@ -916,8 +916,20 @@ async function buildMessageRow(
   const parsed: ParsedMail | null = msg.source ? await simpleParser(msg.source) : null;
   const envelope = msg.envelope;
   const from = addrList(parsed?.from)[0] || (envelope?.from?.[0] ? { email: envelope.from[0].address?.toLowerCase() ?? "", name: envelope.from[0].name ?? null } : null);
-  const tos = addrList(parsed?.to).map(a => ({ email: a.email, name: a.name, role: "to" }));
-  const ccs = addrList(parsed?.cc).map(a => ({ email: a.email, name: a.name, role: "cc" }));
+  const tos  = addrList(parsed?.to ).map(a => ({ email: a.email, name: a.name, role: "to"  }));
+  const ccs  = addrList(parsed?.cc ).map(a => ({ email: a.email, name: a.name, role: "cc"  }));
+  // v0.0.283 — pull Bcc out of the parsed envelope too. The SMTP
+  // delivery path strips Bcc from the recipient copies (that's the
+  // privacy guarantee), but Apple Mail / Outlook / Thunderbird save
+  // the Sent copy WITH the Bcc header intact so the user can see who
+  // they bcc'd later. Without this, every sync re-pass on the Sent
+  // folder collapsed the to_emails entry's role back to "to"/"cc",
+  // and the FE's "BCC 14 maart"-style date prefix vanished from
+  // contact threads. /send already records role="bcc" on the row it
+  // INSERTs itself; the sync ON CONFLICT DO NOTHING keeps that row
+  // intact — this fix covers mails that arrived via a third-party
+  // client's Sent kopie OR that pre-date the /send-side capture.
+  const bccs = addrList(parsed?.bcc).map(a => ({ email: a.email, name: a.name, role: "bcc" }));
   // v0.0.258 — direction by folder when we can identify it (Inbox vs
   // Sent on conventional IMAP), with the from-vs-userEmail check as the
   // fallback for Gmail All-Mail (no inbox/sent distinction) and the
@@ -971,7 +983,7 @@ async function buildMessageRow(
   const bodyHtml = typeof parsed?.html === "string" ? parsed.html : null;
   const fromEmail = from?.email ?? null;
   const fromName  = from?.name  ?? null;
-  const toEmails: Array<{ email: string; name: string | null; role: string }> = [...tos, ...ccs];
+  const toEmails: Array<{ email: string; name: string | null; role: string }> = [...tos, ...ccs, ...bccs];
   let subject_enc:        Buffer | null = null;
   let snippet_enc:        Buffer | null = null;
   let body_text_enc:      Buffer | null = null;
