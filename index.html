@@ -193,7 +193,7 @@
        polish change is picked up by every browser as soon as the version
        is bumped — no manual cache-busters needed. Keep ?v= here in sync
        with APP_VERSION below at every deploy. -->
-  <link rel="stylesheet" href="polish.css?v=0.0.281"/>
+  <link rel="stylesheet" href="polish.css?v=0.0.282"/>
 </head>
 <body>
 <div id="root">
@@ -432,7 +432,7 @@ window.CONVOOZ_CRYPTO = CONVOOZ_CRYPTO;
 
 // ─── Constants ───────────────────────────────────────────────────────────────
 
-const APP_VERSION = "0.0.281"; // bumped on every deploy — keep in sync with version.json AND with the ?v= on polish.css above
+const APP_VERSION = "0.0.282"; // bumped on every deploy — keep in sync with version.json AND with the ?v= on polish.css above
 
 // ─── Backend + Supabase config ───────────────────────────────────────────────
 // Two stacks: prod (live testers) and staging (where new features land first).
@@ -5989,6 +5989,16 @@ function App({userId, onSignOut}) {
   // the network round-trip is pending and messageList still has no
   // rows for the selected contact.
   const [lazyFetchingContactId, setLazyFetchingContactId] = useState(null);
+  // v0.0.282 — per-session cache of contacts whose lazy-fetch has
+  // already completed. Lets handleSelectContact / the auto-effect /
+  // navigate-from-message fire `lazyFetchContactMessages` UNCONDITIONALLY
+  // (the previous `!messageList.some(...)` guard meant contacts with
+  // any post-bootstrap-cutoff mail never got their older trail loaded —
+  // e.g. Marbres Coll showing only mails from 29 May on). The fetch
+  // itself short-circuits when the cache hit. Cleared on every
+  // refreshData (dataRefreshTick bump) so a fresh bootstrap forces a
+  // re-fetch and older mails re-appear after sync / lock-toggle.
+  const lazyFetchedContactsRef = useRef(new Set());
   // messageList hydration drops rows that reference a mail-account id
   // the cache no longer knows about. That keeps the first paint
   // consistent with the cached mailAccounts list: if the user deleted
@@ -6692,6 +6702,15 @@ function App({userId, onSignOut}) {
   // Accounts against the cached snapshot and rewrites whatever slices
   // are now out of date.
   const refreshData = useCallback(() => setDataRefreshTick(t => t + 1), []);
+  // v0.0.282 — invalidate the lazy-fetch cache whenever a refresh
+  // fires. Bootstrap replaces messageList wholesale with the top-500;
+  // without clearing this, the cache would still claim "already
+  // fetched", the auto-lazy-fetch effect below would short-circuit,
+  // and the older mails the user just had visible would silently
+  // disappear from the contact's trail.
+  useEffect(() => {
+    lazyFetchedContactsRef.current = new Set();
+  }, [dataRefreshTick]);
   // Belt-and-braces ghost-account fix: keep the cached mailAccounts AND
   // the cached messageList in sync with the live mailAccounts state on
   // every change. The /bootstrap success path already writes the full
@@ -6800,13 +6819,13 @@ function App({userId, onSignOut}) {
   useEffect(() => {
     if (selContact === null) return;
     if (lazyFetchingContactId === selContact) return;
-    const hasMail = messageList.some(m =>
-      m.contactId === selContact &&
-      (!m.accountEmail || selAccounts.includes(m.accountEmail))
-    );
-    if (!hasMail) {
-      lazyFetchContactMessages(selContact);
-    }
+    // v0.0.282 — fire unconditionally (the per-session cache in
+    // lazyFetchContactMessages prevents duplicates). The previous
+    // hasMail guard meant any contact whose newest mail made it into
+    // bootstrap (= almost every visible contact) never had its older
+    // trail loaded — pulling only 1 week back when 3 months were in
+    // the DB. Marbres Coll-style symptom.
+    lazyFetchContactMessages(selContact);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [contactList, selContact, selAccounts]);
   const [selTag,       setSelTag]       = useState(null);
@@ -7754,6 +7773,13 @@ function App({userId, onSignOut}) {
   // top-500 anyway. body/bodyHtml are left undefined so MessageDetail
   // fires its existing on-demand /body fetch on first click.
   async function lazyFetchContactMessages(contactId) {
+    // v0.0.282 — short-circuit when this contact was already fetched in
+    // this session. Callers fire unconditionally; the de-dup lives here
+    // so future entry points (search-click, deep-link, …) get it for
+    // free. Cache cleared on refreshData so a fresh bootstrap forces
+    // a re-fetch.
+    if (lazyFetchedContactsRef.current.has(contactId)) return;
+    lazyFetchedContactsRef.current.add(contactId);
     setLazyFetchingContactId(contactId);
     try {
       // v0.0.265 — snapshot the lock state at fetch start. If the user
@@ -7980,6 +8006,9 @@ function App({userId, onSignOut}) {
       });
     } catch (e) {
       console.warn('[Convooz] lazy-fetch contact messages failed:', e?.message || e);
+      // Allow a retry on the next click — drop this contact from the
+      // cache so the user can recover from a transient failure.
+      lazyFetchedContactsRef.current.delete(contactId);
     } finally {
       // Clear only if we're still the latest fetch in flight; a faster
       // subsequent click on a different contact may have overwritten us.
@@ -8005,9 +8034,11 @@ function App({userId, onSignOut}) {
     // at "No messages" while plenty of in-scope mails sit in the DB.
     // Fire-and-forget: the setMessageList in the handler triggers a
     // re-render so the thread populates as soon as the request lands.
-    if (!messageList.some(m => m.contactId === id && (!m.accountEmail || selAccounts.includes(m.accountEmail)))) {
-      lazyFetchContactMessages(id);
-    }
+    // v0.0.282 — unconditional: lazyFetchContactMessages's session
+    // cache (lazyFetchedContactsRef) prevents redundant fetches.
+    // Previously gated on "has no visible mail" which kept Marbres
+    // Coll-style contacts on their last-week-only trail forever.
+    lazyFetchContactMessages(id);
     if(isMobile) { setMobileCol(1); setSelMsg(null); return; }
     // We only pick a message that's actually visible in the current
     // ThreadColumn filter tab — otherwise col 3 would show a mail that
@@ -8065,9 +8096,9 @@ function App({userId, onSignOut}) {
     // Lazy-fetch if this contact has no in-scope mails in messageList
     // yet (cold contact reached via search). Same guard as
     // handleSelectContact's body.
-    if (!messageList.some(m => m.contactId === contactId && (!m.accountEmail || selAccounts.includes(m.accountEmail)))) {
-      lazyFetchContactMessages(contactId);
-    }
+    // v0.0.282 — same unconditional fire as handleSelectContact;
+    // cache de-dup lives inside lazyFetchContactMessages.
+    lazyFetchContactMessages(contactId);
     // On mobile col 2 is hidden behind the back-stack; surface it so
     // the user sees the thread they just navigated to. selMsg stays
     // intact — col 3 stays on the mail they were reading.
@@ -9202,7 +9233,25 @@ function App({userId, onSignOut}) {
       msgTags={msgTags} msgMatchesSearch={msgMatchesSearch}
       serverHits={serverHits} serverSearching={serverSearching}
       selectedMsgId={selMsg}
-      onSelectMsg={id=>handleSelectMsg(id)}
+      onSelectMsg={(id)=>{
+        // v0.0.282 — "Older mail" hits live in serverHits, NOT in
+        // messageList. Clicking one used to set selMsg to an id that
+        // messageList.find() couldn't resolve — selectedMsg fell
+        // through to undefined, MessageDetail rendered the empty
+        // state (no spinner, no body fetch). Merge the hit into
+        // messageList first so the detail pane has something to find.
+        if (!messageList.some(m => m.id === id)) {
+          const hit = serverHits.find(m => m.id === id);
+          if (hit) {
+            setMessageList(prev => {
+              const key = hit.id + '::' + hit.contactId;
+              if (prev.some(m => m.id + '::' + m.contactId === key)) return prev;
+              return [...prev, hit];
+            });
+          }
+        }
+        handleSelectMsg(id);
+      }}
       onSelectDraft={msg=>handleSelectDraft(msg)}/>;
   } else if(showMerge){
     col2=<MergeDialog primary={selectedContact} secondary={mergeContactObj} onMerge={handleMerge} onCancel={()=>setMergeContact(null)}/>;
