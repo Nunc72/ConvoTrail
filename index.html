@@ -193,7 +193,7 @@
        polish change is picked up by every browser as soon as the version
        is bumped — no manual cache-busters needed. Keep ?v= here in sync
        with APP_VERSION below at every deploy. -->
-  <link rel="stylesheet" href="polish.css?v=0.0.280"/>
+  <link rel="stylesheet" href="polish.css?v=0.0.281"/>
 </head>
 <body>
 <div id="root">
@@ -432,7 +432,7 @@ window.CONVOOZ_CRYPTO = CONVOOZ_CRYPTO;
 
 // ─── Constants ───────────────────────────────────────────────────────────────
 
-const APP_VERSION = "0.0.280"; // bumped on every deploy — keep in sync with version.json AND with the ?v= on polish.css above
+const APP_VERSION = "0.0.281"; // bumped on every deploy — keep in sync with version.json AND with the ?v= on polish.css above
 
 // ─── Backend + Supabase config ───────────────────────────────────────────────
 // Two stacks: prod (live testers) and staging (where new features land first).
@@ -1892,6 +1892,12 @@ function ComposePane({replyTo, replyKind='reply', toContact, draft, initTo:initT
       ).join(', ')
     : "";
   const initCCResolved = draft?.cc ?? (computedReplyAllCC || initCC);
+  // v0.0.281 — BCC needs the same draft-fallback dance as To / CC.
+  // Without it, re-opening a saved draft shows an empty BCC field
+  // (and the BCC chevron stays collapsed because showBCC is gated on
+  // !!initBCC, which is just the tagComposeInit prop). Effect: BCC
+  // addresses appeared lost on save → reload → save.
+  const initBCCResolved = draft?.bcc ?? initBCC;
 
   const initSubj = draft?.subject ?? (
     isForward ? "Fwd: " + (replyTo?.subject || '') :
@@ -1920,14 +1926,14 @@ function ComposePane({replyTo, replyKind='reply', toContact, draft, initTo:initT
   const [to,setTo]=useState(initTo);
   const [from,setFrom]=useState(initFromAcct);
   const [cc,setCc]=useState(initCCResolved);
-  const [bcc,setBcc]=useState(initBCC);
+  const [bcc,setBcc]=useState(initBCCResolved);
   const [subj,setSubj]=useState(initSubj);
   const [body,setBody]=useState(initBodyWithSig);
   const [activeSigId,setActiveSigId]=useState(initAutoSig?.id||null);
   const [r2mDays,setR2mDays]=useState(toContact?.r2mDays??3);
   const [r2mHover,setR2mHover]=useState(false);
   const [showCC,setShowCC]=useState(!!initCCResolved);
-  const [showBCC,setShowBCC]=useState(!!initBCC);
+  const [showBCC,setShowBCC]=useState(!!initBCCResolved);
   const [msgTags,setMsgTags]=useState(initTag?[...new Set([...initMsgTags,initTag])]:initMsgTags);
   const [showDrop,    setShowDrop]    = useState(false);
   const [showFromDrop,setShowFromDrop]= useState(false);
@@ -8628,6 +8634,23 @@ function App({userId, onSignOut}) {
     if (mailAccounts.length === 0) setSettingsTab('accounts');
   }, [dataLoading, mailAccounts]);
   function handleSelectDraft(msg){setComposeDraft(msg);setReplyTo(null);setReplyKind(null);setComposeContact(null);setShowCompose(true);setMergeContact(null);setSelMsg(null);setArrowFocus('mails');if(isMobile)setMobileCol(2);}
+  // v0.0.281 — invariant: selMsg never points at a draft. Auto-pick
+  // helpers (handleSelectContact's "remembered" + "newest fallback"
+  // branches; pickMsgInScope's fallback; lastMsgByContact recall on
+  // tab/filter switch) all collapse onto `setSelMsg(id)` without
+  // checking m.draft, so any contact whose newest message is an
+  // open draft would land in MessageDetail — which renders drafts
+  // as if they were sent Out mails, minus the Save/Send buttons.
+  // Auto-promote to the compose flow so the user gets the editor
+  // they expect. Second-click "works fine" because it goes via the
+  // mail-list onClick which already routes drafts to onSelectDraft.
+  useEffect(() => {
+    if (selMsg == null) return;
+    const m = messageList.find(x => x.id === selMsg);
+    if (m && m.draft) {
+      handleSelectDraft(m);
+    }
+  }, [selMsg, messageList]);
   function handleCloseCompose(){
     const origin = composeOrigin;
     setShowCompose(false);setReplyTo(null);setReplyKind(null);setComposeContact(null);setComposeDraft(null);setTagComposeInit(null);
