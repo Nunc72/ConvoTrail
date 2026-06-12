@@ -1,0 +1,55 @@
+# Staging Supabase keep-alive
+#
+# Supabase pauses free-tier projects after 7 days without API traffic.
+# Our prod project gets enough natural use to stay alive, but staging
+# (dvzzuarhaligsbdobptg = rik@studiomatr.eu's project under the
+# "Convooz Staging" org) sits idle between manual test sessions and
+# kept hitting the pause threshold (most recent pause: 12 juni 2026).
+#
+# This workflow pings the project's REST root every 3 days. Any
+# non-5xx response resets Supabase's inactivity timer; a 503 means
+# the project IS paused (the keep-alive is then too late) — the
+# workflow surfaces that as a failure so GitHub mails the owner.
+#
+# Cost: zero. PostgREST root reads no rows; GitHub Actions free-tier
+# covers more than enough minutes for a once-every-3-days curl.
+
+name: supabase-keepalive
+
+on:
+  schedule:
+    # 06:17 UTC, every 3 days. The odd minute spreads us off the top-
+    # of-hour Actions queue (which can drift 15-30 minutes under load).
+    - cron: "17 6 */3 * *"
+  workflow_dispatch: {}
+
+jobs:
+  ping-staging:
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    steps:
+      - name: Tap staging Supabase REST endpoint
+        run: |
+          set -u
+          URL="https://dvzzuarhaligsbdobptg.supabase.co/rest/v1/"
+          code=$(curl -s -o /dev/null -w "%{http_code}" --max-time 30 "$URL" || echo "000")
+          echo "REST response: $code"
+          case "$code" in
+            200|400|401|404)
+              # Live project — PostgREST answers (200) or rejects an
+              # unauthenticated/missing-table request (400/401/404).
+              # All count as "activity" for Supabase's pause timer.
+              echo "Project is live; inactivity timer reset."
+              ;;
+            503)
+              echo "::error ::Staging Supabase appears paused (503). Restore via dashboard within 90 days, otherwise data goes away."
+              exit 1
+              ;;
+            000)
+              echo "::error ::Could not reach Supabase (DNS / network)."
+              exit 1
+              ;;
+            *)
+              echo "::warning ::Unexpected status $code — investigate but not paused."
+              ;;
+          esac
