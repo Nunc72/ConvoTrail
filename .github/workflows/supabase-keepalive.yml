@@ -32,8 +32,22 @@ jobs:
         run: |
           set -u
           URL="https://dvzzuarhaligsbdobptg.supabase.co/rest/v1/"
-          code=$(curl -s -o /dev/null -w "%{http_code}" --max-time 30 "$URL" || echo "000")
-          echo "REST response: $code"
+          # Capture http_code AND curl's own exit code separately. The
+          # earlier `|| echo 000`-style fallback double-printed when curl
+          # already wrote its own "000" before failing, giving us
+          # bogus "000000" output.
+          code=$(curl -s -o /dev/null -w "%{http_code}" --max-time 30 "$URL")
+          curl_exit=$?
+          echo "REST response: $code  (curl exit=$curl_exit)"
+          # A paused Supabase project drops its DNS entry entirely, so
+          # we don't even get to the HTTP layer — curl exits 6
+          # ("could not resolve host") and code stays "000". That's
+          # functionally the same signal as a 503 "Project is paused"
+          # from the (rare) case where the hostname is still up.
+          if [ "$curl_exit" = "6" ] || [ "$code" = "000" ] || [ "$code" = "503" ]; then
+            echo "::error ::Staging Supabase appears paused (curl=$curl_exit code=$code). Restore via dashboard within 90 days, otherwise data goes away."
+            exit 1
+          fi
           case "$code" in
             200|400|401|404)
               # Live project — PostgREST answers (200) or rejects an
@@ -41,15 +55,7 @@ jobs:
               # All count as "activity" for Supabase's pause timer.
               echo "Project is live; inactivity timer reset."
               ;;
-            503)
-              echo "::error ::Staging Supabase appears paused (503). Restore via dashboard within 90 days, otherwise data goes away."
-              exit 1
-              ;;
-            000)
-              echo "::error ::Could not reach Supabase (DNS / network)."
-              exit 1
-              ;;
             *)
-              echo "::warning ::Unexpected status $code — investigate but not paused."
+              echo "::warning ::Unexpected status $code — investigate but probably not paused."
               ;;
           esac
