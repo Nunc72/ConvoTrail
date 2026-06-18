@@ -71,7 +71,13 @@
   <script defer src="https://cdn.tailwindcss.com"></script>
   <script defer src="https://unpkg.com/react@18/umd/react.development.js"></script>
   <script defer src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
-  <script defer src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+  <!-- v0.0.286 — pinned to 7.x. unpkg's bare /@babel/standalone redirect
+       flipped to 8.0.x in mid-June 2026 (Babel 8 major release), whose
+       breaking changes in the in-browser transform left our 500KB+
+       JSX bundle silently failing to compile. SPA never mounted; users
+       saw the bootloader spinner forever. Re-pin to a major we know
+       compiles this bundle. -->
+  <script defer src="https://unpkg.com/@babel/standalone@7/babel.min.js"></script>
   <script defer src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
   <!-- Crypto for Pad A: end-to-end-encryption uses the browser-native
        Web Crypto API (window.crypto.subtle). No CDN dependency, no WASM
@@ -193,7 +199,7 @@
        polish change is picked up by every browser as soon as the version
        is bumped — no manual cache-busters needed. Keep ?v= here in sync
        with APP_VERSION below at every deploy. -->
-  <link rel="stylesheet" href="polish.css?v=0.0.286"/>
+  <link rel="stylesheet" href="polish.css?v=0.0.287"/>
 </head>
 <body>
 <div id="root">
@@ -432,7 +438,7 @@ window.CONVOOZ_CRYPTO = CONVOOZ_CRYPTO;
 
 // ─── Constants ───────────────────────────────────────────────────────────────
 
-const APP_VERSION = "0.0.286"; // bumped on every deploy — keep in sync with version.json AND with the ?v= on polish.css above
+const APP_VERSION = "0.0.287"; // bumped on every deploy — keep in sync with version.json AND with the ?v= on polish.css above
 
 // ─── Backend + Supabase config ───────────────────────────────────────────────
 // Two stacks: prod (live testers) and staging (where new features land first).

@@ -87,7 +87,7 @@ await app.register(cors, {
 // Bumped on every backend deploy (lockstep with index.html's APP_VERSION),
 // so we can curl /health and verify which build is actually running on
 // Fly — useful when investigating whether a code change actually shipped.
-const BACKEND_VERSION = "0.0.286";
+const BACKEND_VERSION = "0.0.287";
 
 app.get("/health", async () => ({
   status: "ok",
