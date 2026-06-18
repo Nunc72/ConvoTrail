@@ -193,7 +193,7 @@
        polish change is picked up by every browser as soon as the version
        is bumped — no manual cache-busters needed. Keep ?v= here in sync
        with APP_VERSION below at every deploy. -->
-  <link rel="stylesheet" href="polish.css?v=0.0.284"/>
+  <link rel="stylesheet" href="polish.css?v=0.0.283"/>
 </head>
 <body>
 <div id="root">
@@ -432,7 +432,7 @@ window.CONVOOZ_CRYPTO = CONVOOZ_CRYPTO;
 
 // ─── Constants ───────────────────────────────────────────────────────────────
 
-const APP_VERSION = "0.0.284"; // bumped on every deploy — keep in sync with version.json AND with the ?v= on polish.css above
+const APP_VERSION = "0.0.283"; // bumped on every deploy — keep in sync with version.json AND with the ?v= on polish.css above
 
 // ─── Backend + Supabase config ───────────────────────────────────────────────
 // Two stacks: prod (live testers) and staging (where new features land first).
@@ -1904,20 +1904,14 @@ function ComposePane({replyTo, replyKind='reply', toContact, draft, initTo:initT
     replyTo ? "Re: " + (replyTo.subject || '') :
     ""
   );
-  // v0.0.284 — split routing for the original-message quote:
-  //   • Rich-HTML mails (bodyHtml present AND contains <img>) keep the
-  //     Option X flow from v0.0.280: textarea = new content only, the
-  //     original lands in the iframe BELOW, and the multipart/alt
-  //     send packs both text + html.
-  //   • Everything else reverts to the pre-Option-X behaviour: the
-  //     textarea ships with the plaintext quote already pasted in, so
-  //     the user can edit / trim / interleave their reply with the
-  //     original. No iframe, no body_html — just the old text-only
-  //     flow Rik was used to.
-  const isRichHtml = !!(replyTo?.bodyHtml && /<img/i.test(replyTo.bodyHtml));
-  const initBody = draft?.body ?? (
-    replyTo && !isRichHtml ? `\n\n${quoteHeader(replyTo)}` : ""
-  );
+  // v0.0.280 — Option X compose. The textarea now holds ONLY the
+  // user's new content; the original mail (incl. inline images) lands
+  // in a read-only iframe BELOW the textarea via `replyTo.bodyHtml`
+  // (resolved by ensureBodyForQuote). The textarea-quote dance is
+  // moved to send-time: text/plain part appends a plaintext quote so
+  // text-only clients still see the trail. html part stitches the
+  // user content + the original body_html into multipart/alternative.
+  const initBody = draft?.body ?? "";
 
   // Compute initial auto-signature (only for new messages, not replies/drafts).
   // For a reply, the from-address must match the account the original mail
@@ -1940,13 +1934,6 @@ function ComposePane({replyTo, replyKind='reply', toContact, draft, initTo:initT
   const [r2mHover,setR2mHover]=useState(false);
   const [showCC,setShowCC]=useState(!!initCCResolved);
   const [showBCC,setShowBCC]=useState(!!initBCCResolved);
-  // v0.0.284 — toggle for the rich-HTML iframe path. Default ON
-  // (matches the v0.0.280 behaviour) but lets the user exclude the
-  // original from the send when they want a clean reply without the
-  // newsletter body attached. Has no effect when isRichHtml is false
-  // (the non-rich path always sends the textarea verbatim — toggling
-  // happens by editing the textarea directly).
-  const [includeQuote, setIncludeQuote] = useState(true);
   const [msgTags,setMsgTags]=useState(initTag?[...new Set([...initMsgTags,initTag])]:initMsgTags);
   const [showDrop,    setShowDrop]    = useState(false);
   const [showFromDrop,setShowFromDrop]= useState(false);
@@ -2070,31 +2057,22 @@ function ComposePane({replyTo, replyKind='reply', toContact, draft, initTo:initT
     }
     setSending(true); setSendErr('');
     try {
-      // v0.0.284 — three send paths depending on whether the original
-      // is rich HTML and whether the user wants to include it:
+      // v0.0.280 — assemble the bodies the backend will multipart together.
       //
-      //   1. Non-rich reply/forward (or new message): the textarea
-      //      already carries the plain quote (v0.0.284 initBody puts
-      //      it there). Ship body as-is, no body_html — text/plain
-      //      only, exactly the pre-Option-X flow.
-      //
-      //   2. Rich HTML + includeQuote = true: the Option X flow from
-      //      v0.0.280 — body gets the plaintext quote appended (so
-      //      text-only clients still see the trail), body_html packs
-      //      the user's text + divider + the original body_html with
-      //      inline images already resolved to data: URIs.
-      //
-      //   3. Rich HTML + includeQuote = false: user explicitly
-      //      excluded the original from the send. Ship just the
-      //      textarea content; no quote, no body_html.
-      let plainBody, htmlBody = '';
-      if (replyTo && isRichHtml && includeQuote) {
-        plainBody = `${body}\n\n${quoteHeader(replyTo)}`;
-        htmlBody  = userTextToHtmlParagraphs(body)
-                  + quoteHtmlHeader(replyTo)
-                  + replyTo.bodyHtml;
-      } else {
-        plainBody = body;
+      // body (text/plain): the user's textarea + the divider + the
+      //   plaintext rendering of the original (via quoteHeader which
+      //   pastes either replyTo.body or the HTML→plaintext fallback that
+      //   ensureBodyForQuote already filled in).
+      // body_html (text/html): the user's text rendered as a small HTML
+      //   block + the HTML divider + the original body_html. Inline
+      //   images in replyTo.bodyHtml were already resolved cid: → data:
+      //   URIs in ensureBodyForQuote, so the recipient sees them.
+      const plainBody = replyTo ? `${body}\n\n${quoteHeader(replyTo)}` : body;
+      let htmlBody = '';
+      if (replyTo && replyTo.bodyHtml) {
+        htmlBody = userTextToHtmlParagraphs(body)
+          + quoteHtmlHeader(replyTo)
+          + replyTo.bodyHtml;
       }
       await onSend?.({
         from, to, cc: showCC ? cc : '', bcc: showBCC ? bcc : '',
@@ -2395,78 +2373,44 @@ function ComposePane({replyTo, replyKind='reply', toContact, draft, initTo:initT
           <input className="flex-1 outline-none text-gray-800" value={subj} onChange={e=>setSubj(e.target.value)}/>
         </div>
       </div>
-      {/* v0.0.284 — split layout by quote mode:
-            • Non-rich (no replyTo, or replyTo without inline images):
-              single auto-growing textarea that already carries the
-              plain-text quote inline. Old-school edit-the-trail UX.
-            • Rich HTML: textarea + iframe both sit inside a shared
-              scrollable wrapper so the divider lives BETWEEN them in
-              the natural flow rather than glued to the bottom of the
-              pane. The include-toggle on the divider lets the user
-              drop the original from the send without retyping
-              anything in the textarea. */}
-      {isRichHtml ? (
-        /* Inner wrapper: only an own scroll-container on desktop. On
-           mobile the pane already has an outer scrollable area, so a
-           second nested scroller would steal touch-handoff from it. */
-        <div className={isMobile?'flex-shrink-0 flex flex-col':'flex-1 min-h-0 overflow-y-auto scroll flex flex-col'}>
-          <textarea ref={el=>{
-              if(el){
-                el.style.height='auto';
-                el.style.height = Math.max(160, el.scrollHeight) + 'px';
-              }
-            }}
-            className="flex-shrink-0 px-4 py-3 text-sm text-gray-800 outline-none resize-none overflow-hidden"
-            style={{minHeight:160}}
-            value={body} onChange={e=>{
-              setBody(e.target.value);
-              e.target.style.height='auto';
-              e.target.style.height = Math.max(160, e.target.scrollHeight) + 'px';
-            }} placeholder="Write your message…"/>
-          <div className="border-t border-gray-200 flex-shrink-0">
-            <div className="px-4 py-2 text-xs bg-gray-50 flex items-center justify-between gap-2">
-              <span className={includeQuote?'text-gray-500':'text-gray-400'}>
-                <span className="font-medium">Original message</span>
-                {!includeQuote && <span> — excluded from send</span>}
-              </span>
-              <button
-                onClick={()=>setIncludeQuote(v=>!v)}
-                className={`text-xs px-2 py-0.5 rounded border transition-colors ${includeQuote
-                  ? 'bg-indigo-50 border-indigo-200 text-indigo-700 hover:bg-indigo-100'
-                  : 'bg-white border-gray-300 text-gray-500 hover:bg-gray-50'}`}
-                title={includeQuote ? 'Original IS included in the send — click to exclude' : 'Original is excluded — click to include'}>
-                {includeQuote ? '✓ Include' : '✕ Excluded'}
-              </button>
-            </div>
-            {includeQuote && (
-              <iframe
-                sandbox=""
-                srcDoc={`<!doctype html><html><head><meta charset="utf-8"><base target="_blank"><style>html,body{margin:0;padding:8px 16px;font-family:-apple-system,system-ui,sans-serif;font-size:13px;color:#333;line-height:1.4;}img{max-width:100%;height:auto;}a{color:#4f46e5;}</style></head><body>${replyTo.bodyHtml}</body></html>`}
-                style={{width:'100%',height:isMobile?280:400,border:'none',display:'block'}}
-                title="Original message preview"
-              />
-            )}
+      {/* Mobile: textarea grows via JS so the wrapper scrolls — overflow-
+          hidden keeps the textarea's own scrollbar away. Desktop: pane
+          height is fixed; the textarea is the one that needs to scroll
+          when the draft body grows past the visible area. */}
+      <textarea ref={el=>{
+          if(isMobile&&el){
+            el.style.height='auto';
+            el.style.height = Math.max(260, el.scrollHeight) + 'px';
+          }
+        }}
+        className={`${isMobile?'flex-shrink-0 overflow-hidden':'flex-1 overflow-y-auto scroll'} px-4 py-3 text-sm text-gray-800 outline-none resize-none`}
+        style={isMobile?{minHeight:260}:{}}
+        value={body} onChange={e=>{
+          setBody(e.target.value);
+          if(isMobile){
+            e.target.style.height='auto';
+            e.target.style.height = Math.max(260, e.target.scrollHeight) + 'px';
+          }
+        }} placeholder="Write your message…"/>
+      {/* v0.0.280 — Option X preview: original mail rendered below the
+          textarea when forwarding/replying to an HTML mail. Read-only
+          sandboxed iframe so styles + scripts in the quoted body can't
+          mess with the compose pane. Inline images already inlined as
+          data: URIs by ensureBodyForQuote so the iframe renders them
+          without further network hops. */}
+      {replyTo?.bodyHtml && (
+        <div className="border-t border-gray-200 flex-shrink-0">
+          <div className="px-4 py-2 text-xs text-gray-500 bg-gray-50 flex items-center gap-2">
+            <span className="font-medium">Original message</span>
+            <span className="text-gray-400">— will be included in the {isForward ? 'forward' : 'reply'}</span>
           </div>
+          <iframe
+            sandbox=""
+            srcDoc={`<!doctype html><html><head><meta charset="utf-8"><base target="_blank"><style>html,body{margin:0;padding:8px 16px;font-family:-apple-system,system-ui,sans-serif;font-size:13px;color:#333;line-height:1.4;}img{max-width:100%;height:auto;}a{color:#4f46e5;}</style></head><body>${replyTo.bodyHtml}</body></html>`}
+            style={{width:'100%',height:isMobile?280:400,border:'none'}}
+            title="Original message preview"
+          />
         </div>
-      ) : (
-        /* Non-rich path: keep the proven textarea-with-quote-inline
-           layout. Mobile auto-grows; desktop is the flex-1 scroll-
-           inside-textarea pattern users are used to. */
-        <textarea ref={el=>{
-            if(isMobile&&el){
-              el.style.height='auto';
-              el.style.height = Math.max(260, el.scrollHeight) + 'px';
-            }
-          }}
-          className={`${isMobile?'flex-shrink-0 overflow-hidden':'flex-1 overflow-y-auto scroll'} px-4 py-3 text-sm text-gray-800 outline-none resize-none`}
-          style={isMobile?{minHeight:260}:{}}
-          value={body} onChange={e=>{
-            setBody(e.target.value);
-            if(isMobile){
-              e.target.style.height='auto';
-              e.target.style.height = Math.max(260, e.target.scrollHeight) + 'px';
-            }
-          }} placeholder="Write your message…"/>
       )}
       {/* Signature selector — shown when from-account has linked signatures */}
       {linkedSigs.length>0&&(
