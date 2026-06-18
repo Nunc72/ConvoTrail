@@ -193,7 +193,7 @@
        polish change is picked up by every browser as soon as the version
        is bumped — no manual cache-busters needed. Keep ?v= here in sync
        with APP_VERSION below at every deploy. -->
-  <link rel="stylesheet" href="polish.css?v=0.0.285"/>
+  <link rel="stylesheet" href="polish.css?v=0.0.284"/>
 </head>
 <body>
 <div id="root">
@@ -432,7 +432,7 @@ window.CONVOOZ_CRYPTO = CONVOOZ_CRYPTO;
 
 // ─── Constants ───────────────────────────────────────────────────────────────
 
-const APP_VERSION = "0.0.285"; // bumped on every deploy — keep in sync with version.json AND with the ?v= on polish.css above
+const APP_VERSION = "0.0.284"; // bumped on every deploy — keep in sync with version.json AND with the ?v= on polish.css above
 
 // ─── Backend + Supabase config ───────────────────────────────────────────────
 // Two stacks: prod (live testers) and staging (where new features land first).
@@ -792,15 +792,7 @@ function quoteHeader(msg) {
   const time=`${pad(d.getHours())}:${pad(d.getMinutes())}`;
   const myName = msg.sender?.name || (msg.from || '').split('@')[0];
   const sender = msg.dir==="out" ? `${msg.from} (${myName})` : msg.from;
-  // v0.0.285 — list non-inline attachment filenames in the quote so a
-  // reply mentions what the original carried, without actually
-  // re-attaching them. Forward uses a separate copy-into-draft path
-  // (see the useEffect in ComposePane).
-  const atts = (msg.attachmentsMeta || []).filter(a => !a.isInline && a.filename);
-  const attLine = atts.length > 0
-    ? `\nAttachments: ${atts.map(a => a.filename).join(', ')}\n`
-    : '';
-  return `—————————————————————————————————\n${DAYS[d.getDay()]} ${date} ${time}  ${sender}${attLine}\n\n${msg.body||''}`;
+  return `—————————————————————————————————\n${DAYS[d.getDay()]} ${date} ${time}  ${sender}\n\n${msg.body||''}`;
 }
 // v0.0.280 — HTML-side helpers for Option X reply/forward. quoteHtmlHeader
 // emits the same date+sender divider as quoteHeader but as a styled
@@ -824,18 +816,11 @@ function quoteHtmlHeader(msg) {
   const time = `${pad(d.getHours())}:${pad(d.getMinutes())}`;
   const myName = msg.sender?.name || (msg.from || '').split('@')[0];
   const sender = msg.dir === "out" ? `${msg.from} (${myName})` : msg.from;
-  // v0.0.285 — attachments block; only shown when the original had
-  // any non-inline files. Mirrors the plaintext quoteHeader format.
-  const atts = (msg.attachmentsMeta || []).filter(a => !a.isInline && a.filename);
-  const attHtml = atts.length > 0
-    ? `<div style="font-size:12px;color:#666;margin-bottom:8px;">📎 ${atts.map(a => htmlEscape(a.filename)).join(', ')}</div>`
-    : '';
   return (
     `<hr style="border:none;border-top:1px solid #ddd;margin:16px 0;"/>` +
     `<div style="font-size:12px;color:#666;margin-bottom:8px;">` +
       `${DAYS[d.getDay()]} ${date} ${time}&nbsp;&nbsp;${htmlEscape(sender)}` +
-    `</div>` +
-    attHtml
+    `</div>`
   );
 }
 function softBg(hex) {
@@ -2207,66 +2192,6 @@ function ComposePane({replyTo, replyKind='reply', toContact, draft, initTo:initT
     e.preventDefault(); e.stopPropagation(); setIsDragging(false);
     if (e.dataTransfer?.files?.length) handleAttachFiles(e.dataTransfer.files);
   }
-  // v0.0.285 — Forward auto-copies the original mail's attachments onto
-  // the draft so they ride along with the send. Inline images (cid:
-  // refs) are skipped — those already live as data: URIs inside the
-  // bodyHtml when the original is a rich newsletter. The user can
-  // remove any unwanted file via the standard ×-chip flow before
-  // sending. Re-opening a saved forward draft skips the copy: the
-  // attachments are already attached to the draft row.
-  const forwardCopyRef = useRef(false);
-  useEffect(() => {
-    if (!isForward) return;
-    if (forwardCopyRef.current) return;
-    if (attachments.length > 0) return;
-    const sourceAtts = (replyTo?.attachmentsMeta || [])
-      .filter(a => !a.isInline && a.filename && typeof a.index === 'number');
-    if (sourceAtts.length === 0) return;
-    forwardCopyRef.current = true;
-    (async () => {
-      let id;
-      try { id = await ensureDraftForAttachment(); }
-      catch (e) {
-        setAttError('Could not create draft for forwarded attachments: ' + (e?.message || 'error'));
-        return;
-      }
-      if (!id) { setAttError('Could not create draft'); return; }
-      for (const att of sourceAtts) {
-        const tmpId = 'fwd-' + Math.random().toString(36).slice(2, 10);
-        setAttachments(prev => [...prev, {
-          id: tmpId,
-          filename: att.filename,
-          content_type: att.contentType || null,
-          size: att.size || 0,
-          uploading: true,
-        }]);
-        try {
-          const blob = await fetchAttachmentBlob(replyTo.id, att.index);
-          const form = new FormData();
-          form.append('file', blob, att.filename);
-          const { data: { session } } = await sb.auth.getSession();
-          const res = await fetch(`${BACKEND_URL}/drafts/${id}/attachments`, {
-            method: 'POST',
-            headers: session?.access_token ? { Authorization: `Bearer ${session.access_token}` } : {},
-            body: form,
-          });
-          if (!res.ok) {
-            const msg = await res.text().catch(()=>res.statusText);
-            throw new Error(`${res.status} ${msg}`);
-          }
-          const r = await res.json();
-          setAttachments(prev => prev.map(a => a.id === tmpId ? {
-            id: r.attachment.id, filename: r.attachment.filename,
-            content_type: r.attachment.content_type, size: r.attachment.size,
-          } : a));
-        } catch (e) {
-          setAttError(`Could not forward "${att.filename}": ${e?.message || 'error'}`);
-          setAttachments(prev => prev.filter(a => a.id !== tmpId));
-        }
-      }
-    })();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [isForward]);
   async function handleSaveDraftClick() {
     if (savingDraft) return;
     setSavingDraft(true); setSendErr('');
