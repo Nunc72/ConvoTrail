@@ -697,6 +697,60 @@ export async function syncAccount(accountId: string, userKey?: Buffer): Promise<
       // retries on the next sync run.
     }
 
+    // 3b) Auto-dismiss revert-to-me rows for outgoing mails that now
+    // have a detected reply. Previously this detection lived only in
+    // the FE (hasReply() in the bootstrap shape): the banner appeared
+    // for an outgoing message whenever isR2mActive was true AND no
+    // incoming with a matching thread_id was found. That worked, but
+    // only for as long as the bootstrap snapshot the browser was
+    // holding was fresh — stale caches and slow-to-sync incoming
+    // replies both surfaced the banner for messages that HAD been
+    // replied to (see "La recta final" 26-mei-2026: reply came in
+    // 1h17m after send with correct In-Reply-To, yet the banner
+    // popped up in the FE weeks later). Making the DB the source of
+    // truth avoids both failure modes: once a reply is detected on
+    // the backend, dismissed_at is stamped and every client (fresh
+    // OR cached) sees the R2M as resolved.
+    //
+    // Detection: incoming.thread_id (set by sync.ts from RFC
+    // In-Reply-To / References headers) equals outgoing.message_id.
+    // Angle brackets are stripped on both sides — mailparser drops
+    // them from thread_id, our INSERTs preserve them on message_id
+    // (or leave them off, depending on the provider). btrim
+    // normalises both to compare.
+    //
+    // Scoped to this user's messages so the query stays cheap. Uses
+    // the user_id + direction indexes already on messages.
+    try {
+      const dismissed = await pool.query<{ count: string }>(
+        `WITH replied AS (
+           SELECT DISTINCT out_msg.id AS r2m_message_id
+             FROM messages out_msg
+             JOIN messages in_msg
+               ON in_msg.user_id = out_msg.user_id
+              AND in_msg.direction = 'in'
+              AND in_msg.thread_id IS NOT NULL
+              AND btrim(in_msg.thread_id, '<>') = btrim(out_msg.message_id, '<>')
+              AND in_msg.date > out_msg.date
+            WHERE out_msg.user_id = $1
+              AND out_msg.direction = 'out'
+              AND out_msg.message_id IS NOT NULL
+         )
+         UPDATE r2m_state
+            SET dismissed_at = NOW()
+          WHERE dismissed_at IS NULL
+            AND message_id IN (SELECT r2m_message_id FROM replied)
+       RETURNING message_id`,
+        [userId],
+      );
+      if (dismissed.rowCount && dismissed.rowCount > 0) {
+        console.log(`[sync] auto-dismissed ${dismissed.rowCount} r2m rows with detected replies (user=${userId})`);
+      }
+    } catch (e) {
+      // Non-fatal: banner may briefly linger; next sync retries.
+      console.warn(`[sync] r2m auto-dismiss failed (non-fatal):`, e instanceof Error ? e.message : e);
+    }
+
     // 3.5) Auto-tag newsletter contacts. For each sender that had a
     // List-Unsubscribe header in this sync, flip is_news = true — but
     // ONLY when the user hasn't already toggled News themselves
