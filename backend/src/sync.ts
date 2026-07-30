@@ -63,20 +63,18 @@ const PER_FOLDER_CAP = 400;
 // new mail keeps arriving — it just doesn't grow the historical archive
 // further. For testers with mailboxes well under the cap this is a no-op.
 //
-// v0.0.295 — bumped 2000 → 50000. The 2000 cap was chosen for the
-// original Supabase-free-tier egress budget (~5 GB/mnd). It bit
-// hard once Rik's DB hit exactly 2000 messages: remainingHeadroom
-// went to 0, toFetch became [], sync stopped inserting entirely,
-// stat.skipped stayed non-zero (missing UIDs were "skipped for
-// cap"), so the FE handleGetMail loop hit MAX_ITERATIONS every
-// time. Symptom: "sync duurt 90s, nieuwe mail komt niet binnen".
-//
-// New cap of 50k gives plenty of room: at Rik's ~500 msg/mnd growth
-// that's ~8 years of headroom, and even at ~64 KB per encrypted
-// message the DB size ceiling is ~3 GB (well within Pro's 8 GB
-// budget). Still a real cap so a runaway sync on a shared IMAP
-// archive can't fill the disk.
-const USER_TOTAL_CAP = 50000;
+// v0.0.296 — back to 2000, but now as a SLIDING WINDOW instead of
+// a hard block. The 2000-cap was correct as an intent ("show the
+// most recent 2000 mails"). The v0.0.219 implementation made it a
+// hard fetch-block that stopped new mail from arriving once the
+// cap was hit — that was the wrong shape. Now:
+//   - Fetch runs regardless of headroom (new + revert2me mail
+//     always come in, no matter what the total looks like).
+//   - After sync, prune the OLDEST non-deleted messages down to
+//     USER_TOTAL_CAP. Deleted-flag'd mail stays parked (Trash tab
+//     retention is handled separately by retention_deleted_days).
+//   - r2m-armed rows are protected from prune (see prune query).
+const USER_TOTAL_CAP = 2000;
 // Absolute per-folder ceiling we never exceed even when the user is at/over
 // the soft cap. Bounds how large the (UID list, haveSet) operation in the
 // folder loop can get, so a user with one humongous Gmail All Mail folder
@@ -407,14 +405,13 @@ export async function syncAccount(accountId: string, userKey?: Buffer): Promise<
         );
         const haveSet = new Set(existingRes.rows.map(r => Number(r.uid)));
         const missing = uids.filter(u => !haveSet.has(u));
-        // Newest-first cap so the user sees recent mail immediately; older
-        // missing UIDs roll in on subsequent syncs until the backlog is gone.
-        // v0.0.241: also clamp by remainingHeadroom so we never push the
-        // user past USER_TOTAL_CAP. Once headroom hits 0, toFetch is [] and
-        // skipped reflects the residual backlog so the FE loop terminates.
-        const perRoundLimit = Math.min(PER_FOLDER_CAP, remainingHeadroom);
-        const toFetch = perRoundLimit > 0 ? missing.slice(-perRoundLimit) : [];
-        remainingHeadroom = Math.max(0, remainingHeadroom - toFetch.length);
+        // v0.0.296 — dropped the remainingHeadroom clamp. Previously
+        // once the user's total messages hit USER_TOTAL_CAP the fetch
+        // silently stopped, leaving stat.skipped=missing.length so
+        // the FE catch-up loop ran to MAX_ITERATIONS every time.
+        // Sliding-window enforcement now lives in the post-sync
+        // prune step, not in the fetch cap.
+        const toFetch = missing.slice(-PER_FOLDER_CAP);
         // `skipped` reports the missing-mail backlog after this run — used by
         // the FE's catch-up loop (handleGetMail) to decide whether another
         // /sync is worth firing. Earlier versions computed `uids.length -
@@ -438,9 +435,22 @@ export async function syncAccount(accountId: string, userKey?: Buffer): Promise<
         // Best-effort; never fails the sync. Runs inside the same
         // mailbox lock as the rest of the folder processing.
         try {
-          console.log(`[sync] ${box.path}: reconcile start, allUids.length=${allUids.length}`);
+          // v0.0.296 — reconcile uses a WIDER window than the fetch
+          // window. v0.0.293's adaptive `since` shrank allUids to the
+          // last ~6h so fetching new mail is fast, but that also meant
+          // seen-flag reconciliation only ran over mail from the last
+          // 6h. Reading a 3-day-old mail on Apple Mail no longer
+          // propagated its \Seen flag into Convooz's DB → user saw the
+          // mail as unread indefinitely. Wider window (30 days) covers
+          // realistic "I read this on another client" scenarios; older
+          // stuff you're not going to un-read anyway.
+          const reconcileSince = new Date(Date.now() - 30 * 86400_000);
+          const allUidsForReconcile = since <= reconcileSince
+            ? allUids
+            : (await client.search({ since: reconcileSince }, { uid: true })) as number[];
+          console.log(`[sync] ${box.path}: reconcile start, allUids.length=${allUidsForReconcile.length} (fetch window had ${allUids.length})`);
           const flagsByUid = new Map<number, boolean>();
-          for await (const fm of client.fetch(allUids, { uid: true, flags: true }, { uid: true })) {
+          for await (const fm of client.fetch(allUidsForReconcile, { uid: true, flags: true }, { uid: true })) {
             flagsByUid.set(Number(fm.uid), Array.from(fm.flags || []).includes("\\Seen"));
           }
           console.log(`[sync] ${box.path}: reconcile fetched flags for ${flagsByUid.size} uids`);
