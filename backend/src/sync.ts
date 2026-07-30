@@ -62,7 +62,21 @@ const PER_FOLDER_CAP = 400;
 // to the standard incremental missing-UIDs path (PER_FOLDER_CAP=100), so
 // new mail keeps arriving — it just doesn't grow the historical archive
 // further. For testers with mailboxes well under the cap this is a no-op.
-const USER_TOTAL_CAP = 2000;
+//
+// v0.0.295 — bumped 2000 → 50000. The 2000 cap was chosen for the
+// original Supabase-free-tier egress budget (~5 GB/mnd). It bit
+// hard once Rik's DB hit exactly 2000 messages: remainingHeadroom
+// went to 0, toFetch became [], sync stopped inserting entirely,
+// stat.skipped stayed non-zero (missing UIDs were "skipped for
+// cap"), so the FE handleGetMail loop hit MAX_ITERATIONS every
+// time. Symptom: "sync duurt 90s, nieuwe mail komt niet binnen".
+//
+// New cap of 50k gives plenty of room: at Rik's ~500 msg/mnd growth
+// that's ~8 years of headroom, and even at ~64 KB per encrypted
+// message the DB size ceiling is ~3 GB (well within Pro's 8 GB
+// budget). Still a real cap so a runaway sync on a shared IMAP
+// archive can't fill the disk.
+const USER_TOTAL_CAP = 50000;
 // Absolute per-folder ceiling we never exceed even when the user is at/over
 // the soft cap. Bounds how large the (UID list, haveSet) operation in the
 // folder loop can get, so a user with one humongous Gmail All Mail folder
