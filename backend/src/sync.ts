@@ -177,9 +177,10 @@ export async function syncAccount(accountId: string, userKey?: Buffer): Promise<
     id: string; user_id: string; email: string;
     imap_host: string; imap_port: number; imap_user: string; imap_cred_enc: Buffer | null;
     migrated_to_all_mail: boolean;
+    last_sync_at: string | null;
   }>(
     `SELECT id, user_id, email, imap_host, imap_port, imap_user, imap_cred_enc,
-            migrated_to_all_mail
+            migrated_to_all_mail, last_sync_at
        FROM mail_accounts WHERE id = $1`,
     [accountId],
   );
@@ -310,7 +311,31 @@ export async function syncAccount(accountId: string, userKey?: Buffer): Promise<
       didMigrate = true;
     }
 
-    const since = new Date(Date.now() - SINCE_DAYS * 86400_000);
+    // v0.0.293 — adaptive IMAP-search window. Previously we ALWAYS
+    // asked IMAP for every UID from the last 365 days: for rik@tuithof
+    // .com's INBOX that's ~2019 UIDs, each of which then gets a full
+    // flag-fetch during the reconcile pass. Result: ~5 s IMAP scan per
+    // folder per /sync, five folders, four accounts = ~90 s user-side
+    // wall clock for a Get-mail click even when nothing new arrived.
+    //
+    // Now: if we synced recently (< 2 days ago), only ask for UIDs
+    // dated since `last_sync_at − 6h`. The 6h overlap catches any
+    // messages whose IMAP internalDate lags behind our clock (Gmail
+    // sometimes back-dates by hours) and any mail that landed during
+    // the previous sync's own execution.
+    //
+    // On the FIRST sync after a longer gap (>2d), fall back to the
+    // full SINCE_DAYS window so we catch up on anything that arrived
+    // while we were dark. The full-window path also runs the first
+    // time an account is added.
+    const lastSyncAt: Date | null = acc.last_sync_at ? new Date(acc.last_sync_at as string) : null;
+    const twoDaysAgo = Date.now() - 2 * 86400_000;
+    const since = lastSyncAt && lastSyncAt.getTime() > twoDaysAgo
+      ? new Date(lastSyncAt.getTime() - 6 * 3600_000)
+      : new Date(Date.now() - SINCE_DAYS * 86400_000);
+    const windowDays = Math.round((Date.now() - since.getTime()) / 86400_000 * 10) / 10;
+    console.log(`[sync] ${acc.email}: since=${since.toISOString()} (window=${windowDays}d, lastSync=${lastSyncAt ? lastSyncAt.toISOString() : 'never'})`);
+
     const allExtractedAddrs = new Map<string, string | null>(); // email → name
 
     // User-wide cap (USER_TOTAL_CAP = 2000 active mails) is enforced as a
