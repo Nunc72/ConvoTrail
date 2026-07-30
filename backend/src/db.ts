@@ -2,29 +2,34 @@
 import pg from "pg";
 import { config } from "./config.js";
 
-// v0.0.290 — pool sizing was strangling us. max=4 meant /bootstrap's
-// 12-parallel Promise.all serialised into three waves, and idleTimeout
-// = 10s meant a warm pool went cold between the bootstrap fetch and
-// the first user action. Each fresh connect against the Supavisor
-// pooler takes ~3-5s from Frankfurt (measured — normal is <200ms,
-// suspected regional Supavisor congestion), so cold restarts made the
-// user experience "Sending…" for tens of seconds.
+// v0.0.291 — hit a WALL with max=15 (v0.0.290 setting): Supavisor
+// SESSION MODE (port 5432) caps clients-per-user at 15. Our pg.Pool
+// eating all 15 left zero room for anything else (Realtime channel
+// keeper, diag scripts running against the same user, transient
+// sub-connections during bulk INSERT) — any 16th client attempt
+// returns FATAL EMAXCONNSESSION, which surfaces as sync queries
+// silently failing, sync loops hanging, and "no new mail arriving".
 //
-// New settings:
-//   max: 15                — plenty of headroom for parallel bootstrap
-//                            + concurrent /send + /sync. Supabase Pro
-//                            allows ~60 pool clients per project.
-//   idleTimeoutMillis: 60s — keep the pool warm between user actions.
-//                            The connect penalty only pays once per
-//                            minute at most.
-//   keepAlive: true        — TCP keepalives so NAT/router idle-kills
-//                            can't silently drop a still-open socket
-//                            (which would surface as a mysterious
-//                            first-query timeout after a quiet spell).
+// Root fix would be to switch DATABASE_URL to TRANSACTION mode
+// (port 6543, limit ~200 clients), but that needs a Fly-secret
+// rotation and testing that pg-node's default query mode still
+// works. For now: back off well under the session-mode ceiling.
+//
+// Settings:
+//   max: 8                 — comfortable margin under Supavisor's
+//                            session-mode limit of 15. Bootstrap's
+//                            12-parallel Promise.all still runs
+//                            8-at-a-time which is 2× the previous
+//                            v0.0.283 baseline and doesn't queue
+//                            into a stall.
+//   idleTimeoutMillis: 60s — keep the pool warm; connect penalty
+//                            (~3-5s from Frankfurt to eu-central-1
+//                            Supavisor) only pays once per idle window.
+//   keepAlive: true        — TCP keepalives against NAT idle-kills.
 export const pgPool = config.dbUrl
   ? new pg.Pool({
       connectionString: config.dbUrl,
-      max: 15,
+      max: 8,
       idleTimeoutMillis: 60_000,
       keepAlive: true,
       ssl: { rejectUnauthorized: false },
