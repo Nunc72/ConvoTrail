@@ -472,7 +472,15 @@ export async function syncAccount(accountId: string, userKey?: Buffer): Promise<
         if (toFetch.length === 0) { folderStats.push(stat); continue; }
 
         // Batch-fetch via UID list
+        // v0.0.294 — surface per-message failures. Was a bare
+        // `catch (e) { /* skip unparseable */ }` which silently ate
+        // every exception, including the ones that make sync appear
+        // to hang (buildMessageRow crashes on all messages → rows=[]
+        // → nothing inserted → missing.length stays constant →
+        // FE loop reruns until MAX_ITERATIONS).
         const rows: Record<string, unknown>[] = [];
+        const buildFailures: { uid: number | undefined; err: string }[] = [];
+        console.log(`[sync] ${box.path}: fetching ${toFetch.length} new UIDs`);
         for await (const msg of client.fetch(toFetch, { envelope: true, flags: true, source: true, internalDate: true, uid: true }, { uid: true })) {
           stat.fetched++;
           try {
@@ -510,9 +518,21 @@ export async function syncAccount(accountId: string, userKey?: Buffer): Promise<
               newsletterSenders.add((row.from_email as string).toLowerCase());
             }
           } catch (e) {
-            // skip unparseable
+            // v0.0.294 — was a silent skip; now log with UID + message
+            // so we can see what's actually breaking. If build fails
+            // on every message the sync loop appears to hang from the
+            // FE's side (missing.length never decreases because rows=[]
+            // means nothing gets INSERTed).
+            const uid = (msg as { uid?: number }).uid;
+            const errMsg = e instanceof Error ? (e.stack || e.message) : String(e);
+            buildFailures.push({ uid, err: errMsg.split('\n')[0] });
+            console.warn(`[sync] ${box.path}: buildMessageRow failed for uid=${uid}: ${errMsg.split('\n')[0]}`);
           }
         }
+        if (buildFailures.length > 0) {
+          console.warn(`[sync] ${box.path}: ${buildFailures.length} of ${stat.fetched} messages failed to build`);
+        }
+        console.log(`[sync] ${box.path}: rows_ready=${rows.length} fetched=${stat.fetched} failures=${buildFailures.length}`);
         // Rows fetched from \Trash should land in the Deleted tab right
         // away — Convooz's deleted_at column is the FE filter signal.
         // We use now() because IMAP doesn't expose a "trashed at"
