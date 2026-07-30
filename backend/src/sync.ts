@@ -39,7 +39,17 @@ export interface SyncResult {
 }
 
 const SINCE_DAYS = 365;
-const PER_FOLDER_CAP = 100; // MVP safety — Fly free-tier memory + 60s HTTP timeout
+// v0.0.292 — bumped 100→400. With 100 an account carrying a backlog
+// (measured 605 missing UIDs on rik@tuithof.com INBOX) needed the FE
+// handleGetMail loop to run 6+ rounds; each round did one full
+// /bootstrap refresh in between, so a "Get mail" click ate 90 s
+// while the backend was actually only ever seeing ~5 s per sync
+// call. 400 catches almost every realistic backlog in a single
+// round. Kept under the Fly 60 s HTTP timeout easily: each mail's
+// IMAP fetch takes ~30-80 ms on Oxilion, so 400 lands in <30 s
+// even on the slowest of our providers. Fly-free-tier memory is
+// not a concern any more (backend is on paid-tier machines).
+const PER_FOLDER_CAP = 400;
 // Soft user-wide ceiling on stored messages. Stefan's onboarding pulled
 // 16k mails from a single Gmail All Mail folder which spiked Supabase
 // egress past the free-tier 5 GB monthly quota and got the project

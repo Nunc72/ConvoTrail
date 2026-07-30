@@ -199,7 +199,7 @@
        polish change is picked up by every browser as soon as the version
        is bumped — no manual cache-busters needed. Keep ?v= here in sync
        with APP_VERSION below at every deploy. -->
-  <link rel="stylesheet" href="polish.css?v=0.0.291"/>
+  <link rel="stylesheet" href="polish.css?v=0.0.292"/>
 </head>
 <body>
 <div id="root">
@@ -438,7 +438,7 @@ window.CONVOOZ_CRYPTO = CONVOOZ_CRYPTO;
 
 // ─── Constants ───────────────────────────────────────────────────────────────
 
-const APP_VERSION = "0.0.291"; // bumped on every deploy — keep in sync with version.json AND with the ?v= on polish.css above
+const APP_VERSION = "0.0.292"; // bumped on every deploy — keep in sync with version.json AND with the ?v= on polish.css above
 
 // ─── Backend + Supabase config ───────────────────────────────────────────────
 // Two stacks: prod (live testers) and staging (where new features land first).
@@ -8680,7 +8680,14 @@ function App({userId, onSignOut}) {
           setActionToast(`Sync had errors: ${errors.map(e=>e.error).slice(0,2).join('; ')}`);
           break;
         }
-        refreshData(); // updates messages_count / sync_known_uids in the menu
+        // v0.0.292 — refreshData() USED to fire every round of the
+        // catch-up loop so the user-menu counters ticked in real time.
+        // On a backlog account (605 UIDs missing) that meant 6+ full
+        // /bootstrap refreshes stacked into a single "Get mail" click,
+        // adding ~15-20 s of pure bootstrap wall-clock on top of the
+        // sync work. Now we only refresh after the LAST round (in the
+        // finally block below), so the loop's overhead is just the
+        // /sync calls themselves.
         // Sum the per-folder seenDrift signals from this round so we can
         // raise an alert below if it ever gets noticeable. v0.0.237.
         for (const r of fired) {
@@ -8696,6 +8703,10 @@ function App({userId, onSignOut}) {
         }
       }
     } finally {
+      // v0.0.292 — single refresh at the very end. Whatever the loop
+      // fetched (or would have fetched, if it broke early) is now
+      // visible in one bootstrap round-trip instead of N of them.
+      refreshData();
       setCatchUpRunning(false);
       // v0.0.237: surface a persistent banner if IMAP-flag reconciliation
       // had to repair more than 20 mails this run — that usually means
