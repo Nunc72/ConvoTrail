@@ -199,7 +199,7 @@
        polish change is picked up by every browser as soon as the version
        is bumped — no manual cache-busters needed. Keep ?v= here in sync
        with APP_VERSION below at every deploy. -->
-  <link rel="stylesheet" href="polish.css?v=0.0.296"/>
+  <link rel="stylesheet" href="polish.css?v=0.0.297"/>
 </head>
 <body>
 <div id="root">
@@ -438,7 +438,7 @@ window.CONVOOZ_CRYPTO = CONVOOZ_CRYPTO;
 
 // ─── Constants ───────────────────────────────────────────────────────────────
 
-const APP_VERSION = "0.0.296"; // bumped on every deploy — keep in sync with version.json AND with the ?v= on polish.css above
+const APP_VERSION = "0.0.297"; // bumped on every deploy — keep in sync with version.json AND with the ?v= on polish.css above
 
 // ─── Backend + Supabase config ───────────────────────────────────────────────
 // Two stacks: prod (live testers) and staging (where new features land first).
@@ -2247,7 +2247,7 @@ function ComposePane({replyTo, replyKind='reply', toContact, draft, initTo:initT
           uploading: true,
         }]);
         try {
-          const blob = await fetchAttachmentBlob(replyTo.id, att.index);
+          const blob = await fetchAttachmentBlob(replyTo.id, att.index, att.contentType);
           const form = new FormData();
           form.append('file', blob, att.filename);
           const { data: { session } } = await sb.auth.getSession();
@@ -2811,7 +2811,12 @@ function attachmentKind(ct) {
 // logic here. Without it a Realtime-triggered token refresh racing with an
 // attachment thumb fetch would silently 401 (the modal/thumb just shows the
 // generic "Can't load" state) and the user thinks "attachments are broken".
-async function fetchAttachmentBlob(messageId, index) {
+// v0.0.297 — accepts an optional contentType so the returned Blob
+// carries the right MIME type. Without it, `<video src={blobUrl}>`
+// couldn't play a decrypted mp4 (the browser needs the media type
+// to pick a decoder) and `<img>` on a mislabelled mp4 rendered as
+// a broken/empty frame. Every caller now passes att.contentType.
+async function fetchAttachmentBlob(messageId, index, contentType = null) {
   async function doFetch() {
     const { data: { session } } = await sb.auth.getSession();
     return fetch(`${BACKEND_URL}/messages/${messageId}/attachments/${index}`, {
@@ -2848,14 +2853,22 @@ async function fetchAttachmentBlob(messageId, index) {
     if (_masterKeyForDecrypt) {
       const decrypted = await CONVOOZ_CRYPTO.decryptBytes(arr, _masterKeyForDecrypt);
       if (!decrypted) throw new Error('attachment decrypt failed (wrong key?)');
-      return new Blob([decrypted]);
+      return new Blob([decrypted], contentType ? { type: contentType } : undefined);
     }
     // Locked: hand over the ciphertext untouched. Caller writes it
     // out as a regular download — name comes from the (also
     // encrypted) filename field on the attachment list.
-    return new Blob([arr]);
+    return new Blob([arr], contentType ? { type: contentType } : undefined);
   }
-  return res.blob();
+  // Plaintext path: if the caller told us the expected type, re-wrap
+  // the response body with it. The Storage-served path returns the
+  // right Content-Type header, but the IMAP fallback sometimes serves
+  // application/octet-stream and that breaks <video>/<audio>.
+  const raw = await res.blob();
+  if (contentType && (!raw.type || raw.type === 'application/octet-stream')) {
+    return new Blob([raw], { type: contentType });
+  }
+  return raw;
 }
 
 // Image thumbnail tile: fetches its own blob lazily + revokes on unmount.
@@ -2881,7 +2894,7 @@ function AttachmentThumb({messageId, att, onClick, cryptoStatus='idle'}) {
     let cancelled = false; let createdUrl = null;
     (async () => {
       try {
-        const blob = await fetchAttachmentBlob(messageId, att.index);
+        const blob = await fetchAttachmentBlob(messageId, att.index, att.contentType);
         createdUrl = URL.createObjectURL(blob);
         if (!cancelled) setBlobUrl(createdUrl);
       } catch { if (!cancelled) setErr(true); }
@@ -3017,11 +3030,11 @@ function AttachmentPreviewModal({messageId, attachment, attachments, onClose, on
         if (kind === 'text') {
           // Go through fetchAttachmentBlob for the 401/503-retry plumbing,
           // then read the blob as text.
-          const blob = await fetchAttachmentBlob(messageId, attachment.index);
+          const blob = await fetchAttachmentBlob(messageId, attachment.index, attachment.contentType);
           const t = await blob.text();
           if (!cancelled) setText(t);
         } else if (kind !== 'other') {
-          const blob = await fetchAttachmentBlob(messageId, attachment.index);
+          const blob = await fetchAttachmentBlob(messageId, attachment.index, attachment.contentType);
           createdUrl = URL.createObjectURL(blob);
           if (!cancelled) setBlobUrl(createdUrl);
         }
@@ -3440,16 +3453,16 @@ function MessageDetail({message,contact,isDeleted,msgTags,allTags,onReply,onRepl
     const cidsToResolve = [];
     for (const att of attachments) {
       if (att.cid && att.isInline) {
-        cidsToResolve.push({ cid: att.cid, index: att.index });
+        cidsToResolve.push({ cid: att.cid, index: att.index, contentType: att.contentType });
       }
     }
     if (cidsToResolve.length === 0) { setResolvedHtml(enriched.html); return; }
     let cancelled = false;
     const createdUrls = [];
     (async () => {
-      const replacements = await Promise.all(cidsToResolve.map(async ({ cid, index }) => {
+      const replacements = await Promise.all(cidsToResolve.map(async ({ cid, index, contentType }) => {
         try {
-          const blob = await fetchAttachmentBlob(message.id, index);
+          const blob = await fetchAttachmentBlob(message.id, index, contentType);
           const url = URL.createObjectURL(blob);
           createdUrls.push(url);
           return { cid, url };
@@ -3479,7 +3492,7 @@ function MessageDetail({message,contact,isDeleted,msgTags,allTags,onReply,onRepl
       // Reuse the blob fetcher so the same 401/503 retry plumbing applies
       // — a stale token race during Realtime refresh would otherwise
       // silently 401 and the user just sees "Download failed".
-      const blob = await fetchAttachmentBlob(message.id, att.index);
+      const blob = await fetchAttachmentBlob(message.id, att.index, att.contentType);
       const url = URL.createObjectURL(blob);
       const a = document.createElement('a');
       a.href = url; a.download = att.filename; a.rel = 'noopener';
@@ -8590,7 +8603,7 @@ function App({userId, onSignOut}) {
         if (inline.length > 0 && masterKey) {
           const replacements = await Promise.all(inline.map(async (att) => {
             try {
-              const blob = await fetchAttachmentBlob(msg.id, att.index);
+              const blob = await fetchAttachmentBlob(msg.id, att.index, att.contentType);
               const dataUri = await new Promise((resolve, reject) => {
                 const reader = new FileReader();
                 reader.onload = () => resolve(reader.result);
