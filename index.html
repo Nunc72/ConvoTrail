@@ -199,7 +199,7 @@
        polish change is picked up by every browser as soon as the version
        is bumped — no manual cache-busters needed. Keep ?v= here in sync
        with APP_VERSION below at every deploy. -->
-  <link rel="stylesheet" href="polish.css?v=0.0.297"/>
+  <link rel="stylesheet" href="polish.css?v=0.0.298"/>
 </head>
 <body>
 <div id="root">
@@ -438,7 +438,7 @@ window.CONVOOZ_CRYPTO = CONVOOZ_CRYPTO;
 
 // ─── Constants ───────────────────────────────────────────────────────────────
 
-const APP_VERSION = "0.0.297"; // bumped on every deploy — keep in sync with version.json AND with the ?v= on polish.css above
+const APP_VERSION = "0.0.298"; // bumped on every deploy — keep in sync with version.json AND with the ?v= on polish.css above
 
 // ─── Backend + Supabase config ───────────────────────────────────────────────
 // Two stacks: prod (live testers) and staging (where new features land first).
@@ -3133,17 +3133,28 @@ function AttachmentPreviewModal({messageId, attachment, attachments, onClose, on
             {imgZoom.toFixed(1)}×{isMobile ? ' · pinch to adjust' : ` · click to ${imgZoom >= 2.5 ? 'reset' : 'zoom more'}`}
           </div>
         )}
+        {/* v0.0.298 — every preview branch below is wrapped in / has an
+            onClick that stopPropagations. The modal root (regel 3070) is
+            onClick={onClose}, so without this a click on <video>'s play
+            button (or the PDF iframe, or a text-selection drag in <pre>)
+            would bubble up and close the modal before anything actually
+            happened. The image branch already had this via its zoom
+            wrapper — matching that pattern for the other kinds. */}
         {!loading && !err && kind === 'pdf' && blobUrl && (
-          <iframe src={blobUrl} title={attachment.filename} className="w-full h-full border-0 bg-white rounded"/>
+          <iframe src={blobUrl} title={attachment.filename} onClick={e => e.stopPropagation()}
+            className="w-full h-full border-0 bg-white rounded"/>
         )}
         {!loading && !err && kind === 'text' && text != null && (
-          <pre className="w-full h-full max-w-4xl bg-white text-gray-800 p-4 overflow-auto text-xs font-mono whitespace-pre-wrap rounded">{text}</pre>
+          <pre onClick={e => e.stopPropagation()}
+            className="w-full h-full max-w-4xl bg-white text-gray-800 p-4 overflow-auto text-xs font-mono whitespace-pre-wrap rounded">{text}</pre>
         )}
         {!loading && !err && kind === 'video' && blobUrl && (
-          <video src={blobUrl} controls className="max-w-full max-h-full"/>
+          <video src={blobUrl} controls onClick={e => e.stopPropagation()}
+            className="max-w-full max-h-full"/>
         )}
         {!loading && !err && kind === 'audio' && blobUrl && (
-          <div className="w-full max-w-xl p-6 bg-white/10 rounded text-white">
+          <div onClick={e => e.stopPropagation()}
+            className="w-full max-w-xl p-6 bg-white/10 rounded text-white">
             <div className="text-sm mb-3 text-center">{attachment.filename}</div>
             <audio src={blobUrl} controls className="w-full"/>
           </div>
