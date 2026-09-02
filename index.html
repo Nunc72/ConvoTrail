@@ -199,7 +199,7 @@
        polish change is picked up by every browser as soon as the version
        is bumped — no manual cache-busters needed. Keep ?v= here in sync
        with APP_VERSION below at every deploy. -->
-  <link rel="stylesheet" href="polish.css?v=0.0.299"/>
+  <link rel="stylesheet" href="polish.css?v=0.0.300"/>
 </head>
 <body>
 <div id="root">
@@ -438,7 +438,7 @@ window.CONVOOZ_CRYPTO = CONVOOZ_CRYPTO;
 
 // ─── Constants ───────────────────────────────────────────────────────────────
 
-const APP_VERSION = "0.0.299"; // bumped on every deploy — keep in sync with version.json AND with the ?v= on polish.css above
+const APP_VERSION = "0.0.300"; // bumped on every deploy — keep in sync with version.json AND with the ?v= on polish.css above
 
 // ─── Backend + Supabase config ───────────────────────────────────────────────
 // Two stacks: prod (live testers) and staging (where new features land first).
@@ -4722,6 +4722,12 @@ function LeftColumn({contactMeta, archivedContacts, selectedId, mergeId, onSelec
           : getTab(m.contact.id) === contactTab))
     .slice()
     .sort((a,b)=>{
+      // v0.0.300 — while search is active, sort alphabetically on name
+      // and stay there. Otherwise the click-to-open flow marks a mail
+      // as seen → unread drops to 0 → contact re-shuffles from the
+      // "actionable first" group to the tail, and the row the user
+      // just clicked visually jumps under their cursor.
+      if (searchQ) return (a.contact.name || '').localeCompare(b.contact.name || '');
       // Actionable contacts (badge > 0) first; within each group preserve original order
       const ba = a.unread + (a.r2mCount||0);
       const bb = b.unread + (b.r2mCount||0);
@@ -4997,22 +5003,34 @@ function LeftColumn({contactMeta, archivedContacts, selectedId, mergeId, onSelec
     const contactsHeader = (
       <div className="border-b border-gray-100 bg-white flex-shrink-0">
         <div onClick={()=>onToggleCollapse('contacts')}
-          className="px-3 pt-2 pb-1 text-xs font-semibold text-gray-400 uppercase tracking-wider flex items-center justify-between cursor-pointer select-none hover:bg-gray-50 transition-colors"
+          className="px-3 pt-2 pb-1 text-xs font-semibold text-gray-400 uppercase tracking-wider flex items-center gap-2 cursor-pointer select-none hover:bg-gray-50 transition-colors"
           style={{height:30}}>
-          <span>Contacts
+          <span className="flex-shrink-0">Contacts
             {mergeId!==null&&<span className="ml-2 text-indigo-500 normal-case font-normal">· Shift+click</span>}
           </span>
+          {/* v0.0.300 — compact inline search on the Contacts title row
+              itself. No border, no icon, just a small unobtrusive input
+              that grows to fill the space between "Contacts" and the
+              Archive chip. stopPropagation keeps typing / clicking from
+              triggering the row-level collapse toggle. */}
+          {!collapsed.contacts && (
+            <input type="text" value={contactSearchQuery}
+              onClick={e=>e.stopPropagation()}
+              onChange={e=>setContactSearchQuery(e.target.value)}
+              placeholder="search…"
+              className="flex-1 min-w-0 outline-none text-[10px] font-normal normal-case tracking-normal bg-transparent text-gray-500 placeholder-gray-300"/>
+          )}
           {/* Archive lives on the same line as the section label, mirroring
               the Tags header. stopPropagation so a click on the chip doesn't
               also collapse the contacts panel. */}
           {!collapsed.contacts && (
             <button onClick={e=>{e.stopPropagation(); setArchiveContactsVisible(v=>!v);}}
-              className={`text-xs py-0.5 px-2 rounded transition-colors font-normal normal-case tracking-normal ${archiveContactsVisible?'bg-gray-100 text-gray-600':'text-gray-400 hover:text-gray-600'}`}>
+              className={`flex-shrink-0 text-xs py-0.5 px-2 rounded transition-colors font-normal normal-case tracking-normal ${archiveContactsVisible?'bg-gray-100 text-gray-600':'text-gray-400 hover:text-gray-600'}`}>
               Archive
             </button>
           )}
         </div>
-        {!collapsed.contacts&&(<>
+        {!collapsed.contacts&&(
           <div className="flex px-2 pt-[3px] pb-1.5 gap-0.5">
             {['Convo','News','Noreply','Muted'].map(tab=>{
               const active=contactTab===tab && !archiveContactsVisible;
@@ -5031,25 +5049,7 @@ function LeftColumn({contactMeta, archivedContacts, selectedId, mergeId, onSelec
               </button>;
             })}
           </div>
-          {/* v0.0.299 — inline contacts search. Realtime filter across
-              every tab. Clear-× wipes and returns to normal tab view. */}
-          <div className="px-2 pb-1.5">
-            <div className={`flex items-center gap-1.5 px-2 py-1 rounded border transition-colors ${searchQ?'border-indigo-300 bg-indigo-50/30':'border-gray-200 bg-white'}`}>
-              <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"
-                className={`flex-shrink-0 ${searchQ?'text-indigo-500':'text-gray-400'}`}>
-                <circle cx="11" cy="11" r="8"/><path d="M21 21l-4.35-4.35"/>
-              </svg>
-              <input type="text" value={contactSearchQuery}
-                onChange={e=>setContactSearchQuery(e.target.value)}
-                placeholder="Search contacts…"
-                className="flex-1 outline-none text-xs bg-transparent text-gray-700 placeholder-gray-300 min-w-0"/>
-              {searchQ && (
-                <button onClick={()=>setContactSearchQuery('')} title="Clear search"
-                  className="flex-shrink-0 w-4 h-4 rounded-full hover:bg-gray-200 text-gray-400 hover:text-gray-600 text-sm leading-none flex items-center justify-center">×</button>
-              )}
-            </div>
-          </div>
-        </>)}
+        )}
       </div>
     );
 
@@ -5165,11 +5165,18 @@ function LeftColumn({contactMeta, archivedContacts, selectedId, mergeId, onSelec
 
       {/* CONTACTS header */}
       <div className="border-b border-gray-100 flex-shrink-0 bg-white">
-        <div className="px-3 pt-2 pb-1 text-xs font-semibold text-gray-400 uppercase tracking-wider flex items-center justify-between">
-          <span>Contacts
+        <div className="px-3 pt-2 pb-1 text-xs font-semibold text-gray-400 uppercase tracking-wider flex items-center gap-2">
+          <span className="flex-shrink-0">Contacts
             {mergeId!==null&&<span className="ml-2 text-indigo-500 normal-case font-normal">· Shift+click</span>}
           </span>
-          <div className="flex items-center gap-2">
+          {/* v0.0.300 — compact inline search on the Contacts title row. */}
+          {!collapsed.contacts && (
+            <input type="text" value={contactSearchQuery}
+              onChange={e=>setContactSearchQuery(e.target.value)}
+              placeholder="search…"
+              className="flex-1 min-w-0 outline-none text-[10px] font-normal normal-case tracking-normal bg-transparent text-gray-500 placeholder-gray-300"/>
+          )}
+          <div className="flex items-center gap-2 flex-shrink-0">
             {/* Archive toggle on the same row as the section label, like
                 Tags. Only shows when contacts panel is expanded — collapsing
                 hides it along with the rest of the tabs. */}
@@ -5184,7 +5191,7 @@ function LeftColumn({contactMeta, archivedContacts, selectedId, mergeId, onSelec
             </button>
           </div>
         </div>
-        {!collapsed.contacts&&(<>
+        {!collapsed.contacts&&(
           <div className="flex px-2 pt-[3px] pb-1.5 gap-0.5">
             {['Convo','News','Noreply','Muted'].map(tab=>{
               const active=contactTab===tab && !archiveContactsVisible;
@@ -5200,24 +5207,7 @@ function LeftColumn({contactMeta, archivedContacts, selectedId, mergeId, onSelec
               </button>;
             })}
           </div>
-          {/* v0.0.299 — same inline contacts search as the mobile variant above. */}
-          <div className="px-2 pb-1.5">
-            <div className={`flex items-center gap-1.5 px-2 py-1 rounded border transition-colors ${searchQ?'border-indigo-300 bg-indigo-50/30':'border-gray-200 bg-white'}`}>
-              <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"
-                className={`flex-shrink-0 ${searchQ?'text-indigo-500':'text-gray-400'}`}>
-                <circle cx="11" cy="11" r="8"/><path d="M21 21l-4.35-4.35"/>
-              </svg>
-              <input type="text" value={contactSearchQuery}
-                onChange={e=>setContactSearchQuery(e.target.value)}
-                placeholder="Search contacts…"
-                className="flex-1 outline-none text-xs bg-transparent text-gray-700 placeholder-gray-300 min-w-0"/>
-              {searchQ && (
-                <button onClick={()=>setContactSearchQuery('')} title="Clear search"
-                  className="flex-shrink-0 w-4 h-4 rounded-full hover:bg-gray-200 text-gray-400 hover:text-gray-600 text-sm leading-none flex items-center justify-center">×</button>
-              )}
-            </div>
-          </div>
-        </>)}
+        )}
       </div>
 
       {/* CONTACTS + TAGS wrapper — fills all remaining space in left column */}
