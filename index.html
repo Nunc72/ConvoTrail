@@ -199,7 +199,7 @@
        polish change is picked up by every browser as soon as the version
        is bumped — no manual cache-busters needed. Keep ?v= here in sync
        with APP_VERSION below at every deploy. -->
-  <link rel="stylesheet" href="polish.css?v=0.0.300"/>
+  <link rel="stylesheet" href="polish.css?v=0.0.301"/>
 </head>
 <body>
 <div id="root">
@@ -438,7 +438,7 @@ window.CONVOOZ_CRYPTO = CONVOOZ_CRYPTO;
 
 // ─── Constants ───────────────────────────────────────────────────────────────
 
-const APP_VERSION = "0.0.300"; // bumped on every deploy — keep in sync with version.json AND with the ?v= on polish.css above
+const APP_VERSION = "0.0.301"; // bumped on every deploy — keep in sync with version.json AND with the ?v= on polish.css above
 
 // ─── Backend + Supabase config ───────────────────────────────────────────────
 // Two stacks: prod (live testers) and staging (where new features land first).
@@ -5008,17 +5008,24 @@ function LeftColumn({contactMeta, archivedContacts, selectedId, mergeId, onSelec
           <span className="flex-shrink-0">Contacts
             {mergeId!==null&&<span className="ml-2 text-indigo-500 normal-case font-normal">· Shift+click</span>}
           </span>
-          {/* v0.0.300 — compact inline search on the Contacts title row
-              itself. No border, no icon, just a small unobtrusive input
-              that grows to fill the space between "Contacts" and the
-              Archive chip. stopPropagation keeps typing / clicking from
+          {/* v0.0.301 — compact inline search on the Contacts title row.
+              Right-side glyph swaps: 🔍 magnifier when empty (visual
+              hint it's a search field), × when there's text (click to
+              clear). stopPropagation keeps typing / clicking from
               triggering the row-level collapse toggle. */}
           {!collapsed.contacts && (
-            <input type="text" value={contactSearchQuery}
-              onClick={e=>e.stopPropagation()}
-              onChange={e=>setContactSearchQuery(e.target.value)}
-              placeholder="search…"
-              className="flex-1 min-w-0 outline-none text-[10px] font-normal normal-case tracking-normal bg-transparent text-gray-500 placeholder-gray-300"/>
+            <div className="flex-1 min-w-0 flex items-center gap-1" onClick={e=>e.stopPropagation()}>
+              <input type="text" value={contactSearchQuery}
+                onChange={e=>setContactSearchQuery(e.target.value)}
+                className="flex-1 min-w-0 outline-none text-[10px] font-normal normal-case tracking-normal bg-transparent text-gray-500"/>
+              {contactSearchQuery
+                ? <button onClick={()=>setContactSearchQuery('')} title="Clear search"
+                    className="flex-shrink-0 w-4 h-4 rounded-full hover:bg-gray-100 text-gray-400 hover:text-gray-600 text-sm leading-none flex items-center justify-center">×</button>
+                : <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"
+                    className="flex-shrink-0 text-gray-300">
+                    <circle cx="11" cy="11" r="8"/><path d="M21 21l-4.35-4.35"/>
+                  </svg>}
+            </div>
           )}
           {/* Archive lives on the same line as the section label, mirroring
               the Tags header. stopPropagation so a click on the chip doesn't
@@ -5040,12 +5047,14 @@ function LeftColumn({contactMeta, archivedContacts, selectedId, mergeId, onSelec
               // dimmed and unclickable: the search spans every bucket
               // so switching tabs is meaningless mid-search.
               const searchActive = !!searchQ;
-              return <button key={tab} onClick={()=>{ if(searchActive) return; setArchiveContactsVisible(false); setContactTab(tab); }}
-                disabled={searchActive}
-                className={`convooz-contact-tab flex-1 text-xs py-1 rounded transition-colors ${searchActive
-                  ? 'text-gray-300 cursor-not-allowed'
-                  : (active?'bg-indigo-50 text-indigo-700 font-semibold':'text-gray-400 hover:text-gray-600')}`}>
-                {tab}{badge>0&&!searchActive&&<span className="ml-0.5 opacity-70">({badge})</span>}
+              // v0.0.301 — tab click also clears any active search, so
+              // hitting a tab mid-search jumps you to that bucket
+               // without leaving stale search state behind.
+              return <button key={tab} onClick={()=>{ if(searchActive) setContactSearchQuery(''); setArchiveContactsVisible(false); setContactTab(tab); }}
+                className={`convooz-contact-tab flex-1 text-xs py-1 rounded transition-colors ${active
+                  ? 'bg-indigo-50 text-indigo-700 font-semibold'
+                  : 'text-gray-400 hover:text-gray-600'}`}>
+                {tab}{badge>0&&<span className="ml-0.5 opacity-70">({badge})</span>}
               </button>;
             })}
           </div>
@@ -5169,12 +5178,20 @@ function LeftColumn({contactMeta, archivedContacts, selectedId, mergeId, onSelec
           <span className="flex-shrink-0">Contacts
             {mergeId!==null&&<span className="ml-2 text-indigo-500 normal-case font-normal">· Shift+click</span>}
           </span>
-          {/* v0.0.300 — compact inline search on the Contacts title row. */}
+          {/* v0.0.301 — compact search with right-side 🔍/× glyph. */}
           {!collapsed.contacts && (
-            <input type="text" value={contactSearchQuery}
-              onChange={e=>setContactSearchQuery(e.target.value)}
-              placeholder="search…"
-              className="flex-1 min-w-0 outline-none text-[10px] font-normal normal-case tracking-normal bg-transparent text-gray-500 placeholder-gray-300"/>
+            <div className="flex-1 min-w-0 flex items-center gap-1">
+              <input type="text" value={contactSearchQuery}
+                onChange={e=>setContactSearchQuery(e.target.value)}
+                className="flex-1 min-w-0 outline-none text-[10px] font-normal normal-case tracking-normal bg-transparent text-gray-500"/>
+              {contactSearchQuery
+                ? <button onClick={()=>setContactSearchQuery('')} title="Clear search"
+                    className="flex-shrink-0 w-4 h-4 rounded-full hover:bg-gray-100 text-gray-400 hover:text-gray-600 text-sm leading-none flex items-center justify-center">×</button>
+                : <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"
+                    className="flex-shrink-0 text-gray-300">
+                    <circle cx="11" cy="11" r="8"/><path d="M21 21l-4.35-4.35"/>
+                  </svg>}
+            </div>
           )}
           <div className="flex items-center gap-2 flex-shrink-0">
             {/* Archive toggle on the same row as the section label, like
@@ -5198,12 +5215,14 @@ function LeftColumn({contactMeta, archivedContacts, selectedId, mergeId, onSelec
               // Muted is a destination, not an actionable bucket — no badge.
               const badge=(!active && !archiveContactsVisible && tab !== 'Muted')?tabBadge(tab):0;
               const searchActive = !!searchQ;
-              return <button key={tab} onClick={()=>{ if(searchActive) return; setArchiveContactsVisible(false); setContactTab(tab); }}
-                disabled={searchActive}
-                className={`convooz-contact-tab flex-1 text-xs py-1 rounded transition-colors ${searchActive
-                  ? 'text-gray-300 cursor-not-allowed'
-                  : (active?'bg-indigo-50 text-indigo-700 font-semibold':'text-gray-400 hover:text-gray-600')}`}>
-                {tab}{badge>0&&!searchActive&&<span className="ml-0.5 opacity-70">({badge})</span>}
+              // v0.0.301 — tab click also clears any active search, so
+              // hitting a tab mid-search jumps you to that bucket
+               // without leaving stale search state behind.
+              return <button key={tab} onClick={()=>{ if(searchActive) setContactSearchQuery(''); setArchiveContactsVisible(false); setContactTab(tab); }}
+                className={`convooz-contact-tab flex-1 text-xs py-1 rounded transition-colors ${active
+                  ? 'bg-indigo-50 text-indigo-700 font-semibold'
+                  : 'text-gray-400 hover:text-gray-600'}`}>
+                {tab}{badge>0&&<span className="ml-0.5 opacity-70">({badge})</span>}
               </button>;
             })}
           </div>
