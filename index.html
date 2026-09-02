@@ -199,7 +199,7 @@
        polish change is picked up by every browser as soon as the version
        is bumped — no manual cache-busters needed. Keep ?v= here in sync
        with APP_VERSION below at every deploy. -->
-  <link rel="stylesheet" href="polish.css?v=0.0.301"/>
+  <link rel="stylesheet" href="polish.css?v=0.0.302"/>
 </head>
 <body>
 <div id="root">
@@ -438,7 +438,7 @@ window.CONVOOZ_CRYPTO = CONVOOZ_CRYPTO;
 
 // ─── Constants ───────────────────────────────────────────────────────────────
 
-const APP_VERSION = "0.0.301"; // bumped on every deploy — keep in sync with version.json AND with the ?v= on polish.css above
+const APP_VERSION = "0.0.302"; // bumped on every deploy — keep in sync with version.json AND with the ?v= on polish.css above
 
 // ─── Backend + Supabase config ───────────────────────────────────────────────
 // Two stacks: prod (live testers) and staging (where new features land first).
@@ -5049,12 +5049,19 @@ function LeftColumn({contactMeta, archivedContacts, selectedId, mergeId, onSelec
               const searchActive = !!searchQ;
               // v0.0.301 — tab click also clears any active search, so
               // hitting a tab mid-search jumps you to that bucket
-               // without leaving stale search state behind.
+              // without leaving stale search state behind.
+              // v0.0.302 — while searchActive, dim every tab (no active
+              // highlight): the visible list is the search result, not
+              // the tab, so showing one as active would misrepresent
+              // what's on screen. Tabs remain clickable for the clear-
+              // and-jump flow.
               return <button key={tab} onClick={()=>{ if(searchActive) setContactSearchQuery(''); setArchiveContactsVisible(false); setContactTab(tab); }}
-                className={`convooz-contact-tab flex-1 text-xs py-1 rounded transition-colors ${active
-                  ? 'bg-indigo-50 text-indigo-700 font-semibold'
-                  : 'text-gray-400 hover:text-gray-600'}`}>
-                {tab}{badge>0&&<span className="ml-0.5 opacity-70">({badge})</span>}
+                className={`convooz-contact-tab flex-1 text-xs py-1 rounded transition-colors ${searchActive
+                  ? 'text-gray-300 hover:text-gray-500'
+                  : (active
+                      ? 'bg-indigo-50 text-indigo-700 font-semibold'
+                      : 'text-gray-400 hover:text-gray-600')}`}>
+                {tab}{badge>0&&!searchActive&&<span className="ml-0.5 opacity-70">({badge})</span>}
               </button>;
             })}
           </div>
@@ -5217,12 +5224,19 @@ function LeftColumn({contactMeta, archivedContacts, selectedId, mergeId, onSelec
               const searchActive = !!searchQ;
               // v0.0.301 — tab click also clears any active search, so
               // hitting a tab mid-search jumps you to that bucket
-               // without leaving stale search state behind.
+              // without leaving stale search state behind.
+              // v0.0.302 — while searchActive, dim every tab (no active
+              // highlight): the visible list is the search result, not
+              // the tab, so showing one as active would misrepresent
+              // what's on screen. Tabs remain clickable for the clear-
+              // and-jump flow.
               return <button key={tab} onClick={()=>{ if(searchActive) setContactSearchQuery(''); setArchiveContactsVisible(false); setContactTab(tab); }}
-                className={`convooz-contact-tab flex-1 text-xs py-1 rounded transition-colors ${active
-                  ? 'bg-indigo-50 text-indigo-700 font-semibold'
-                  : 'text-gray-400 hover:text-gray-600'}`}>
-                {tab}{badge>0&&<span className="ml-0.5 opacity-70">({badge})</span>}
+                className={`convooz-contact-tab flex-1 text-xs py-1 rounded transition-colors ${searchActive
+                  ? 'text-gray-300 hover:text-gray-500'
+                  : (active
+                      ? 'bg-indigo-50 text-indigo-700 font-semibold'
+                      : 'text-gray-400 hover:text-gray-600')}`}>
+                {tab}{badge>0&&!searchActive&&<span className="ml-0.5 opacity-70">({badge})</span>}
               </button>;
             })}
           </div>
