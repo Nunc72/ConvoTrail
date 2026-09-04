@@ -199,7 +199,7 @@
        polish change is picked up by every browser as soon as the version
        is bumped — no manual cache-busters needed. Keep ?v= here in sync
        with APP_VERSION below at every deploy. -->
-  <link rel="stylesheet" href="polish.css?v=0.0.302"/>
+  <link rel="stylesheet" href="polish.css?v=0.0.303"/>
 </head>
 <body>
 <div id="root">
@@ -438,7 +438,7 @@ window.CONVOOZ_CRYPTO = CONVOOZ_CRYPTO;
 
 // ─── Constants ───────────────────────────────────────────────────────────────
 
-const APP_VERSION = "0.0.302"; // bumped on every deploy — keep in sync with version.json AND with the ?v= on polish.css above
+const APP_VERSION = "0.0.303"; // bumped on every deploy — keep in sync with version.json AND with the ?v= on polish.css above
 
 // ─── Backend + Supabase config ───────────────────────────────────────────────
 // Two stacks: prod (live testers) and staging (where new features land first).
@@ -3765,8 +3765,30 @@ function MessageDetail({message,contact,isDeleted,msgTags,allTags,onReply,onRepl
           // like signature dividers (————————…) and URL-ish tokens so the
           // column never has to scroll horizontally on narrow screens.
           const textBody = (message.body && message.body.trim()) ? message.body : (enriched?.text || '');
+          // v0.0.303 — linkify http(s) URLs in plaintext bodies so
+          // they open in the OS default browser (target="_blank"
+          // pops out of the PWA standalone window into the user's
+          // real browser). Trailing punctuation is stripped from
+          // the match so "https://example.com." doesn't include
+          // the period in the href.
+          const URL_RE = /(https?:\/\/[^\s<>"'()]+[^\s<>"'.,;:!?)\]}])/g;
+          const linkify = (line) => {
+            const out = [];
+            let last = 0, m;
+            URL_RE.lastIndex = 0;
+            while ((m = URL_RE.exec(line)) !== null) {
+              if (m.index > last) out.push(line.slice(last, m.index));
+              out.push(
+                <a key={out.length} href={m[0]} target="_blank" rel="noopener noreferrer"
+                  className="text-indigo-600 hover:underline break-all">{m[0]}</a>
+              );
+              last = m.index + m[0].length;
+            }
+            if (last < line.length) out.push(line.slice(last));
+            return out.length ? out : line;
+          };
           if (textBody.trim()) return textBody.split("\n").map((line,i)=>(
-            <p key={i} className={line.startsWith("—")||line.startsWith("——")?"text-gray-300 mt-3":"min-h-[1em]"}>{line}</p>
+            <p key={i} className={line.startsWith("—")||line.startsWith("——")?"text-gray-300 mt-3":"min-h-[1em]"}>{linkify(line)}</p>
           ));
           // Spinner only when we expect inline HTML images to be rewritten
           // server-side (the /body endpoint replaces cid: refs with data URIs).
