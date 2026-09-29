@@ -28,13 +28,23 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      # Precompiles index.html's JSX (same Babel the browser used to run),
+      # Tailwind and React-production into _site/, so visitors no longer
+      # download Babel and compile ~560 KB of JSX on every start. Any
+      # surprise fails the build and the live site stays as it was.
+      - name: Build site
+        run: |
+          npm ci
+          npm run build:pages
       - uses: actions/configure-pages@v5
       - name: Upload site
         uses: actions/upload-pages-artifact@v3
         with:
-          # Whole repo root — the FE is index.html + polish.css + version.json
-          # + icons + manifest.json + service-worker.js, all in /.
-          path: .
+          path: _site
       - name: Deploy
         id: deployment
         uses: actions/deploy-pages@v4

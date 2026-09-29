@@ -6,6 +6,12 @@
       "runtimeExecutable": "npx",
       "runtimeArgs": ["--yes", "serve", "-p", "4321", "-n", "."],
       "port": 4321
+    },
+    {
+      "name": "convooz-built",
+      "runtimeExecutable": "npx",
+      "runtimeArgs": ["--yes", "serve", "-p", "4322", "-n", "_site"],
+      "port": 4322
     }
   ]
 }
