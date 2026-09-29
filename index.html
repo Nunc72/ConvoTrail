@@ -44,11 +44,22 @@
         if (!r.ok) return;
         const { version } = await r.json();
         if (!version) return;
+        // Compare against the version baked into THIS html (polish.css ?v=
+        // is bumped in lockstep with APP_VERSION), not the URL's ?v=. The
+        // PWA start_url "./" has no ?v=, so the param check redirected on
+        // every cold start — a full extra page load. Missing link → no
+        // redirect (fail-safe; Root's version check is the backstop).
+        const link = document.querySelector('link[rel="stylesheet"][href*="polish.css"]');
+        const baked = link && new URL(link.href).searchParams.get('v');
+        if (!baked || baked === version) return;
+        // Loop guard shared with Root's update check: a second mismatch
+        // within 10 s is left to Root's service-worker rescue.
+        const last = parseInt(sessionStorage.getItem('convooz-update-redirect-at') || '0', 10);
+        if (Date.now() - last < 10000) return;
+        sessionStorage.setItem('convooz-update-redirect-at', String(Date.now()));
         const url = new URL(location.href);
-        if (url.searchParams.get('v') !== version) {
-          url.searchParams.set('v', version);
-          location.replace(url.pathname + url.search);
-        }
+        url.searchParams.set('v', version);
+        location.replace(url.pathname + url.search);
       } catch {}
     })();
   </script>
@@ -199,7 +210,7 @@
        polish change is picked up by every browser as soon as the version
        is bumped — no manual cache-busters needed. Keep ?v= here in sync
        with APP_VERSION below at every deploy. -->
-  <link rel="stylesheet" href="polish.css?v=0.0.304"/>
+  <link rel="stylesheet" href="polish.css?v=0.0.305"/>
 </head>
 <body>
 <div id="root">
@@ -438,7 +449,7 @@ window.CONVOOZ_CRYPTO = CONVOOZ_CRYPTO;
 
 // ─── Constants ───────────────────────────────────────────────────────────────
 
-const APP_VERSION = "0.0.304"; // bumped on every deploy — keep in sync with version.json AND with the ?v= on polish.css above
+const APP_VERSION = "0.0.305"; // bumped on every deploy — keep in sync with version.json AND with the ?v= on polish.css above
 
 // ─── Backend + Supabase config ───────────────────────────────────────────────
 // Two stacks: prod (live testers) and staging (where new features land first).
@@ -10128,14 +10139,39 @@ function App({userId, onSignOut}) {
   );
 }
 
+// Read the Supabase session persisted in localStorage synchronously, so
+// Root can render the App (and its cached content) on the very first
+// frame instead of showing the bootloader until sb.auth.getSession()
+// resolves — which, with an access token older than an hour, first does
+// a network refresh. Safe for API calls: apiFetch awaits getSession()
+// per request (auto-refresh) and signs out on a definitive 401.
+// Returns undefined when nothing usable is stored → normal loading path.
+function readPersistedSession() {
+  try {
+    const key = sb.auth.storageKey || `sb-${new URL(SUPABASE_URL).hostname.split('.')[0]}-auth-token`;
+    const raw = localStorage.getItem(key);
+    if (!raw) return undefined;
+    const s = JSON.parse(raw);
+    const sess = s && (s.currentSession || s);
+    return (sess && sess.user && sess.user.id && sess.refresh_token) ? sess : undefined;
+  } catch { return undefined; }
+}
+
 function Root() {
-  const [session, setSession] = useState(undefined); // undefined = loading, null = logged out, object = logged in
+  const [session, setSession] = useState(readPersistedSession); // undefined = loading, null = logged out, object = logged in
   const [recoveryMode, setRecoveryMode] = useState(false);
 
   useEffect(()=>{
-    sb.auth.getSession().then(({ data }) => setSession(data.session ?? null));
+    sb.auth.getSession().then(({ data, error }) => {
+      // A network failure while refreshing an expired token (offline,
+      // flaky mobile) must not drop the optimistically restored session:
+      // keep the cached view up. A real logout arrives as SIGNED_OUT.
+      setSession(prev => (!data?.session && error?.name === 'AuthRetryableFetchError' && prev) ? prev : (data?.session ?? null));
+    });
     const { data: sub } = sb.auth.onAuthStateChange((event, sess) => {
-      setSession(sess ?? null);
+      // INITIAL_SESSION can arrive null after a failed refresh on a flaky
+      // network — same reasoning. SIGNED_OUT always clears.
+      setSession(prev => (!sess && event === 'INITIAL_SESSION' && prev) ? prev : (sess ?? null));
       if (event === 'PASSWORD_RECOVERY') setRecoveryMode(true);
       if (event === 'USER_UPDATED' && recoveryMode) setRecoveryMode(false);
     });
