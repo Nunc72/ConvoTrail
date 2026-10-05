@@ -1,10 +1,11 @@
 import type { FastifyInstance } from "fastify";
+import { PassThrough } from "node:stream";
 import { supabaseWithJwt } from "../supabase.js";
 import { encrypt, decrypt } from "../crypto.js";
 import { testImapConnection } from "../imap.js";
 import { authPreHandler } from "../auth.js";
 import { logAudit } from "../audit.js";
-import { syncAccount } from "../sync.js";
+import { syncAccount, type SyncResult } from "../sync.js";
 import { requirePool } from "../db.js";
 import { sendMail, splitAddresses } from "../smtp.js";
 import { armR2m } from "../r2m.js";
@@ -175,7 +176,7 @@ export async function registerMailAccountsRoutes(app: FastifyInstance) {
   });
 
   // ─── Sync account (fetch last 90d INBOX + Sent, upsert messages + contacts) ─
-  app.post<{ Params: { id: string } }>("/mail-accounts/:id/sync", auth, async (req, reply) => {
+  app.post<{ Params: { id: string }; Querystring: { stream?: string } }>("/mail-accounts/:id/sync", auth, async (req, reply) => {
     const pool = requirePool();
     const r = await pool.query<{ user_id: string }>(
       `SELECT user_id FROM mail_accounts WHERE id = $1`, [req.params.id],
@@ -213,6 +214,43 @@ export async function registerMailAccountsRoutes(app: FastifyInstance) {
             "would write plaintext rows that can't be fully back-encrypted.",
         });
       }
+    }
+
+    // v0.0.308 — ?stream=1 answers with newline-delimited JSON: progress
+    // lines ({"type":"progress","pct":0.42,"moreRounds":0}) while the sync
+    // runs, then exactly one {"type":"result", ...SyncResult} line, so the
+    // FE can fill its sync ring. Headers go out with the first line; an
+    // error thrown before that still takes the regular error path (503 →
+    // the FE's one automatic retry). A client that disconnects only stops
+    // the writes — the sync itself always runs to completion, as before.
+    // Without the flag the response is unchanged for older app versions.
+    if (req.query.stream === "1") {
+      const out = new PassThrough();
+      out.on("error", () => { /* client went away */ });
+      let started = false;
+      const writeLine = (obj: unknown) => {
+        if (!started) {
+          started = true;
+          reply
+            .header("content-type", "application/x-ndjson; charset=utf-8")
+            .header("cache-control", "no-store")
+            .send(out);
+        }
+        if (out.destroyed || out.writableEnded) return;
+        try { out.write(JSON.stringify(obj) + "\n"); } catch { /* client went away */ }
+      };
+      let result: SyncResult;
+      try {
+        result = await syncAccount(req.params.id, userKey ?? undefined,
+          p => writeLine({ type: "progress", ...p }));
+      } catch (e) {
+        if (!started) throw e;
+        result = { ok: false, folders: [], contactsCreated: 0, durationMs: 0,
+          error: e instanceof Error ? e.message : String(e) };
+      }
+      writeLine({ type: "result", ...result });
+      out.end();
+      return reply;
     }
 
     const result = await syncAccount(req.params.id, userKey ?? undefined);

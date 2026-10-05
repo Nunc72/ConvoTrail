@@ -37,6 +37,16 @@ export interface SyncResult {
   durationMs: number;
   error?: string;
 }
+// v0.0.308 — progress for the FE's sync ring (streamed by the /sync
+// route). pct is 0..1 and never decreases within one syncAccount call.
+// It counts steps, not time: every folder gets an equal share, and
+// inside a folder the new-mail fetch moves it message by message.
+// moreRounds estimates how many more /sync calls the FE catch-up loop
+// will need for the backlog this call can't fetch (0 = done after this).
+export interface SyncProgress {
+  pct: number;
+  moreRounds: number;
+}
 
 const SINCE_DAYS = 365;
 // v0.0.292 — bumped 100→400. With 100 an account carrying a backlog
@@ -179,7 +189,11 @@ function guessNameFromEmail(email: string, parsedName: string | null): string {
 // fills the *_enc + *_blind columns with the user's master key in-memory
 // for the duration of this sync run. When absent (locked / never set up),
 // new rows go in plaintext-only — same as pre-phase-1.3 behaviour.
-export async function syncAccount(accountId: string, userKey?: Buffer): Promise<SyncResult> {
+export async function syncAccount(
+  accountId: string,
+  userKey?: Buffer,
+  onProgress?: (p: SyncProgress) => void,
+): Promise<SyncResult> {
   const started = Date.now();
   if (!supabaseAdmin) return { ok: false, folders: [], contactsCreated: 0, durationMs: 0, error: "service key missing" };
 
@@ -223,8 +237,25 @@ export async function syncAccount(accountId: string, userKey?: Buffer): Promise<
   // News, signalled by is_news_user_set = true).
   const newsletterSenders = new Set<string>();
 
+  // Progress reporting (see SyncProgress). Step boundaries always emit;
+  // the per-message updates inside a fetch are throttled to one per
+  // 200 ms. A throwing listener is swallowed — it must never be able to
+  // break or slow down the sync itself.
+  let progressPct = 0;
+  let progressEmittedAt = 0;
+  let moreRounds = 0;
+  const report = (pct: number, step = false) => {
+    if (!onProgress) return;
+    progressPct = Math.max(progressPct, Math.min(1, pct));
+    const now = Date.now();
+    if (!step && now - progressEmittedAt < 200) return;
+    progressEmittedAt = now;
+    try { onProgress({ pct: Math.round(progressPct * 1000) / 1000, moreRounds }); } catch { /* listener's problem */ }
+  };
+
   try {
     await client.connect();
+    report(0.03, true);
 
     // 2) Discover folders via SPECIAL-USE.
     //
@@ -272,6 +303,7 @@ export async function syncAccount(accountId: string, userKey?: Buffer): Promise<
       targets = [inbox, sent].filter(Boolean) as { path: string }[];
     }
     if (trash) targets.push(trash);
+    report(0.05, true);
 
     // First-run migration to All Mail: prior syncs may have written
     // INBOX / Sent rows under different folder names. We delete those
@@ -366,6 +398,9 @@ export async function syncAccount(accountId: string, userKey?: Buffer): Promise<
 
     for (const box of targets) {
       const stat: FolderSyncStat = { folder: box.path, fetched: 0, inserted: 0, skipped: 0 };
+      // Progress window for this folder: an equal slice of 5%..90%.
+      const share = 0.85 / targets.length;
+      const base = 0.05 + targets.indexOf(box) * share;
       const lock = await client.getMailboxLock(box.path);
       try {
         const mb = client.mailbox as { uidValidity: bigint | number };
@@ -374,7 +409,7 @@ export async function syncAccount(accountId: string, userKey?: Buffer): Promise<
         // UIDs since SINCE_DAYS, IMAP returns them ascending (oldest → newest).
         const allUids = (await client.search({ since }, { uid: true })) as number[];
         sumKnownUids += allUids.length;
-        if (allUids.length === 0) { folderStats.push(stat); continue; }
+        if (allUids.length === 0) { folderStats.push(stat); report(base + share, true); continue; }
         // Keep the full IMAP UID list — catch-up of older mails depends
         // on `missing` covering everything we don't have, not just a
         // newest-N slice. The user-wide cap is enforced later by capping
@@ -420,6 +455,8 @@ export async function syncAccount(accountId: string, userKey?: Buffer): Promise<
         // on for minutes even when the account was fully in sync. Now only
         // mails we actually couldn't fetch this round count as skipped.
         stat.skipped = missing.length - toFetch.length;
+        moreRounds = Math.max(moreRounds, Math.ceil(stat.skipped / PER_FOLDER_CAP));
+        report(base + share * 0.1, true);
 
         // Flag reconciliation runs BEFORE the early-exit-if-nothing-to-fetch
         // below, because once an account is fully caught up there are no
@@ -492,8 +529,9 @@ export async function syncAccount(accountId: string, userKey?: Buffer): Promise<
         } catch (e) {
           console.warn(`[sync] ${box.path}: flag reconciliation failed:`, e instanceof Error ? e.stack : e);
         }
+        report(base + share * 0.3, true);
 
-        if (toFetch.length === 0) { folderStats.push(stat); continue; }
+        if (toFetch.length === 0) { folderStats.push(stat); report(base + share, true); continue; }
 
         // Batch-fetch via UID list
         // v0.0.294 — surface per-message failures. Was a bare
@@ -507,6 +545,7 @@ export async function syncAccount(accountId: string, userKey?: Buffer): Promise<
         console.log(`[sync] ${box.path}: fetching ${toFetch.length} new UIDs`);
         for await (const msg of client.fetch(toFetch, { envelope: true, flags: true, source: true, internalDate: true, uid: true }, { uid: true })) {
           stat.fetched++;
+          report(base + share * (0.3 + 0.6 * Math.min(1, stat.fetched / toFetch.length)));
           try {
             const row = await buildMessageRow(msg, acc.id, userId, box.path, uidvalidity, userEmail, userKey, inboxPath, sentPath);
             rows.push(row);
@@ -684,7 +723,9 @@ export async function syncAccount(accountId: string, userKey?: Buffer): Promise<
         lock.release();
       }
       folderStats.push(stat);
+      report(base + share, true);
     }
+    report(0.9, true);
 
     // Restore r2m_state + message_tags that we snapshotted before the
     // All Mail migration delete above. Match by RFC message_id → new
@@ -871,6 +912,8 @@ export async function syncAccount(accountId: string, userKey?: Buffer): Promise<
     } catch (e) {
       console.warn(`[sync] orphan-contact cleanup failed:`, e instanceof Error ? e.message : e);
     }
+
+    report(0.95, true);
 
     // 4) Update last_sync_at, sync_known_uids, clear last_error.
     //    Also flip migrated_to_all_mail = true if this run completed

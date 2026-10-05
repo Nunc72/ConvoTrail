@@ -210,7 +210,7 @@
        polish change is picked up by every browser as soon as the version
        is bumped — no manual cache-busters needed. Keep ?v= here in sync
        with APP_VERSION below at every deploy. -->
-  <link rel="stylesheet" href="polish.css?v=0.0.307"/>
+  <link rel="stylesheet" href="polish.css?v=0.0.308"/>
 </head>
 <body>
 <div id="root">
@@ -449,7 +449,7 @@ window.CONVOOZ_CRYPTO = CONVOOZ_CRYPTO;
 
 // ─── Constants ───────────────────────────────────────────────────────────────
 
-const APP_VERSION = "0.0.307"; // bumped on every deploy — keep in sync with version.json AND with the ?v= on polish.css above
+const APP_VERSION = "0.0.308"; // bumped on every deploy — keep in sync with version.json AND with the ?v= on polish.css above
 
 // ─── Backend + Supabase config ───────────────────────────────────────────────
 // Two stacks: prod (live testers) and staging (where new features land first).
@@ -565,7 +565,10 @@ function setUserKeyHeader(b64OrNull) { _userKeyB64ForHeader = b64OrNull || null;
 let _masterKeyForDecrypt = null;
 function setMasterKeyForDecrypt(cryptoKey) { _masterKeyForDecrypt = cryptoKey || null; }
 
-async function apiFetch(path, opts = {}) {
+// apiFetch minus the body parsing: hands back the Response once the
+// 401/503 handling and the !ok check are done, for callers that read
+// the body themselves (the streaming /sync call). v0.0.308.
+async function apiFetchResponse(path, opts = {}) {
   // Build the Authorization header lazily so the 401-refresh path below
   // can pick up the fresh access_token after refreshSession() runs.
   async function buildHeaders() {
@@ -606,7 +609,47 @@ async function apiFetch(path, opts = {}) {
     res = await fetch(BACKEND_URL + path, { ...opts, headers: await buildHeaders() });
   }
   if (!res.ok) throw new Error(`${res.status} ${res.statusText}: ${await res.text()}`);
+  return res;
+}
+async function apiFetch(path, opts = {}) {
+  const res = await apiFetchResponse(path, opts);
   return res.status === 204 ? null : res.json();
+}
+
+// v0.0.308 — POST /mail-accounts/:id/sync with ?stream=1. The backend
+// answers with newline-delimited JSON: progress lines while it works
+// ({type:'progress', pct, moreRounds}), then one result line carrying
+// the same object the plain JSON response used to. onProgress gets
+// every progress line. A backend that ignores ?stream=1 still answers
+// plain JSON, which is returned as-is.
+async function apiSyncAccount(accountId, onProgress) {
+  const res = await apiFetchResponse(`/mail-accounts/${accountId}/sync?stream=1`, { method: 'POST' });
+  if (!(res.headers.get('content-type') || '').includes('ndjson')) return res.json();
+  let result = null;
+  const handleLine = (line) => {
+    if (!line.trim()) return;
+    let ev;
+    try { ev = JSON.parse(line); } catch { return; }
+    if (ev.type === 'progress') { try { onProgress?.(ev); } catch {} }
+    else if (ev.type === 'result') { const { type, ...rest } = ev; result = rest; }
+  };
+  if (res.body && res.body.getReader) {
+    const reader = res.body.getReader();
+    const decoder = new TextDecoder();
+    let buf = '';
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buf += decoder.decode(value, { stream: true });
+      let nl;
+      while ((nl = buf.indexOf('\n')) >= 0) { handleLine(buf.slice(0, nl)); buf = buf.slice(nl + 1); }
+    }
+    handleLine(buf + decoder.decode());
+  } else {
+    (await res.text()).split('\n').forEach(handleLine);
+  }
+  if (!result) throw new Error('sync stream ended without a result');
+  return result;
 }
 
 const CURRENT_USER = {
@@ -2800,6 +2843,25 @@ function Spinner({size=16, className=""}) {
       className={"animate-spin text-indigo-500 " + className} aria-label="loading">
       <circle cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="3" strokeOpacity="0.2"/>
       <path d="M22 12a10 10 0 0 1-10 10" stroke="currentColor" strokeWidth="3" strokeLinecap="round"/>
+    </svg>
+  );
+}
+
+// v0.0.308 — the sync buttons' indicator. progress null → the plain
+// Spinner (still connecting, or no progress reported); 0..1 → a ring
+// that fills clockwise as the sync reports its steps.
+function SyncRing({progress, size=14}) {
+  if (progress == null) return <Spinner size={size}/>;
+  const pct = Math.round(Math.max(0, Math.min(1, progress)) * 100);
+  const c = 2 * Math.PI * 10;
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" className="text-indigo-500"
+      role="progressbar" aria-valuemin={0} aria-valuemax={100} aria-valuenow={pct} aria-label={`Syncing ${pct}%`}>
+      <circle cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="3" strokeOpacity="0.2"/>
+      <circle cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="3"
+        strokeLinecap={pct > 0 ? "round" : "butt"}
+        strokeDasharray={`${(c * pct / 100).toFixed(2)} ${c.toFixed(2)}`}
+        transform="rotate(-90 12 12)" style={{transition: "stroke-dasharray 300ms ease-out"}}/>
     </svg>
   );
 }
@@ -8793,15 +8855,47 @@ function App({userId, onSignOut}) {
   // between DB and IMAP in a single Get-mail run. Dismissed by clicking
   // the X, no auto-fade — the user should consciously acknowledge it.
   const [syncDriftWarning, setSyncDriftWarning] = useState(null);
-  async function handleSyncAccount(accountId) {
+  // v0.0.308 — progress for the ring in the sync buttons. A "run" is one
+  // Get-mail click (all its catch-up rounds) or one auto-sync tick. Each
+  // account reports 0..1 per round; the ring shows the average, spread
+  // over the rounds the backend expects the backlog to need (moreRounds),
+  // and never moves backwards. null = nothing reported yet → spinner.
+  const [syncProgress, setSyncProgress] = useState(null);
+  const syncRunRef = useRef(null);
+  const syncBusy = syncingIds.size > 0 || catchUpRunning;
+  const syncBusyTitle = syncProgress == null ? 'Syncing…' : `Syncing… ${Math.round(syncProgress * 100)}%`;
+  function newSyncRun() {
+    return { ids: new Set(), pct: new Map(), more: new Map(), carry: 0, roundsDone: 0, display: 0, seen: false };
+  }
+  function publishSyncProgress(run) {
+    if (syncRunRef.current !== run || !run.seen || run.ids.size === 0) return;
+    let sum = 0;
+    for (const id of run.ids) sum += run.pct.get(id) || 0;
+    const reported = [...run.more.values()];
+    const extra = reported.length ? Math.max(...reported) : run.carry;
+    const overall = (run.roundsDone + sum / run.ids.size) / (run.roundsDone + 1 + extra);
+    run.display = Math.max(run.display, Math.min(1, overall));
+    setSyncProgress(run.display);
+  }
+  async function handleSyncAccount(accountId, run = null) {
     if (syncingRef.current.has(accountId)) return null;
     syncingRef.current.add(accountId);
     setSyncingIds(new Set(syncingRef.current));
+    if (run) run.ids.add(accountId);
     try {
-      return await apiFetch(`/mail-accounts/${accountId}/sync`, { method: 'POST' });
+      return await apiSyncAccount(accountId, ev => {
+        if (!run) return;
+        run.seen = true;
+        run.pct.set(accountId, ev.pct || 0);
+        run.more.set(accountId, ev.moreRounds || 0);
+        publishSyncProgress(run);
+      });
     } catch (e) {
       return { ok: false, error: e.message };
     } finally {
+      // A finished account counts as 100% for the rest of the round —
+      // also the fallback progress when the backend doesn't stream.
+      if (run) { run.seen = true; run.pct.set(accountId, 1); publishSyncProgress(run); }
       syncingRef.current.delete(accountId);
       setSyncingIds(new Set(syncingRef.current));
     }
@@ -8817,10 +8911,21 @@ function App({userId, onSignOut}) {
     // updates in real time.
     const MAX_ITERATIONS = 25;        // ~25 * 100 = 2500 mails per account
     setCatchUpRunning(true);
+    const run = newSyncRun();
+    syncRunRef.current = run;
+    setSyncProgress(null);
     let totalSeenDrift = 0;
     try {
       for (let i = 0; i < MAX_ITERATIONS; i++) {
-        const results = await Promise.all(mailAccounts.map(a => handleSyncAccount(a.id)));
+        if (i > 0) {
+          // New round: the previous round's backlog estimate, minus the
+          // round starting now, stands in until this round reports.
+          const prev = [...run.more.values()];
+          run.carry = Math.max(0, (prev.length ? Math.max(...prev) : run.carry) - 1);
+          run.roundsDone = i;
+          run.ids = new Set(); run.pct = new Map(); run.more = new Map();
+        }
+        const results = await Promise.all(mailAccounts.map(a => handleSyncAccount(a.id, run)));
         const fired = results.filter(r => r !== null);
         if (fired.length === 0) return; // every account already in flight elsewhere
         const errors = fired.filter(r => r && !r.ok);
@@ -8851,6 +8956,8 @@ function App({userId, onSignOut}) {
         }
       }
     } finally {
+      if (syncRunRef.current === run) syncRunRef.current = null;
+      setSyncProgress(null);
       // v0.0.292 — single refresh at the very end. Whatever the loop
       // fetched (or would have fetched, if it broke early) is now
       // visible in one bootstrap round-trip instead of N of them.
@@ -8875,8 +8982,15 @@ function App({userId, onSignOut}) {
   async function handleAutoSync() {
     const autos = mailAccounts.filter(a => a.auto_sync);
     if (autos.length === 0) return;
-    const results = await Promise.all(autos.map(a => handleSyncAccount(a.id)));
-    if (results.some(r => r !== null)) refreshData();
+    // Own progress run, unless a Get-mail run is already driving the ring.
+    const run = syncRunRef.current ? null : newSyncRun();
+    if (run) syncRunRef.current = run;
+    try {
+      const results = await Promise.all(autos.map(a => handleSyncAccount(a.id, run)));
+      if (results.some(r => r !== null)) refreshData();
+    } finally {
+      if (run && syncRunRef.current === run) { syncRunRef.current = null; setSyncProgress(null); }
+    }
   }
   // Poll every 2 minutes + on window focus; only accounts with auto_sync=true
   // actually fire. Stops when all accounts have auto_sync off.
@@ -9770,13 +9884,14 @@ function App({userId, onSignOut}) {
               )}
             </div>
             {/* Sync button — the only way to refresh mail on mobile.
-                Spinner replaces the icon while syncing OR while the
-                /bootstrap fetch is in flight (cold start + background
-                refresh both light it up). */}
-            <button onClick={handleGetMail} disabled={mailAccounts.length===0 || syncingIds.size>0 || catchUpRunning}
-              title={mailAccounts.length===0 ? 'Add a mail account first' : 'Sync all accounts'}
-              className="flex items-center justify-center w-8 h-8 rounded-full hover:bg-gray-100 text-gray-500 disabled:opacity-40">
-              {(syncingIds.size>0 || catchUpRunning) ? <Spinner size={14}/> : <SyncIcon size={14}/>}
+                While syncing, SyncRing replaces the icon: a spinner
+                until the backend reports progress, then a filling ring.
+                Not faded while busy (only when there's no account), so
+                the ring stays readable. v0.0.308. */}
+            <button onClick={handleGetMail} disabled={mailAccounts.length===0 || syncBusy}
+              title={mailAccounts.length===0 ? 'Add a mail account first' : syncBusy ? syncBusyTitle : 'Sync all accounts'}
+              className={"flex items-center justify-center w-8 h-8 rounded-full hover:bg-gray-100 text-gray-500" + (syncBusy ? "" : " disabled:opacity-40")}>
+              {syncBusy ? <SyncRing progress={syncProgress} size={14}/> : <SyncIcon size={14}/>}
             </button>
             <button onClick={()=>{
               // Topbar +: never prefills recipient (always empty "To:"). Origin determines back routing.
@@ -9898,10 +10013,10 @@ function App({userId, onSignOut}) {
                 </div>
               )}
             </div>
-            <button onClick={handleGetMail} disabled={mailAccounts.length===0 || syncingIds.size>0 || catchUpRunning}
-              title={mailAccounts.length===0 ? 'Add a mail account first' : 'Sync all accounts now'}
-              className="flex items-center gap-1.5 px-3 py-1.5 text-xs rounded bg-gray-100 hover:bg-gray-200 disabled:opacity-50 text-gray-600 font-medium">
-              {(syncingIds.size>0 || catchUpRunning) ? <><Spinner size={12}/><span>Syncing…</span></> : '↻ Get mail'}
+            <button onClick={handleGetMail} disabled={mailAccounts.length===0 || syncBusy}
+              title={mailAccounts.length===0 ? 'Add a mail account first' : syncBusy ? syncBusyTitle : 'Sync all accounts now'}
+              className={"flex items-center gap-1.5 px-3 py-1.5 text-xs rounded bg-gray-100 hover:bg-gray-200 text-gray-600 font-medium" + (syncBusy ? "" : " disabled:opacity-50")}>
+              {syncBusy ? <><SyncRing progress={syncProgress} size={12}/><span>Syncing…</span></> : '↻ Get mail'}
             </button>
             <button onClick={()=>handleNewMsg(null)}
               className="flex items-center gap-1.5 px-3 py-1.5 text-xs rounded bg-indigo-600 hover:bg-indigo-700 text-white font-medium">
