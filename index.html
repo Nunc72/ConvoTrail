@@ -210,7 +210,7 @@
        polish change is picked up by every browser as soon as the version
        is bumped — no manual cache-busters needed. Keep ?v= here in sync
        with APP_VERSION below at every deploy. -->
-  <link rel="stylesheet" href="polish.css?v=0.0.306"/>
+  <link rel="stylesheet" href="polish.css?v=0.0.307"/>
 </head>
 <body>
 <div id="root">
@@ -449,7 +449,7 @@ window.CONVOOZ_CRYPTO = CONVOOZ_CRYPTO;
 
 // ─── Constants ───────────────────────────────────────────────────────────────
 
-const APP_VERSION = "0.0.306"; // bumped on every deploy — keep in sync with version.json AND with the ?v= on polish.css above
+const APP_VERSION = "0.0.307"; // bumped on every deploy — keep in sync with version.json AND with the ?v= on polish.css above
 
 // ─── Backend + Supabase config ───────────────────────────────────────────────
 // Two stacks: prod (live testers) and staging (where new features land first).
@@ -9900,8 +9900,8 @@ function App({userId, onSignOut}) {
             </div>
             <button onClick={handleGetMail} disabled={mailAccounts.length===0 || syncingIds.size>0 || catchUpRunning}
               title={mailAccounts.length===0 ? 'Add a mail account first' : 'Sync all accounts now'}
-              className="px-3 py-1.5 text-xs rounded bg-gray-100 hover:bg-gray-200 disabled:opacity-50 text-gray-600 font-medium">
-              {(syncingIds.size>0 || catchUpRunning) ? '↻ Syncing…' : '↻ Get mail'}
+              className="flex items-center gap-1.5 px-3 py-1.5 text-xs rounded bg-gray-100 hover:bg-gray-200 disabled:opacity-50 text-gray-600 font-medium">
+              {(syncingIds.size>0 || catchUpRunning) ? <><Spinner size={12}/><span>Syncing…</span></> : '↻ Get mail'}
             </button>
             <button onClick={()=>handleNewMsg(null)}
               className="flex items-center gap-1.5 px-3 py-1.5 text-xs rounded bg-indigo-600 hover:bg-indigo-700 text-white font-medium">
