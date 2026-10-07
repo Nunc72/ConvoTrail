@@ -210,7 +210,7 @@
        polish change is picked up by every browser as soon as the version
        is bumped — no manual cache-busters needed. Keep ?v= here in sync
        with APP_VERSION below at every deploy. -->
-  <link rel="stylesheet" href="polish.css?v=0.0.309"/>
+  <link rel="stylesheet" href="polish.css?v=0.0.310"/>
 </head>
 <body>
 <div id="root">
@@ -449,7 +449,7 @@ window.CONVOOZ_CRYPTO = CONVOOZ_CRYPTO;
 
 // ─── Constants ───────────────────────────────────────────────────────────────
 
-const APP_VERSION = "0.0.309"; // bumped on every deploy — keep in sync with version.json AND with the ?v= on polish.css above
+const APP_VERSION = "0.0.310"; // bumped on every deploy — keep in sync with version.json AND with the ?v= on polish.css above
 
 // ─── Backend + Supabase config ───────────────────────────────────────────────
 // Two stacks: prod (live testers) and staging (where new features land first).
@@ -821,9 +821,16 @@ function msgMatchesThreadFilter(msg, filter, deletedIds) {
 
 function formatTime(s) {
   if (!s) return "";
-  const d = new Date(s), diff = Math.floor((Date.now()-d)/86400000);
-  if (diff===0) return d.toLocaleTimeString("nl-NL",{hour:"2-digit",minute:"2-digit"});
-  if (diff===1) return "gisteren";
+  // Calendar days, not 24-hour periods (v0.0.310): a mail from 23:50
+  // last night reads "gisteren 23:50" at 08:00 today instead of a bare
+  // "23:50", and one from the day before yesterday is never "gisteren".
+  // Math.round absorbs the 23/25-hour days around the DST switches.
+  const d = new Date(s);
+  const startOfDay = x => new Date(x.getFullYear(), x.getMonth(), x.getDate()).getTime();
+  const diff = Math.round((startOfDay(new Date()) - startOfDay(d)) / 86400000);
+  const time = d.toLocaleTimeString("nl-NL",{hour:"2-digit",minute:"2-digit"});
+  if (diff<=0)  return time;
+  if (diff===1) return `gisteren ${time}`;
   if (diff<7)   return d.toLocaleDateString("nl-NL",{weekday:"short"});
   // 7-364 days old: day + month, no year — the year is implied (current
   // year for anything within the last 365 days). 365+ days: include the
