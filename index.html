@@ -210,7 +210,7 @@
        polish change is picked up by every browser as soon as the version
        is bumped — no manual cache-busters needed. Keep ?v= here in sync
        with APP_VERSION below at every deploy. -->
-  <link rel="stylesheet" href="polish.css?v=0.0.308"/>
+  <link rel="stylesheet" href="polish.css?v=0.0.309"/>
 </head>
 <body>
 <div id="root">
@@ -449,7 +449,7 @@ window.CONVOOZ_CRYPTO = CONVOOZ_CRYPTO;
 
 // ─── Constants ───────────────────────────────────────────────────────────────
 
-const APP_VERSION = "0.0.308"; // bumped on every deploy — keep in sync with version.json AND with the ?v= on polish.css above
+const APP_VERSION = "0.0.309"; // bumped on every deploy — keep in sync with version.json AND with the ?v= on polish.css above
 
 // ─── Backend + Supabase config ───────────────────────────────────────────────
 // Two stacks: prod (live testers) and staging (where new features land first).
@@ -6433,19 +6433,30 @@ function App({userId, onSignOut}) {
         //   (a) its RFC message_id appears as the thread_id of a later incoming
         //       (the canonical match — set by sync.ts from In-Reply-To/References),
         //   (b) some later incoming from the same contact has the same subject
-        //       once Re:/Fwd: prefixes are stripped.
-        // (b) is a fallback for clients that don't write In-Reply-To headers,
-        // or for outgoing rows whose message_id ended up null.
+        //       once Re:/Fwd: prefixes are stripped,
+        //   (c) v0.0.309: some later incoming from the same contact at all,
+        //       unless it's a newsletter. thread_id is the thread ROOT, so (a)
+        //       only matches when the r2m mail started the thread, and people
+        //       answer with a new subject or in another thread (Rik, 15 Sep:
+        //       "Re: FW: Fotos" answered as "Foto's RVS Bedieningspaneel").
+        // Automatic mails (out-of-office, read receipts, bounces) never count.
+        // Same rules as the backend's auto-dismiss in sync.ts.
         // Normalize: outgoing message_id keeps RFC angle brackets ("<abc@x>"),
         // mailparser strips them off references/inReplyTo, so we strip both sides.
         const stripBrackets = s => (s || '').replace(/^<+|>+$/g, '');
         const subjectKey = s => (s || '').toLowerCase()
           .replace(/^\s*(?:(?:re|fwd?|antw|aw)\s*:\s*)+/i, '')
           .trim();
+        // flags.auto comes from the Auto-Submitted header (sync.ts); the
+        // subject pattern covers rows synced before that flag existed.
+        // Keep in sync with AUTO_REPLY_SUBJECT_RE in backend/src/sync.ts.
+        const AUTO_REPLY_SUBJECT_RE = /^\s*(?:automatisch antwoord|automatic reply|auto[- ]?reply|auto[- ]?response|automatische antwort|abwesenheitsnotiz|out of (?:the )?office|afwezig|réponse automatique|respuesta automática|risposta automatica|resposta automática|(?:not |niet )?(?:read|gelezen|gelesen) *:|undeliverable|onbestelbaar|delivery status notification|mail delivery failed)/i;
+        const isAutoMail = m => !!(m.flags && m.flags.auto) || AUTO_REPLY_SUBJECT_RE.test(m.subject || '');
         const repliedRfcIds = new Set();
         const incomingByContact = new Map(); // contactId → [{ date, subjKey }]
         for (const m of messages) {
           if (m.direction !== 'in') continue;
+          if (isAutoMail(m)) continue;
           // Every incoming mail contributes both signals used by hasReply():
           //   • thread_id (RFC: References / In-Reply-To header) feeds the
           //     repliedRfcIds set, the primary thread-based detection.
@@ -6464,7 +6475,7 @@ function App({userId, onSignOut}) {
             ?? emailToContactId.get(fromLower);
           if (cid == null) continue;
           if (!incomingByContact.has(cid)) incomingByContact.set(cid, []);
-          incomingByContact.get(cid).push({ date: m.date || '', subjKey: subjectKey(m.subject) });
+          incomingByContact.get(cid).push({ date: m.date || '', subjKey: subjectKey(m.subject), newsletter: !!m.unsubscribe_url });
         }
         function hasReply(m, cid) {
           if (m.direction !== 'out') return false;
@@ -6473,9 +6484,8 @@ function App({userId, onSignOut}) {
           const list = incomingByContact.get(cid);
           if (!list?.length) return false;
           const myKey = subjectKey(m.subject);
-          if (!myKey) return false;
           const sentAt = m.date || '';
-          return list.some(im => im.subjKey === myKey && im.date > sentAt);
+          return list.some(im => im.date > sentAt && ((myKey && im.subjKey === myKey) || !im.newsletter));
         }
 
         // Lookup of the full account row by id, for outgoing-sender identity

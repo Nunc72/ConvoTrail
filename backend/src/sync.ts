@@ -48,6 +48,31 @@ export interface SyncProgress {
   moreRounds: number;
 }
 
+// v0.0.309 — subjects of automatic mails (out-of-office replies, read
+// receipts, bounces) in the languages we see. R2M reply detection uses
+// it as the fallback for rows without flags.auto (synced before that
+// flag existed, or from a provider that skips Auto-Submitted). Postgres
+// ARE syntax; keep in sync with AUTO_REPLY_SUBJECT_RE in index.html.
+const AUTO_REPLY_SUBJECT_RE =
+  "^\\s*(automatisch antwoord|automatic reply|auto[- ]?reply|auto[- ]?response|automatische antwort|abwesenheitsnotiz|out of (the )?office|afwezig|réponse automatique|respuesta automática|risposta automatica|resposta automática|(not |niet )?(read|gelezen|gelesen) *:|undeliverable|onbestelbaar|delivery status notification|mail delivery failed)";
+
+// v0.0.309 — RFC 3834 automatic responses (out-of-office, vacation,
+// auto-acknowledge), stored as flags.auto so R2M reply detection can
+// ignore them: an auto-reply is not the person getting back to you.
+function isAutoSubmitted(headers: Map<string, unknown> | undefined): boolean {
+  if (!headers) return false;
+  const val = (key: string): string => {
+    const v = headers.get(key);
+    if (v == null) return "";
+    if (typeof v === "object" && "value" in (v as object)) return String((v as { value: unknown }).value).toLowerCase();
+    return String(v).toLowerCase();
+  };
+  const autoSubmitted = val("auto-submitted").trim();
+  if (autoSubmitted && !autoSubmitted.startsWith("no")) return true;
+  if (headers.has("x-autoreply") || headers.has("x-autorespond")) return true;
+  return val("precedence").trim() === "auto_reply";
+}
+
 const SINCE_DAYS = 365;
 // v0.0.292 — bumped 100→400. With 100 an account carrying a backlog
 // (measured 605 missing UIDs on rik@tuithof.com INBOX) needed the FE
@@ -832,36 +857,58 @@ export async function syncAccount(
     // the backend, dismissed_at is stamped and every client (fresh
     // OR cached) sees the R2M as resolved.
     //
-    // Detection: incoming.thread_id (set by sync.ts from RFC
-    // In-Reply-To / References headers) equals outgoing.message_id.
-    // Angle brackets are stripped on both sides — mailparser drops
-    // them from thread_id, our INSERTs preserve them on message_id
-    // (or leave them off, depending on the provider). btrim
-    // normalises both to compare.
+    // Detection — a later incoming mail that isn't automatic (flags.auto
+    // or an auto-reply subject) and either
+    //   (a) threads to it: incoming.thread_id (set from RFC References /
+    //       In-Reply-To) equals outgoing.message_id, brackets stripped on
+    //       both sides (mailparser drops them, our INSERTs may keep them);
+    //   (b) v0.0.309: comes from one of its TO recipients at all, unless
+    //       it's a newsletter. thread_id is the thread ROOT, so (a) only
+    //       ever matched when the R2M mail started the thread; and people
+    //       answer with a new subject or in another thread (Rik, 15 Sep
+    //       2026: "Re: FW: Fotos" answered 3 h later as "Foto's RVS
+    //       Bedieningspaneel"), which still means they got back to you.
+    //       Addresses compare by blind index when both rows have one
+    //       (encrypted), by plaintext otherwise (pre-encryption rows).
     //
-    // Scoped to this user's messages so the query stays cheap. Uses
-    // the user_id + direction indexes already on messages.
+    // Scoped to this user's open r2m rows, so the query stays cheap.
     try {
-      const dismissed = await pool.query<{ count: string }>(
-        `WITH replied AS (
-           SELECT DISTINCT out_msg.id AS r2m_message_id
-             FROM messages out_msg
-             JOIN messages in_msg
-               ON in_msg.user_id = out_msg.user_id
-              AND in_msg.direction = 'in'
-              AND in_msg.thread_id IS NOT NULL
-              AND btrim(in_msg.thread_id, '<>') = btrim(out_msg.message_id, '<>')
-              AND in_msg.date > out_msg.date
-            WHERE out_msg.user_id = $1
-              AND out_msg.direction = 'out'
-              AND out_msg.message_id IS NOT NULL
-         )
-         UPDATE r2m_state
+      const dismissed = await pool.query<{ message_id: string }>(
+        `UPDATE r2m_state rs
             SET dismissed_at = NOW()
-          WHERE dismissed_at IS NULL
-            AND message_id IN (SELECT r2m_message_id FROM replied)
-       RETURNING message_id`,
-        [userId],
+           FROM messages out_msg
+          WHERE rs.dismissed_at IS NULL
+            AND out_msg.id = rs.message_id
+            AND out_msg.user_id = $1
+            AND out_msg.direction = 'out'
+            AND EXISTS (
+              SELECT 1 FROM messages in_msg
+               WHERE in_msg.user_id = out_msg.user_id
+                 AND in_msg.direction = 'in'
+                 AND in_msg.date > out_msg.date
+                 AND NOT COALESCE((in_msg.flags->>'auto')::boolean, false)
+                 AND COALESCE(in_msg.subject, '') !~* $2
+                 AND (
+                   (out_msg.message_id IS NOT NULL AND in_msg.thread_id IS NOT NULL
+                     AND btrim(in_msg.thread_id, '<>') = btrim(out_msg.message_id, '<>'))
+                   OR (
+                     COALESCE(in_msg.unsubscribe_url, '') = ''
+                     AND CASE
+                       WHEN in_msg.from_email_blind IS NOT NULL AND out_msg.to_emails_blind IS NOT NULL THEN
+                         EXISTS (SELECT 1 FROM unnest(out_msg.to_emails_blind) WITH ORDINALITY AS b(blind, i)
+                                  WHERE b.blind = in_msg.from_email_blind
+                                    AND COALESCE(out_msg.to_emails -> (b.i::int - 1) ->> 'role', 'to') = 'to')
+                       ELSE
+                         in_msg.from_email IS NOT NULL AND EXISTS (
+                           SELECT 1 FROM jsonb_array_elements(COALESCE(out_msg.to_emails, '[]'::jsonb)) e
+                            WHERE COALESCE(e->>'role', 'to') = 'to'
+                              AND LOWER(e->>'email') = LOWER(in_msg.from_email))
+                     END
+                   )
+                 )
+            )
+        RETURNING rs.message_id`,
+        [userId, AUTO_REPLY_SUBJECT_RE],
       );
       if (dismissed.rowCount && dismissed.rowCount > 0) {
         console.log(`[sync] auto-dismissed ${dismissed.rowCount} r2m rows with detected replies (user=${userId})`);
@@ -1127,6 +1174,7 @@ async function buildMessageRow(
     answered: flagsArr.includes("\\Answered"),
     flagged: flagsArr.includes("\\Flagged"),
     draft: flagsArr.includes("\\Draft"),
+    ...(isAutoSubmitted(parsed?.headers) ? { auto: true } : {}),
   };
 
   // Newsletter detection has two stages:
