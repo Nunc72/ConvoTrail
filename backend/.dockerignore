@@ -1,0 +1,11 @@
+# Whitelist: `flyctl deploy` uploads this directory as the Docker build
+# context to Fly's remote builder. Without this file that included .env,
+# the local diagnostic scripts (*.mjs, with production credentials),
+# node_modules and dist. Only what the Dockerfile COPYs may go up — when
+# the Dockerfile starts copying something new, add it here too.
+*
+!package.json
+!package-lock.json
+!tsconfig.json
+!src
+!migrations
