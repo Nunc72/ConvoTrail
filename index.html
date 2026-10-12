@@ -210,7 +210,7 @@
        polish change is picked up by every browser as soon as the version
        is bumped — no manual cache-busters needed. Keep ?v= here in sync
        with APP_VERSION below at every deploy. -->
-  <link rel="stylesheet" href="polish.css?v=0.0.310"/>
+  <link rel="stylesheet" href="polish.css?v=0.0.311"/>
 </head>
 <body>
 <div id="root">
@@ -449,7 +449,7 @@ window.CONVOOZ_CRYPTO = CONVOOZ_CRYPTO;
 
 // ─── Constants ───────────────────────────────────────────────────────────────
 
-const APP_VERSION = "0.0.310"; // bumped on every deploy — keep in sync with version.json AND with the ?v= on polish.css above
+const APP_VERSION = "0.0.311"; // bumped on every deploy — keep in sync with version.json AND with the ?v= on polish.css above
 
 // ─── Backend + Supabase config ───────────────────────────────────────────────
 // Two stacks: prod (live testers) and staging (where new features land first).
@@ -6353,6 +6353,14 @@ function App({userId, onSignOut}) {
   // refreshData (dataRefreshTick bump) so a fresh bootstrap forces a
   // re-fetch and older mails re-appear after sync / lock-toggle.
   const lazyFetchedContactsRef = useRef(new Set());
+  // v0.0.311 — Seen / All Seen / r2m dismiss + snooze flip messageList
+  // optimistically and then save. A server snapshot (bootstrap, lazy-
+  // fetch) that was requested BEFORE the save landed still carries the
+  // old state, and applying it flipped the mails straight back to unread
+  // and the contact back to the top — typically with the startup
+  // /bootstrap still in flight. id → { fields, savedAt, until }: see
+  // rememberFlip / applyPendingFlips next to persistSeen.
+  const pendingFlipsRef = useRef(new Map());
   // messageList hydration drops rows that reference a mail-account id
   // the cache no longer knows about. That keeps the first paint
   // consistent with the cached mailAccounts list: if the user deleted
@@ -6391,6 +6399,7 @@ function App({userId, onSignOut}) {
       setDataError('');
       setBootstrapFetching(true);
       try {
+        const requestedAt = Date.now(); // for applyPendingFlips
         const { mail_accounts: rawAccounts, contacts, messages, drafts, tags, message_tags, r2m_state, signatures: sigs, account_signatures: accSigs, draft_attachments: draftAtts, message_contact_hides: rawHides, message_count_by_account, contact_account_emails, contact_stats } = await apiFetch('/bootstrap?limit=500');
         // Pin the per-account synced count onto each mailAccount object so
         // the user-menu progress widget can read mailAccount.messages_count
@@ -7014,9 +7023,10 @@ function App({userId, onSignOut}) {
           }
         }
 
+        const messagesWithFlips = applyPendingFlips(combinedMessages, requestedAt);
         setMailAccounts(mail_accounts);
         setContactList(shapedContacts);
-        setMessageList(combinedMessages);
+        setMessageList(messagesWithFlips);
         setContactStats(contact_stats || {});
         setTagList(tagList);
         setTagIdByName(idByName);
@@ -7034,7 +7044,7 @@ function App({userId, onSignOut}) {
         writeBootstrapCache(userId, {
           mailAccounts: mail_accounts,
           contactList: shapedContacts,
-          messageList: combinedMessages,
+          messageList: messagesWithFlips,
           contactStats: contact_stats || {},
           tagList,
           tagIdByName: idByName,
@@ -8155,6 +8165,7 @@ function App({userId, onSignOut}) {
       // subjects/snippets leaked into messageList, and the locked-
       // state UI rendered them straight from there.
       const startKey = masterKeyRef.current;
+      const requestedAt = Date.now(); // for applyPendingFlips
       const r = await apiFetch(`/messages-for-contact?contact=${encodeURIComponent(contactId)}`);
       if (masterKeyRef.current !== startKey) return;
       const rows = r?.messages || [];
@@ -8364,7 +8375,7 @@ function App({userId, onSignOut}) {
         // Dedup by composite (id, contactId) key — a mail with multiple
         // recipients legitimately lives under multiple contactIds.
         const haveKeys = new Set(prev.map(m => m.id + '::' + m.contactId));
-        const fresh = shaped.filter(m => !haveKeys.has(m.id + '::' + m.contactId));
+        const fresh = applyPendingFlips(shaped.filter(m => !haveKeys.has(m.id + '::' + m.contactId)), requestedAt);
         if (fresh.length === 0) return prev;
         return [...prev, ...fresh];
       });
@@ -8602,11 +8613,42 @@ function App({userId, onSignOut}) {
     window.open(msg.unsubscribeUrl, '_blank', 'noopener,noreferrer');
     setActionToast('Opening unsubscribe page');
   }
+  // v0.0.311 — pending optimistic flips (see pendingFlipsRef). Every
+  // server snapshot runs through applyPendingFlips with the time it was
+  // requested: while the save is in flight, or when the snapshot was
+  // requested before the save succeeded, the flip wins; a snapshot
+  // requested after that already has it, so the server wins. Entries
+  // are never retired by a snapshot (an older one may still arrive via
+  // another path), only by time — 5 min after the save, or 10 min while
+  // it hangs — or by a failed save, which also reverts as before.
+  function rememberFlip(id, fields) {
+    const prev = pendingFlipsRef.current.get(id);
+    pendingFlipsRef.current.set(id, { fields: { ...(prev ? prev.fields : {}), ...fields }, savedAt: null, until: Date.now() + 10 * 60_000 });
+  }
+  function flipSaved(id) {
+    const p = pendingFlipsRef.current.get(id);
+    if (p) { p.savedAt = Date.now(); p.until = p.savedAt + 5 * 60_000; }
+  }
+  function forgetFlip(id) { pendingFlipsRef.current.delete(id); }
+  function applyPendingFlips(list, requestedAt) {
+    const pend = pendingFlipsRef.current;
+    if (pend.size === 0) return list;
+    const now = Date.now();
+    for (const [id, p] of pend) if (p.until < now) pend.delete(id);
+    return list.map(m => {
+      const p = pend.get(m.id);
+      if (!p || (p.savedAt != null && requestedAt > p.savedAt)) return m;
+      return { ...m, ...p.fields };
+    });
+  }
   // Persist an r2m action (dismiss / snooze). Optimistic flip is already
   // applied by the caller; on failure we revert and re-arm the banner.
   function persistR2m(id, body) {
+    rememberFlip(id, body && body.dismiss ? { revert2me: false, r2mArmed: false } : { revert2me: false });
     return apiFetch(`/messages/${id}/r2m`, { method:'PATCH', body: JSON.stringify(body) })
+      .then(r => { flipSaved(id); return r; })
       .catch(e => {
+        forgetFlip(id);
         setMessageList(prev=>prev.map(m=>m.id===id?{...m,revert2me:true}:m));
         setActionToast('Revert2Me save failed: ' + e.message);
       });
@@ -8642,8 +8684,11 @@ function App({userId, onSignOut}) {
   // Only triggered by explicit Seen / Snooze actions — opening a message does
   // NOT auto-mark it read (by design).
   function persistSeen(id) {
+    rememberFlip(id, { read: true });
     return apiFetch(`/messages/${id}/flags`, { method:'PATCH', body: JSON.stringify({ seen: true }) })
+      .then(r => { flipSaved(id); return r; })
       .catch(e => {
+        forgetFlip(id);
         setMessageList(prev=>prev.map(m=>m.id===id?{...m,read:false}:m));
         setActionToast('Mark read failed: ' + e.message);
       });
