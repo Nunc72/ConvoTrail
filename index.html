@@ -210,7 +210,7 @@
        polish change is picked up by every browser as soon as the version
        is bumped — no manual cache-busters needed. Keep ?v= here in sync
        with APP_VERSION below at every deploy. -->
-  <link rel="stylesheet" href="polish.css?v=0.0.311"/>
+  <link rel="stylesheet" href="polish.css?v=0.0.312"/>
 </head>
 <body>
 <div id="root">
@@ -449,7 +449,7 @@ window.CONVOOZ_CRYPTO = CONVOOZ_CRYPTO;
 
 // ─── Constants ───────────────────────────────────────────────────────────────
 
-const APP_VERSION = "0.0.311"; // bumped on every deploy — keep in sync with version.json AND with the ?v= on polish.css above
+const APP_VERSION = "0.0.312"; // bumped on every deploy — keep in sync with version.json AND with the ?v= on polish.css above
 
 // ─── Backend + Supabase config ───────────────────────────────────────────────
 // Two stacks: prod (live testers) and staging (where new features land first).
@@ -4080,9 +4080,9 @@ function ThreadColumn({contact,allMsgs,deletedIds,selectedMsgId,msgTags,onSelect
 
   // Actionable = unread incoming + outgoing with armed revert2me. Same
   // definition as the "Now" filter and the left-column actionable badge.
-  // The alert below the contact card surfaces when the pile gets large
-  // enough that scrolling through them feels daunting; clicking "All
-  // Seen" marks them all read in one go.
+  // The alert below the contact card surfaces from 3 actionable mails
+  // (was 6 until v0.0.312); clicking "All Seen" marks them all read in
+  // one go.
   const actionableInThread = useMemo(() => allMsgs.filter(
     x => !deletedIds.includes(x.id) && !x.draft &&
       ((x.dir === 'in' && !x.read) || (x.dir === 'out' && x.revert2me))
@@ -4098,7 +4098,7 @@ function ThreadColumn({contact,allMsgs,deletedIds,selectedMsgId,msgTags,onSelect
   // user is already in a specific scope and a global "mark everything
   // seen" would feel like a side-effect outside of view.
   const actionableAlertEligibleFilter = filter === 'now' || filter === 'all';
-  const actionableAlert = (actionableAlertEligibleFilter && actionableInThread.length > 5) ? (
+  const actionableAlert = (actionableAlertEligibleFilter && actionableInThread.length >= 3) ? (
     <div className="mx-4 mt-3 px-3 py-2 rounded border border-gray-200 flex items-center gap-2 text-xs text-gray-600 flex-shrink-0"
       style={{backgroundColor: 'var(--bg-card-soft)'}}>
       <span><span className="font-semibold text-gray-800">{actionableInThread.length}</span> actionable mails</span>
