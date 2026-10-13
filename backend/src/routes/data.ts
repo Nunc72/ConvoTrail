@@ -3,8 +3,8 @@ import { authPreHandler } from "../auth.js";
 import { maybeCleanupAuditLog } from "../audit.js";
 import { sendTransientOr500 } from "../errors.js";
 import { requirePool } from "../db.js";
-import { imapSearchForUser } from "../imapSearch.js";
-import { importMessageByUid, ImapImportError } from "../sync.js";
+import { imapSearchForUser, importContactPage } from "../imapSearch.js";
+import { importMessageByUid, importMessagesByUids, ImapImportError } from "../sync.js";
 import { parseUserKeyHeader } from "../userCrypto.js";
 
 // pg returns timestamptz columns as JS Date objects, but supabase-js (which
@@ -690,13 +690,19 @@ export async function registerDataRoutes(app: FastifyInstance) {
   // every message that involves the contact (from_email OR any
   // recipient in to_emails matches one of the contact's emails). The
   // FE merges the result into messageList.
-  app.get<{ Querystring: { contact?: string; limit?: string } }>(
+  // v0.0.317 — contact-trail paging: `offset`, `archived=1` (include
+  // auto-purged mail, the contact's older history beyond the 2000-mail
+  // cap) and `hasMore` in the answer. Without them the endpoint behaves
+  // as before, for app versions that don't page.
+  app.get<{ Querystring: { contact?: string; limit?: string; offset?: string; archived?: string } }>(
     "/messages-for-contact",
     auth,
     async (req, reply) => {
       const contactId = (req.query.contact || "").trim();
       if (!contactId) return reply.badRequest("contact required");
       const limit = Math.min(Number(req.query.limit) || 300, 1000);
+      const offset = Math.max(0, Math.floor(Number(req.query.offset) || 0));
+      const withArchived = req.query.archived === "1";
 
       const pool = requirePool();
       const userId = req.authUser!.id;
@@ -718,7 +724,7 @@ export async function registerDataRoutes(app: FastifyInstance) {
           WHERE contact_id = $1 AND user_id = $2`,
         [contactId, userId],
       );
-      if (ce.rows.length === 0) return { messages: [] };
+      if (ce.rows.length === 0) return { messages: [], hasMore: false };
       const blinds = ce.rows.map(r => r.email_blind).filter(b => b !== null) as Buffer[];
       const plainEmails = ce.rows.map(r => r.email.toLowerCase());
 
@@ -733,7 +739,7 @@ export async function registerDataRoutes(app: FastifyInstance) {
                 m.from_email_blind, m.to_emails_blind
            FROM messages m
           WHERE m.user_id = $1
-            AND NOT COALESCE((m.flags->>'auto_purged')::bool, false)
+            AND ($5::bool OR NOT COALESCE((m.flags->>'auto_purged')::bool, false))
             AND (
               -- Blind match (preferred when message has encryption columns)
               (array_length($2::bytea[], 1) > 0 AND m.from_email_blind = ANY($2::bytea[]))
@@ -752,11 +758,57 @@ export async function registerDataRoutes(app: FastifyInstance) {
                 )
               )
             )
-          ORDER BY m.date DESC
-          LIMIT $4`,
-        [userId, blinds, plainEmails, limit],
+          ORDER BY m.date DESC NULLS LAST, m.id DESC
+          LIMIT $4 OFFSET $6`,
+        [userId, blinds, plainEmails, limit + 1, withArchived, offset],
       );
-      return { messages: rowsWithIsoDates(r.rows) };
+      const rows = rowsWithIsoDates(r.rows);
+      const hasMore = rows.length > limit;
+      return { messages: hasMore ? rows.slice(0, limit) : rows, hasMore };
     },
   );
+
+  // ─── Contact trail: older mail from the servers (v0.0.317) ───────────
+  // Stores the next (up to) 50 mails to/from/cc the given addresses that
+  // Convooz doesn't have yet (see importContactPage) and returns them in
+  // the /messages-for-contact row shape. The FE sends the contact's
+  // addresses: it has them decrypted, and they're only search terms —
+  // what gets stored always comes from the user's own accounts. Same
+  // locked-state guard as /sync and /imap-import.
+  app.post<{ Body: { emails?: string[]; cursor?: string } }>("/imap-contact-import", auth, async (req, reply) => {
+    const emails = Array.isArray(req.body?.emails) ? req.body!.emails.filter(e => typeof e === "string").slice(0, 10) : [];
+    if (emails.length === 0) return reply.badRequest("emails required");
+    const pool = requirePool();
+    const userId = req.authUser!.id;
+    try {
+      const userKey = parseUserKeyHeader(req.headers["x-user-key"]);
+      if (!userKey) {
+        const hasCrypto = await pool.query<{ exists: boolean }>(
+          `SELECT EXISTS(SELECT 1 FROM user_crypto WHERE user_id = $1) AS exists`, [userId]);
+        if (hasCrypto.rows[0]?.exists) {
+          return reply.code(423).send({ ok: false, error: "locked", message: "Unlock the passphrase to fetch older mail." });
+        }
+      }
+      const { ids, cursor, errors } = await importContactPage(userId, emails, req.body?.cursor,
+        (accountId, groups) => importMessagesByUids(accountId, groups, userKey ?? undefined));
+      if (ids.length === 0) return { messages: [], cursor, errors };
+      const r = await pool.query(
+        `SELECT m.id, m.mail_account_id, m.folder, m.uid, m.message_id, m.thread_id,
+                m.from_email, m.from_name, m.to_emails,
+                m.subject, m.snippet, m.date, m.flags, m.direction,
+                m.deleted_at, m.spam, m.has_attachments, m.attachments_meta,
+                m.unsubscribe_url, m.unsubscribe_one_click,
+                m.subject_enc, m.snippet_enc,
+                m.from_email_enc, m.from_name_enc, m.to_emails_enc,
+                m.from_email_blind, m.to_emails_blind
+           FROM messages m
+          WHERE m.user_id = $1 AND m.id = ANY($2::uuid[])
+          ORDER BY m.date DESC NULLS LAST, m.id DESC`,
+        [userId, ids],
+      );
+      return { messages: rowsWithIsoDates(r.rows), cursor, errors };
+    } catch (e) {
+      return sendTransientOr500(reply, e);
+    }
+  });
 }

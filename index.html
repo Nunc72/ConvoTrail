@@ -210,7 +210,7 @@
        polish change is picked up by every browser as soon as the version
        is bumped — no manual cache-busters needed. Keep ?v= here in sync
        with APP_VERSION below at every deploy. -->
-  <link rel="stylesheet" href="polish.css?v=0.0.316"/>
+  <link rel="stylesheet" href="polish.css?v=0.0.317"/>
 </head>
 <body>
 <div id="root">
@@ -449,7 +449,7 @@ window.CONVOOZ_CRYPTO = CONVOOZ_CRYPTO;
 
 // ─── Constants ───────────────────────────────────────────────────────────────
 
-const APP_VERSION = "0.0.316"; // bumped on every deploy — keep in sync with version.json AND with the ?v= on polish.css above
+const APP_VERSION = "0.0.317"; // bumped on every deploy — keep in sync with version.json AND with the ?v= on polish.css above
 
 // ─── Backend + Supabase config ───────────────────────────────────────────────
 // Two stacks: prod (live testers) and staging (where new features land first).
@@ -4000,7 +4000,8 @@ const FILTER_TABS = [
 function ThreadColumn({contact,allMsgs,deletedIds,selectedMsgId,msgTags,onSelect,onSelectDraft,onNewMsg,onEditContact,
                        contactTags,allTags,onAddContactTag,onRemoveContactTag,
                        emailFlags,archivedContacts,onToggleFlag,
-                       savedFilter,onFilterChange,onMarkManyRead,lazyFetching,arrowFocus,mobileBack}) {
+                       savedFilter,onFilterChange,onMarkManyRead,lazyFetching,arrowFocus,mobileBack,
+                       trail,onTrailMore,onTrailServers}) {
   const isMobile = typeof window !== 'undefined' && window.innerWidth < 768;
   const [nameHover,setNameHover]=useState(false);
   const [flagsOpen,setFlagsOpen]=useState(false);
@@ -4045,6 +4046,9 @@ function ThreadColumn({contact,allMsgs,deletedIds,selectedMsgId,msgTags,onSelect
       return dt;
     });
   },[allMsgs,filter,deletedIds]);
+  // v0.0.317 — the trail shows the newest trail.shown mails (50, then +50
+  // per Show more); the footer under the list offers the rest.
+  const shownMsgs = useMemo(() => msgs.slice(0, (trail && trail.shown) || TRAIL_PAGE), [msgs, trail]);
 
   // Arrow up / arrow down: walk through the visible (already-filtered
   // + sorted) thread. Only fires when arrowFocus === 'mails' so the
@@ -4063,20 +4067,20 @@ function ThreadColumn({contact,allMsgs,deletedIds,selectedMsgId,msgTags,onSelect
       if(e.metaKey||e.ctrlKey||e.altKey||e.shiftKey) return;
       const el=document.activeElement;
       if(el&&(el.tagName==='INPUT'||el.tagName==='TEXTAREA'||el.isContentEditable)) return;
-      if(msgs.length===0) return;
+      if(shownMsgs.length===0) return;
       e.preventDefault();
-      const currIdx=selectedMsgId?msgs.findIndex(m=>m.id===selectedMsgId):-1;
+      const currIdx=selectedMsgId?shownMsgs.findIndex(m=>m.id===selectedMsgId):-1;
       let nextIdx;
-      if(e.key==='ArrowDown') nextIdx=currIdx<0?0:Math.min(currIdx+1,msgs.length-1);
+      if(e.key==='ArrowDown') nextIdx=currIdx<0?0:Math.min(currIdx+1,shownMsgs.length-1);
       else                    nextIdx=currIdx<=0?0:currIdx-1;
-      const next=msgs[nextIdx];
+      const next=shownMsgs[nextIdx];
       if(!next) return;
       if(next.draft) onSelectDraft?.(next);
       else           onSelect?.(next.id);
     }
     document.addEventListener('keydown',onKey);
     return ()=>document.removeEventListener('keydown',onKey);
-  },[msgs,selectedMsgId,onSelect,onSelectDraft,arrowFocus]);
+  },[shownMsgs,selectedMsgId,onSelect,onSelectDraft,arrowFocus]);
 
   // Actionable = unread incoming + outgoing with armed revert2me. Same
   // definition as the "Now" filter and the left-column actionable badge.
@@ -4108,6 +4112,34 @@ function ThreadColumn({contact,allMsgs,deletedIds,selectedMsgId,msgTags,onSelect
       </div>
     </div>
   ) : null;
+
+  // v0.0.317 — under the trail: "Show more" while there's more in the app
+  // or in Convooz's DB, then "Search mail servers" (pulls and keeps the
+  // contact's older mail), a spinner in place while either loads. The
+  // DB / server steps only on All / In / Out — older mail never lands in
+  // Now, Draft or Deleted.
+  const olderTabs = filter === 'all' || filter === 'in' || filter === 'out';
+  const trailBusy = trail && trail.busy;
+  const trailCanMore = msgs.length > shownMsgs.length || (olderTabs && !!(trail && trail.dbMore));
+  const trailLink = 'inline-flex items-center gap-1.5 text-xs font-medium text-indigo-600 hover:text-indigo-800';
+  const trailFooter = lazyFetching ? null : (
+    <div className="px-4 py-3 text-center">
+      {trailBusy
+        ? <span className="inline-flex items-center gap-1.5 text-xs text-gray-400">
+            <Spinner size={12}/><span>{trailBusy === 'server' ? 'Fetching older mail from your mail servers…' : 'Loading…'}</span>
+          </span>
+        : trailCanMore
+          ? <button onClick={() => onTrailMore?.()} className={trailLink}>Show more</button>
+          : olderTabs && trail && !trail.serverDone && onTrailServers
+            ? <button onClick={() => onTrailServers()} className={trailLink}>{trail.serverCursor ? 'Show more' : 'Search mail servers'}</button>
+            : olderTabs && trail && trail.serverDone
+              ? <span className="text-xs text-gray-300">No older mail on the mail servers</span>
+              : null}
+      {((trail && trail.serverErrors) || []).map((er, i) => (
+        <div key={'trail-err-' + i} className="mt-1 text-xs text-red-500">Couldn't search {er.account}: {er.error}</div>
+      ))}
+    </div>
+  );
 
   if(!contact) return (
     <div className="flex items-center justify-center h-full bg-white text-gray-300 text-sm select-none">
@@ -4215,7 +4247,7 @@ function ThreadColumn({contact,allMsgs,deletedIds,selectedMsgId,msgTags,onSelect
                   <span>Loading messages…</span>
                 </div>
               : <div className="text-center text-gray-300 text-sm mt-10">No messages</div>)}
-          {msgs.map(msg=>{
+          {shownMsgs.map(msg=>{
             const isSel=msg.id===selectedMsgId, isDel=deletedIds.includes(msg.id), isDraft=!!msg.draft&&!isDel;
             const isOut=msg.dir==="out"||isDraft;
             const dt=isDraft?formatTime(msg.modifiedAt||msg.date):formatTime(msg.date);
@@ -4253,6 +4285,7 @@ function ThreadColumn({contact,allMsgs,deletedIds,selectedMsgId,msgTags,onSelect
               </div>
             );
           })}
+          {trailFooter}
         </div>
         </div>{/* end min-height wrapper */}
         </div>{/* end scrollable content */}
@@ -4325,7 +4358,7 @@ function ThreadColumn({contact,allMsgs,deletedIds,selectedMsgId,msgTags,onSelect
                   <span>Loading messages…</span>
                 </div>
               : <div className="text-center text-gray-300 text-sm mt-10">No messages</div>)}
-        {msgs.map(msg=>{
+        {shownMsgs.map(msg=>{
           const isSel=msg.id===selectedMsgId, isDel=deletedIds.includes(msg.id), isDraft=!!msg.draft&&!isDel;
           const isOut=msg.dir==="out"||isDraft;
           const dt=isDraft?formatTime(msg.modifiedAt||msg.date):formatTime(msg.date);
@@ -4358,6 +4391,7 @@ function ThreadColumn({contact,allMsgs,deletedIds,selectedMsgId,msgTags,onSelect
             </div>
           );
         })}
+        {trailFooter}
       </div>
     </div>
   );
@@ -4648,6 +4682,10 @@ function apiErrorMessage(e) {
   return m;
 }
 const IMAP_SEARCH_IDLE = { q: '', active: false, loading: false, hits: [], cursor: null, errors: [], opening: null };
+// Contact trail paging (v0.0.317): the trail shows TRAIL_PAGE mails, and
+// every "Show more" the next TRAIL_PAGE.
+const TRAIL_PAGE = 50;
+const TRAIL_DEFAULT = { loaded: 0, dbMore: false, shown: TRAIL_PAGE, serverCursor: null, serverDone: false, busy: null, serverErrors: [] };
 
 function GlobalSearchResults({messages, contacts, deletedIds, msgTags, msgMatchesSearch, selectedMsgId, onSelectMsg, onSelectDraft, serverHits=[], serverSearching=false, serverHasMore=false, serverLoadingMore=false, onServerLoadMore, imap=IMAP_SEARCH_IDLE, onImapSearch, onImapMore, onOpenImapHit, canSearchServers=true}) {
   const [filter, setFilter] = useState('all');
@@ -6493,6 +6531,20 @@ function App({userId, onSignOut}) {
   // refreshData (dataRefreshTick bump) so a fresh bootstrap forces a
   // re-fetch and older mails re-appear after sync / lock-toggle.
   const lazyFetchedContactsRef = useRef(new Set());
+  // v0.0.317 — contact trail paging, per contact, for this session:
+  //   loaded       DB rows fetched (offset of the next page)
+  //   dbMore       the DB has older mail beyond those
+  //   shown        how many mails the trail shows (Show more adds 50)
+  //   serverCursor / serverDone   position of the mail-server import
+  //   busy         'db' | 'server' | null — the spinner under the trail
+  // trailsRef mirrors it for the async fetchers (no stale closures).
+  const [trails, setTrails] = useState({});
+  const trailsRef = useRef({});
+  trailsRef.current = trails;
+  function patchTrail(contactId, patch) {
+    trailsRef.current = { ...trailsRef.current, [contactId]: { ...(trailsRef.current[contactId] || TRAIL_DEFAULT), ...patch } };
+    setTrails(trailsRef.current);
+  }
   // v0.0.311 — Seen / All Seen / r2m dismiss + snooze flip messageList
   // optimistically and then save. A server snapshot (bootstrap, lazy-
   // fetch) that was requested BEFORE the save landed still carries the
@@ -8350,15 +8402,26 @@ function App({userId, onSignOut}) {
   // for these — they're older mails, the active r2m alerts live in the
   // top-500 anyway. body/bodyHtml are left undefined so MessageDetail
   // fires its existing on-demand /body fetch on first click.
-  async function lazyFetchContactMessages(contactId) {
+  // v0.0.317 — pages of TRAIL_PAGE, archived mail included (the contact's
+  // history beyond the 2000-mail cap). The first call per session fetches
+  // max(TRAIL_PAGE, loaded) from the top, so after a /bootstrap refresh
+  // (which drops lazy-fetched rows) the trail comes back as deep as the
+  // user had loaded it; { more: true } fetches the next page.
+  async function lazyFetchContactMessages(contactId, { more = false } = {}) {
     // v0.0.282 — short-circuit when this contact was already fetched in
     // this session. Callers fire unconditionally; the de-dup lives here
     // so future entry points (search-click, deep-link, …) get it for
     // free. Cache cleared on refreshData so a fresh bootstrap forces
     // a re-fetch.
-    if (lazyFetchedContactsRef.current.has(contactId)) return;
-    lazyFetchedContactsRef.current.add(contactId);
-    setLazyFetchingContactId(contactId);
+    if (!more) {
+      if (lazyFetchedContactsRef.current.has(contactId)) return;
+      lazyFetchedContactsRef.current.add(contactId);
+      setLazyFetchingContactId(contactId);
+    }
+    const t = trailsRef.current[contactId] || TRAIL_DEFAULT;
+    const offset = more ? t.loaded : 0;
+    const limit = more ? TRAIL_PAGE : Math.max(TRAIL_PAGE, t.loaded);
+    if (more) patchTrail(contactId, { busy: 'db' });
     try {
       // v0.0.265 — snapshot the lock state at fetch start. If the user
       // toggles lock during the await, abandon this run so the auto-
@@ -8370,10 +8433,30 @@ function App({userId, onSignOut}) {
       // state UI rendered them straight from there.
       const startKey = masterKeyRef.current;
       const requestedAt = Date.now(); // for applyPendingFlips
-      const r = await apiFetch(`/messages-for-contact?contact=${encodeURIComponent(contactId)}`);
+      const r = await apiFetch(`/messages-for-contact?contact=${encodeURIComponent(contactId)}&archived=1&limit=${limit}&offset=${offset}`);
       if (masterKeyRef.current !== startKey) return;
       const rows = r?.messages || [];
+      patchTrail(contactId, { loaded: offset + rows.length, dbMore: !!r?.hasMore });
       if (rows.length === 0) return;
+      await mergeContactRows(rows, requestedAt, startKey);
+    } catch (e) {
+      console.warn('[Convooz] lazy-fetch contact messages failed:', e?.message || e);
+      // Allow a retry on the next click — drop this contact from the
+      // cache so the user can recover from a transient failure.
+      if (!more) lazyFetchedContactsRef.current.delete(contactId);
+    } finally {
+      // Clear only if we're still the latest fetch in flight; a faster
+      // subsequent click on a different contact may have overwritten us.
+      if (more) patchTrail(contactId, { busy: null });
+      else setLazyFetchingContactId(curr => curr === contactId ? null : curr);
+    }
+  }
+  // Raw /messages-for-contact (or /imap-contact-import) rows → decrypted
+  // where possible, shaped per counterpart contact, merged into
+  // messageList. Shared by the trail's DB pages and its mail-server
+  // import (v0.0.317: lifted out of lazyFetchContactMessages).
+  async function mergeContactRows(rows, requestedAt, startKey) {
+    {
 
       // v0.0.260 — apply the same pre-shape decrypt pass that runs on
       // bootstrap messages (line ~5882). Without this, locked sessions
@@ -8583,15 +8666,51 @@ function App({userId, onSignOut}) {
         if (fresh.length === 0) return prev;
         return [...prev, ...fresh];
       });
+      // v0.0.317 — rows in the Trash (deleted_at, not archived) belong in
+      // the Deleted tab; this path never marked them, so they showed as
+      // normal mail. Archived rows (auto_purged) also carry deleted_at —
+      // those are just old, not deleted.
+      const trashed = rows.filter(m => m.deleted_at && !(m.flags && m.flags.auto_purged)).map(m => m.id);
+      if (trashed.length) setDeletedIds(prev => Array.from(new Set([...prev, ...trashed])));
+    }
+  }
+  // v0.0.317 — contact trail: "Show more" shows the next TRAIL_PAGE and,
+  // when the DB has more, fetches its next page alongside.
+  function trailShowMore(contactId) {
+    const t = trailsRef.current[contactId] || TRAIL_DEFAULT;
+    patchTrail(contactId, { shown: t.shown + TRAIL_PAGE });
+    if (t.dbMore && !t.busy) lazyFetchContactMessages(contactId, { more: true });
+  }
+  // …and once the DB is exhausted, "Search mail servers" pulls the next
+  // (up to) 50 mails of this contact that Convooz doesn't have yet from
+  // the servers and stores them (POST /imap-contact-import), so they stay
+  // in the trail — next time they come straight from the DB.
+  async function trailFromServers(contactId) {
+    const t = trailsRef.current[contactId] || TRAIL_DEFAULT;
+    if (t.busy || t.serverDone) return;
+    const c = contactList.find(x => x.id === contactId);
+    const emails = ((c && c.emails) || []).filter(e => (e || '').includes('@'));
+    if (emails.length === 0) { patchTrail(contactId, { serverDone: true }); return; }
+    patchTrail(contactId, { busy: 'server', serverErrors: [] });
+    try {
+      const startKey = masterKeyRef.current;
+      const requestedAt = Date.now();
+      const r = await apiFetch('/imap-contact-import', { method: 'POST', body: JSON.stringify({ emails, cursor: t.serverCursor || undefined }) });
+      const rows = (r && r.messages) || [];
+      if (rows.length) await mergeContactRows(rows, requestedAt, startKey);
+      const cur = trailsRef.current[contactId] || TRAIL_DEFAULT;
+      patchTrail(contactId, {
+        serverCursor: (r && r.cursor) || null,
+        serverDone: !(r && r.cursor),
+        // Stored rows now count as loaded, so a refresh brings them back.
+        loaded: cur.loaded + rows.length,
+        shown: cur.shown + rows.length,
+        serverErrors: (r && r.errors) || [],
+      });
     } catch (e) {
-      console.warn('[Convooz] lazy-fetch contact messages failed:', e?.message || e);
-      // Allow a retry on the next click — drop this contact from the
-      // cache so the user can recover from a transient failure.
-      lazyFetchedContactsRef.current.delete(contactId);
+      setActionToast('Could not fetch older mail: ' + apiErrorMessage(e));
     } finally {
-      // Clear only if we're still the latest fetch in flight; a faster
-      // subsequent click on a different contact may have overwritten us.
-      setLazyFetchingContactId(curr => curr === contactId ? null : curr);
+      patchTrail(contactId, { busy: null });
     }
   }
   function handleSelectContact(id,e){
@@ -9998,6 +10117,9 @@ function App({userId, onSignOut}) {
       onFilterChange={handleContactFilterChange}
       onMarkManyRead={handleMarkManyRead}
       lazyFetching={lazyFetchingContactId === selContact}
+      trail={trails[selContact] || TRAIL_DEFAULT}
+      onTrailMore={() => trailShowMore(selContact)}
+      onTrailServers={() => trailFromServers(selContact)}
       arrowFocus={arrowFocus}
       mobileBack={()=>setMobileCol(0)}/>;
   }

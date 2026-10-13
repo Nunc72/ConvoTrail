@@ -1081,21 +1081,34 @@ const INSERT_CHUNK_SIZE = 10;
 // on the mail-server side come out as ImapImportError (message is fit for
 // the user); anything else is a DB / internal error.
 export class ImapImportError extends Error {}
-export async function importMessageByUid(
+export interface ImportGroup { folder: string; uidValidity: string; uids: number[] }
+
+// v0.0.317 — the batch form: one IMAP session for any number of mails of
+// one account (the contact trail stores up to 50 at a time). Returns
+// "folder|uid" → row id for every requested mail that exists, already
+// stored ones included; a mail that's gone from the server is just
+// absent. A mail that fails to build is skipped (and logged), like sync.
+export async function importMessagesByUids(
   accountId: string,
-  folder: string,
-  uid: number,
-  uidValidity: string,
+  groups: ImportGroup[],
   userKey?: Buffer,
-): Promise<string> {
+): Promise<Map<string, string>> {
   const pool = requirePool();
-  const findRow = async () => (await pool.query<{ id: string }>(
-    `SELECT id FROM messages
-      WHERE mail_account_id = $1 AND folder = $2 AND uidvalidity = $3 AND uid = $4`,
-    [accountId, folder, uidValidity, uid],
-  )).rows[0]?.id ?? null;
-  const existing = await findRow();
-  if (existing) return existing;
+  const ids = new Map<string, string>();
+  const lookup = async (g: ImportGroup) => {
+    if (g.uids.length === 0) return;
+    const r = await pool.query<{ id: string; uid: number }>(
+      `SELECT id, uid FROM messages
+        WHERE mail_account_id = $1 AND folder = $2 AND uidvalidity = $3 AND uid = ANY($4::int[])`,
+      [accountId, g.folder, g.uidValidity, g.uids],
+    );
+    for (const x of r.rows) ids.set(`${g.folder}|${Number(x.uid)}`, x.id);
+  };
+  for (const g of groups) await lookup(g);
+  const todo = groups
+    .map(g => ({ ...g, uids: g.uids.filter(u => !ids.has(`${g.folder}|${u}`)) }))
+    .filter(g => g.uids.length > 0);
+  if (todo.length === 0) return ids;
 
   const acc = (await pool.query<{
     id: string; user_id: string; email: string;
@@ -1113,7 +1126,7 @@ export async function importMessageByUid(
     auth: { user: acc.imap_user, pass: decrypt(acc.imap_cred_enc) },
     logger: false, socketTimeout: 20_000,
   });
-  let row: Record<string, unknown> | null = null;
+  const rows: Record<string, unknown>[] = [];
   try {
     await client.connect();
     // Folder pins for direction, exactly as syncAccount sets them.
@@ -1124,25 +1137,42 @@ export async function importMessageByUid(
     const inboxPath = allMail ? undefined : inbox?.path;
     const sentPath = allMail ? undefined : sent?.path;
 
-    const lock = await client.getMailboxLock(folder, { readOnly: true });
-    try {
-      const uv = BigInt((client.mailbox as { uidValidity: bigint | number }).uidValidity);
-      if (uv.toString() !== uidValidity) throw new ImapImportError("the mailbox changed since the search — search again");
-      for await (const msg of client.fetch([uid], { envelope: true, flags: true, source: true, internalDate: true, uid: true }, { uid: true })) {
-        row = await buildMessageRow(msg, acc.id, acc.user_id, folder, uv, acc.email.toLowerCase(), userKey, inboxPath, sentPath);
+    for (const g of todo) {
+      const lock = await client.getMailboxLock(g.folder, { readOnly: true });
+      try {
+        const uv = BigInt((client.mailbox as { uidValidity: bigint | number }).uidValidity);
+        if (uv.toString() !== g.uidValidity) throw new ImapImportError("the mailbox changed since the search — search again");
+        for await (const msg of client.fetch(g.uids, { envelope: true, flags: true, source: true, internalDate: true, uid: true }, { uid: true })) {
+          try {
+            rows.push(await buildMessageRow(msg, acc.id, acc.user_id, g.folder, uv, acc.email.toLowerCase(), userKey, inboxPath, sentPath));
+          } catch (e) {
+            console.warn(`[import] ${g.folder}: buildMessageRow failed for uid=${msg.uid}: ${e instanceof Error ? e.message : e}`);
+          }
+        }
+      } finally {
+        lock.release();
       }
-      if (!row) throw new ImapImportError("this mail is no longer on the server");
-    } finally {
-      lock.release();
     }
   } catch (e) {
     throw e instanceof ImapImportError ? e : new ImapImportError(`mail server: ${e instanceof Error ? e.message : String(e)}`);
   } finally {
     try { await client.logout(); } catch { client.close(); }
   }
-  await bulkInsertMessages(pool, [row]);
-  const id = await findRow();
-  if (!id) throw new Error("storing the mail failed");
+  if (rows.length > 0) await bulkInsertMessages(pool, rows);
+  for (const g of todo) await lookup(g);
+  return ids;
+}
+
+export async function importMessageByUid(
+  accountId: string,
+  folder: string,
+  uid: number,
+  uidValidity: string,
+  userKey?: Buffer,
+): Promise<string> {
+  const ids = await importMessagesByUids(accountId, [{ folder, uidValidity, uids: [uid] }], userKey);
+  const id = ids.get(`${folder}|${uid}`);
+  if (!id) throw new ImapImportError("this mail is no longer on the server");
   return id;
 }
 

@@ -147,9 +147,9 @@ export function imapQuery(q: string, scope: string | undefined, gmail: boolean):
 
 async function searchAccount(
   acc: { id: string; email: string; imap_host: string; imap_port: number; imap_user: string; imap_cred_enc: Buffer | null },
-  q: string,
-  scope: string | undefined,
+  buildQuery: (gmail: boolean) => Record<string, unknown>,
   cursor: Cursor,
+  excludeStored: boolean,
 ): Promise<{ account: string; hits: Candidate[]; more: boolean; error?: string }> {
   if (!acc.imap_cred_enc) return { account: acc.email, hits: [], more: false, error: "no stored IMAP password" };
   const client = new ImapFlow({
@@ -171,9 +171,7 @@ async function searchAccount(
     const targets = allMail
       ? [allMail]
       : boxes.filter(b => !b.flags?.has("\\Noselect") && !SKIP_SPECIAL_USE.has(b.specialUse || "")).slice(0, MAX_FOLDERS);
-    // Gmail's own search (subject, people, body — like its web search);
-    // elsewhere subject/from/to/body. A scope narrows both to one field.
-    const query = imapQuery(q, scope, gmail);
+    const query = buildQuery(gmail);
     // Folder pins for direction, as in sync (none for Gmail All Mail).
     const inboxPath = allMail ? undefined : inbox?.path;
     const sentPath = allMail ? undefined : sent?.path;
@@ -185,9 +183,19 @@ async function searchAccount(
         const found = ((await client.search(query, { uid: true })) || []) as number[];
         if (found.length === 0) continue;
         const uids = [...found].sort((a, b) => b - a).slice(0, MAX_HITS_PER_FOLDER);
-        const dated: SortKey[] = [];
+        let dated: SortKey[] = [];
         for await (const m of client.fetch(uids, { internalDate: true, uid: true }, { uid: true })) {
           dated.push({ t: m.internalDate ? new Date(m.internalDate).getTime() : 0, k: `${acc.id}|${box.path}|${m.uid}` });
+        }
+        if (excludeStored) {
+          // Contact trail: only what Convooz doesn't have yet, so every
+          // page brings mails the trail didn't show.
+          const stored = new Set((await requirePool().query<{ uid: number }>(
+            `SELECT uid FROM messages
+              WHERE mail_account_id = $1 AND folder = $2 AND uidvalidity = $3 AND uid = ANY($4::int[])`,
+            [acc.id, box.path, uidValidity, uids],
+          )).rows.map(r => Number(r.uid)));
+          dated = dated.filter(d => !stored.has(Number(d.k.slice(d.k.lastIndexOf("|") + 1))));
         }
         const { window, more: folderMore } = folderWindow(dated, cursor);
         if (folderMore) more = true;
@@ -217,28 +225,42 @@ function withTimeout<T>(p: Promise<T>, ms: number, onTimeout: () => T): Promise<
   });
 }
 
-export async function imapSearchForUser(
+type SearchErrors = { account: string; error: string }[];
+
+// One page across all of the user's accounts (parallel, per-account
+// timeout), newest first after the cursor.
+async function searchPage(
   userId: string,
-  q: string,
-  cursorStr: string | undefined,
-  scope?: string,
-): Promise<{ hits: ImapSearchHit[]; cursor: string | null; errors: { account: string; error: string }[] }> {
-  if (scope === "tag") return { hits: [], cursor: null, errors: [] }; // tags only exist in Convooz
-  const pool = requirePool();
-  const accounts = (await pool.query<{
+  buildQuery: (gmail: boolean) => Record<string, unknown>,
+  cursor: Cursor,
+  excludeStored: boolean,
+): Promise<{ page: Candidate[]; more: boolean; errors: SearchErrors }> {
+  const accounts = (await requirePool().query<{
     id: string; email: string; imap_host: string; imap_port: number; imap_user: string; imap_cred_enc: Buffer | null;
   }>(
     `SELECT id, email, imap_host, imap_port, imap_user, imap_cred_enc
        FROM mail_accounts WHERE user_id = $1 ORDER BY email`,
     [userId],
   )).rows;
-  const cursor = decodeCursor(cursorStr);
-
   const results = await Promise.all(accounts.map(acc =>
-    withTimeout(searchAccount(acc, q, scope, cursor), ACCOUNT_TIMEOUT_MS,
+    withTimeout(searchAccount(acc, buildQuery, cursor, excludeStored), ACCOUNT_TIMEOUT_MS,
       () => ({ account: acc.email, hits: [] as Candidate[], more: false, error: "mail server took too long" }))));
   const errors = results.filter(r => r.error).map(r => ({ account: r.account, error: r.error! }));
   const { page, more } = pageOf(results.flatMap(r => r.hits), results.some(r => r.more));
+  return { page, more, errors };
+}
+
+export async function imapSearchForUser(
+  userId: string,
+  q: string,
+  cursorStr: string | undefined,
+  scope?: string,
+): Promise<{ hits: ImapSearchHit[]; cursor: string | null; errors: SearchErrors }> {
+  if (scope === "tag") return { hits: [], cursor: null, errors: [] }; // tags only exist in Convooz
+  const pool = requirePool();
+  // Gmail's own search (subject, people, body — like its web search);
+  // elsewhere subject/from/to/body. A scope narrows both to one field.
+  const { page, more, errors } = await searchPage(userId, gmail => imapQuery(q, scope, gmail), decodeCursor(cursorStr), false);
 
   // Point hits at their DB row where one exists (the FE skips the ones
   // already listed, and opening them needs no IMAP fetch).
@@ -265,4 +287,70 @@ export async function imapSearchForUser(
     cursor: more && last ? encodeCursor(last) : null,
     errors,
   };
+}
+
+// ─── Contact trail: pull a contact's older mail from the servers ────────
+// v0.0.317. The contact card's "Search mail servers" fetches the newest
+// mails to/from/cc any of the contact's addresses that Convooz doesn't
+// have yet — every folder, no date limit — and STORES them right away
+// (unlike the global search, which only stores what you open), so the
+// trail simply gets longer and keeps those mails; next time they come
+// from the DB. Copies of an already-stored mail in another folder (same
+// Message-ID) are skipped. Same 2000-cap behaviour as any old mail: the
+// next sync archives them, the trail still shows them.
+export function contactQuery(emails: string[], gmail: boolean): Record<string, unknown> {
+  const list = emails.slice(0, 10);
+  if (gmail) {
+    const term = (e: string) => e.replace(/[()"\s]/g, "");
+    return { gmraw: list.map(e => `from:(${term(e)}) OR to:(${term(e)}) OR cc:(${term(e)})`).join(" OR ") };
+  }
+  return { or: list.flatMap(e => [{ from: e }, { to: e }, { cc: e }]) };
+}
+
+export async function importContactPage(
+  userId: string,
+  emails: string[],
+  cursorStr: string | undefined,
+  importer: (accountId: string, groups: { folder: string; uidValidity: string; uids: number[] }[]) => Promise<Map<string, string>>,
+): Promise<{ ids: string[]; cursor: string | null; errors: SearchErrors }> {
+  const clean = [...new Set(emails.map(e => e.trim().toLowerCase()).filter(e => e.includes("@")))];
+  if (clean.length === 0) return { ids: [], cursor: null, errors: [] };
+  const { page, more, errors } = await searchPage(userId, gmail => contactQuery(clean, gmail), decodeCursor(cursorStr), true);
+
+  // Skip copies: same Message-ID already stored for that account.
+  const pool = requirePool();
+  const byAccount = new Map<string, Candidate[]>();
+  for (const h of page) {
+    if (!byAccount.has(h.accountId)) byAccount.set(h.accountId, []);
+    byAccount.get(h.accountId)!.push(h);
+  }
+  const ids: string[] = [];
+  await Promise.all([...byAccount.entries()].map(async ([accountId, hits]) => {
+    const mids = hits.map(h => (h.messageId || "").replace(/^<+|>+$/g, "")).filter(Boolean);
+    const known = new Set(mids.length === 0 ? [] : (await pool.query<{ mid: string }>(
+      `SELECT btrim(message_id, '<>') AS mid FROM messages
+        WHERE mail_account_id = $1 AND btrim(message_id, '<>') = ANY($2::text[])`,
+      [accountId, mids],
+    )).rows.map(r => r.mid));
+    const todo = hits.filter(h => !(h.messageId && known.has(h.messageId.replace(/^<+|>+$/g, ""))));
+    const groups = new Map<string, { folder: string; uidValidity: string; uids: number[] }>();
+    for (const h of todo) {
+      const g = `${h.folder}|${h.uidValidity}`;
+      if (!groups.has(g)) groups.set(g, { folder: h.folder, uidValidity: h.uidValidity, uids: [] });
+      groups.get(g)!.uids.push(h.uid);
+    }
+    if (groups.size === 0) return;
+    try {
+      const stored = await importer(accountId, [...groups.values()]);
+      for (const h of todo) {
+        const id = stored.get(`${h.folder}|${h.uid}`);
+        if (id) ids.push(id);
+      }
+    } catch (e) {
+      errors.push({ account: hits[0].accountEmail, error: e instanceof Error ? e.message : String(e) });
+    }
+  }));
+
+  const last = page[page.length - 1];
+  return { ids, cursor: more && last ? encodeCursor(last) : null, errors };
 }
