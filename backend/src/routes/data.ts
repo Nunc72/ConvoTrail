@@ -510,13 +510,32 @@ export async function registerDataRoutes(app: FastifyInstance) {
   // included) are still here, and they're exactly the older mail this
   // search is for. Before, search stopped at the newest 50 hits within
   // the 2000 most recent mails.
-  app.get<{ Querystring: { q?: string; limit?: string; offset?: string } }>("/search", auth, async (req, reply) => {
+  //
+  // v0.0.316: `scope` follows the search box's pulldown (All / From / To /
+  // CC / BCC / Subject / Tag), same meaning as the FE's msgMatchesSearch.
+  // Recipients are matched per element — a text match on the to_emails
+  // JSON would also hit its keys ("role", "email") for short terms.
+  app.get<{ Querystring: { q?: string; limit?: string; offset?: string; scope?: string } }>("/search", auth, async (req, reply) => {
     const q = (req.query.q || '').trim();
     if (q.length < 2) return { messages: [], hasMore: false };
     const limit = Math.min(Number(req.query.limit) || 50, 200);
     const offset = Math.max(0, Math.floor(Number(req.query.offset) || 0));
     const pool = requirePool();
     const pattern = `%${q}%`;
+    const recipient = (role: "to" | "cc" | "bcc" | null) =>
+      `EXISTS (SELECT 1 FROM jsonb_array_elements(COALESCE(to_emails, '[]'::jsonb)) e
+                WHERE ${role ? `COALESCE(e->>'role', 'to') = '${role}' AND ` : ''}(e->>'email' ILIKE $2 OR e->>'name' ILIKE $2))`;
+    const scopeWhere: Record<string, string> = {
+      from: `(from_email ILIKE $2 OR from_name ILIKE $2)`,
+      to: recipient("to"),
+      cc: recipient("cc"),
+      bcc: recipient("bcc"),
+      subject: `subject ILIKE $2`,
+      tag: `EXISTS (SELECT 1 FROM message_tags mt JOIN tags t ON t.id = mt.tag_id
+                     WHERE mt.message_id = messages.id AND t.name ILIKE $2)`,
+    };
+    const where = scopeWhere[req.query.scope || ''] ??
+      `(subject ILIKE $2 OR body_text ILIKE $2 OR from_email ILIKE $2 OR from_name ILIKE $2 OR ${recipient(null)})`;
     try {
       const r = await pool.query(
         `SELECT id, mail_account_id, folder, uid, message_id, thread_id,
@@ -525,7 +544,7 @@ export async function registerDataRoutes(app: FastifyInstance) {
                 deleted_at, spam, has_attachments
            FROM messages
           WHERE user_id = $1
-            AND (subject ILIKE $2 OR body_text ILIKE $2 OR from_email ILIKE $2)
+            AND ${where}
           ORDER BY date DESC NULLS LAST, id DESC
           LIMIT $3 OFFSET $4`,
         [req.authUser!.id, pattern, limit + 1, offset],
@@ -544,12 +563,12 @@ export async function registerDataRoutes(app: FastifyInstance) {
   // explicitly from the "Search mail servers" link — it takes seconds,
   // not milliseconds. `cursor` pages ("Show more"); `errors` lists the
   // accounts that couldn't be searched, next to the hits from the rest.
-  app.get<{ Querystring: { q?: string; cursor?: string } }>("/imap-search", auth, async (req, reply) => {
+  app.get<{ Querystring: { q?: string; cursor?: string; scope?: string } }>("/imap-search", auth, async (req, reply) => {
     const q = (req.query.q || "").trim();
     if (q.length < 2) return { hits: [], cursor: null, errors: [] };
     if (q.length > 200) return reply.badRequest("search term too long");
     try {
-      return await imapSearchForUser(req.authUser!.id, q, req.query.cursor);
+      return await imapSearchForUser(req.authUser!.id, q, req.query.cursor, req.query.scope);
     } catch (e) {
       return sendTransientOr500(reply, e);
     }

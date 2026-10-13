@@ -127,9 +127,28 @@ function toHit(
 
 type Candidate = ImapSearchHit & SortKey;
 
+// v0.0.316 — the search box's scope pulldown. "all" (or anything
+// unknown) keeps subject/from/to/body; a field scope searches only that
+// header. Gmail gets the same through its own operators. "tag" never
+// reaches here: tags only exist in Convooz.
+const SCOPE_FIELD: Record<string, "from" | "to" | "cc" | "bcc" | "subject"> = {
+  from: "from", to: "to", cc: "cc", bcc: "bcc", subject: "subject",
+};
+export function imapQuery(q: string, scope: string | undefined, gmail: boolean): Record<string, unknown> {
+  const field = SCOPE_FIELD[scope || ""];
+  if (gmail) {
+    if (!field) return { gmraw: q };
+    const term = q.replace(/[()"]/g, " ").replace(/\s+/g, " ").trim();
+    return { gmraw: `${field}:(${term})` };
+  }
+  if (field) return { [field]: q };
+  return { or: [{ subject: q }, { from: q }, { to: q }, { body: q }] };
+}
+
 async function searchAccount(
   acc: { id: string; email: string; imap_host: string; imap_port: number; imap_user: string; imap_cred_enc: Buffer | null },
   q: string,
+  scope: string | undefined,
   cursor: Cursor,
 ): Promise<{ account: string; hits: Candidate[]; more: boolean; error?: string }> {
   if (!acc.imap_cred_enc) return { account: acc.email, hits: [], more: false, error: "no stored IMAP password" };
@@ -153,10 +172,8 @@ async function searchAccount(
       ? [allMail]
       : boxes.filter(b => !b.flags?.has("\\Noselect") && !SKIP_SPECIAL_USE.has(b.specialUse || "")).slice(0, MAX_FOLDERS);
     // Gmail's own search (subject, people, body — like its web search);
-    // elsewhere the same fields as the DB search, plus To.
-    const query = gmail
-      ? { gmraw: q }
-      : { or: [{ subject: q }, { from: q }, { to: q }, { body: q }] };
+    // elsewhere subject/from/to/body. A scope narrows both to one field.
+    const query = imapQuery(q, scope, gmail);
     // Folder pins for direction, as in sync (none for Gmail All Mail).
     const inboxPath = allMail ? undefined : inbox?.path;
     const sentPath = allMail ? undefined : sent?.path;
@@ -204,7 +221,9 @@ export async function imapSearchForUser(
   userId: string,
   q: string,
   cursorStr: string | undefined,
+  scope?: string,
 ): Promise<{ hits: ImapSearchHit[]; cursor: string | null; errors: { account: string; error: string }[] }> {
+  if (scope === "tag") return { hits: [], cursor: null, errors: [] }; // tags only exist in Convooz
   const pool = requirePool();
   const accounts = (await pool.query<{
     id: string; email: string; imap_host: string; imap_port: number; imap_user: string; imap_cred_enc: Buffer | null;
@@ -216,7 +235,7 @@ export async function imapSearchForUser(
   const cursor = decodeCursor(cursorStr);
 
   const results = await Promise.all(accounts.map(acc =>
-    withTimeout(searchAccount(acc, q, cursor), ACCOUNT_TIMEOUT_MS,
+    withTimeout(searchAccount(acc, q, scope, cursor), ACCOUNT_TIMEOUT_MS,
       () => ({ account: acc.email, hits: [] as Candidate[], more: false, error: "mail server took too long" }))));
   const errors = results.filter(r => r.error).map(r => ({ account: r.account, error: r.error! }));
   const { page, more } = pageOf(results.flatMap(r => r.hits), results.some(r => r.more));

@@ -210,7 +210,7 @@
        polish change is picked up by every browser as soon as the version
        is bumped — no manual cache-busters needed. Keep ?v= here in sync
        with APP_VERSION below at every deploy. -->
-  <link rel="stylesheet" href="polish.css?v=0.0.315"/>
+  <link rel="stylesheet" href="polish.css?v=0.0.316"/>
 </head>
 <body>
 <div id="root">
@@ -449,7 +449,7 @@ window.CONVOOZ_CRYPTO = CONVOOZ_CRYPTO;
 
 // ─── Constants ───────────────────────────────────────────────────────────────
 
-const APP_VERSION = "0.0.315"; // bumped on every deploy — keep in sync with version.json AND with the ?v= on polish.css above
+const APP_VERSION = "0.0.316"; // bumped on every deploy — keep in sync with version.json AND with the ?v= on polish.css above
 
 // ─── Backend + Supabase config ───────────────────────────────────────────────
 // Two stacks: prod (live testers) and staging (where new features land first).
@@ -4649,7 +4649,7 @@ function apiErrorMessage(e) {
 }
 const IMAP_SEARCH_IDLE = { q: '', active: false, loading: false, hits: [], cursor: null, errors: [], opening: null };
 
-function GlobalSearchResults({messages, contacts, deletedIds, msgTags, msgMatchesSearch, selectedMsgId, onSelectMsg, onSelectDraft, serverHits=[], serverSearching=false, serverHasMore=false, serverLoadingMore=false, onServerLoadMore, imap=IMAP_SEARCH_IDLE, onImapSearch, onImapMore, onOpenImapHit}) {
+function GlobalSearchResults({messages, contacts, deletedIds, msgTags, msgMatchesSearch, selectedMsgId, onSelectMsg, onSelectDraft, serverHits=[], serverSearching=false, serverHasMore=false, serverLoadingMore=false, onServerLoadMore, imap=IMAP_SEARCH_IDLE, onImapSearch, onImapMore, onOpenImapHit, canSearchServers=true}) {
   const [filter, setFilter] = useState('all');
 
   const filtered = useMemo(()=>{
@@ -4775,7 +4775,7 @@ function GlobalSearchResults({messages, contacts, deletedIds, msgTags, msgMatche
           <div className="px-4 py-3 text-center">
             <button onClick={onServerLoadMore} disabled={serverLoadingMore}
               className="inline-flex items-center gap-1.5 text-xs font-medium text-indigo-600 hover:text-indigo-800 disabled:opacity-60">
-              {serverLoadingMore ? <><Spinner size={10}/><span>Loading…</span></> : 'Show more'}
+              {serverLoadingMore ? <><Spinner size={12}/><span>Loading…</span></> : 'Show more'}
             </button>
           </div>
         )}
@@ -4796,16 +4796,22 @@ function GlobalSearchResults({messages, contacts, deletedIds, msgTags, msgMatche
         {imap.active && !imap.loading && imapRows.length === 0 && (imap.errors || []).length === 0 && (
           <div className="px-4 py-3 text-xs text-gray-400 text-center">Nothing else found on the mail servers</div>
         )}
-        {imap.active && imap.cursor && !imap.loading && (
+        {/* v0.0.316 — a spinner right where the user clicked, while the
+            next page / the first search is on its way. */}
+        {imap.active && (imap.cursor || (imap.loading && imap.hits.length > 0)) && (
           <div className="px-4 py-3 text-center">
-            <button onClick={() => onImapMore?.()}
-              className="inline-flex items-center gap-1.5 text-xs font-medium text-indigo-600 hover:text-indigo-800">Show more</button>
+            {imap.loading
+              ? <span className="inline-flex items-center gap-1.5 text-xs text-gray-400"><Spinner size={12}/><span>Loading…</span></span>
+              : <button onClick={() => onImapMore?.()}
+                  className="inline-flex items-center gap-1.5 text-xs font-medium text-indigo-600 hover:text-indigo-800">Show more</button>}
           </div>
         )}
         {imap.active && imap.loading && imap.hits.length === 0 && (
-          <div className="px-4 py-3 text-xs text-gray-400 text-center">Searching your mail servers…</div>
+          <div className="px-4 py-3 flex items-center justify-center gap-1.5 text-xs text-gray-400">
+            <Spinner size={12}/><span>Searching your mail servers…</span>
+          </div>
         )}
-        {!imap.active && !serverSearching && (
+        {!imap.active && !serverSearching && canSearchServers && (
           <div className="px-4 py-3 text-center">
             <button onClick={() => onImapSearch?.()}
               className="inline-flex items-center gap-1.5 text-xs font-medium text-indigo-600 hover:text-indigo-800">Search mail servers</button>
@@ -7727,12 +7733,15 @@ function App({userId, onSignOut}) {
     const q = (searchQuery || '').trim();
     if (q.length < 2) { serverQueryRef.current = ''; setServerRows([]); setServerHasMore(false); setServerSearching(false); return; }
     let cancelled = false;
-    serverQueryRef.current = q;
+    // v0.0.316 — the scope pulldown travels along (was ignored server-
+    // side); the ref holds the whole query string, scope included.
+    const qs = 'q=' + encodeURIComponent(q) + '&scope=' + encodeURIComponent(searchScope || 'all');
+    serverQueryRef.current = qs;
     setServerHasMore(false);
     setServerSearching(true);
     const handle = setTimeout(async () => {
       try {
-        const r = await apiFetch('/search?q=' + encodeURIComponent(q));
+        const r = await apiFetch('/search?' + qs);
         if (cancelled) return;
         const rows = r.messages || [];
         serverOffsetRef.current = rows.length;
@@ -7745,14 +7754,14 @@ function App({userId, onSignOut}) {
       }
     }, 300);
     return () => { cancelled = true; clearTimeout(handle); };
-  }, [searchActive, searchQuery]);
+  }, [searchActive, searchQuery, searchScope]);
   async function loadMoreServerHits() {
-    const q = serverQueryRef.current;
-    if (!q || serverLoadingMore) return;
+    const qs = serverQueryRef.current;
+    if (!qs || serverLoadingMore) return;
     setServerLoadingMore(true);
     try {
-      const r = await apiFetch('/search?q=' + encodeURIComponent(q) + '&offset=' + serverOffsetRef.current);
-      if (serverQueryRef.current !== q) return;
+      const r = await apiFetch('/search?' + qs + '&offset=' + serverOffsetRef.current);
+      if (serverQueryRef.current !== qs) return;
       const rows = r.messages || [];
       serverOffsetRef.current += rows.length;
       setServerRows(prev => {
@@ -7761,7 +7770,7 @@ function App({userId, onSignOut}) {
       });
       setServerHasMore(!!r.hasMore);
     } catch (e) {
-      if (serverQueryRef.current === q) setActionToast('Show more failed: ' + e.message);
+      if (serverQueryRef.current === qs) setActionToast('Show more failed: ' + e.message);
     } finally {
       setServerLoadingMore(false);
     }
@@ -7776,20 +7785,24 @@ function App({userId, onSignOut}) {
   const [imapSearch, setImapSearch] = useState(IMAP_SEARCH_IDLE);
   async function runImapSearch(more) {
     const q = (searchQuery || '').trim();
-    if (q.length < 2) return;
+    const scope = searchScope || 'all';
+    if (q.length < 2 || scope === 'tag') return; // tags only exist in Convooz
     const cursor = more ? imapSearch.cursor : null;
     if (more && !cursor) return;
-    setImapSearch(s => more ? { ...s, loading: true } : { ...IMAP_SEARCH_IDLE, q, active: true, loading: true });
+    // imapSearch.q holds scope + query, so a result for an older choice
+    // in either is dropped (v0.0.316: the scope pulldown travels along).
+    const key = scope + '|' + q;
+    setImapSearch(s => more ? { ...s, loading: true } : { ...IMAP_SEARCH_IDLE, q: key, active: true, loading: true });
     try {
-      const r = await apiFetch('/imap-search?q=' + encodeURIComponent(q) + (cursor ? '&cursor=' + encodeURIComponent(cursor) : ''));
-      setImapSearch(s => s.q !== q ? s : {
+      const r = await apiFetch('/imap-search?q=' + encodeURIComponent(q) + '&scope=' + encodeURIComponent(scope) + (cursor ? '&cursor=' + encodeURIComponent(cursor) : ''));
+      setImapSearch(s => s.q !== key ? s : {
         ...s, loading: false,
         hits: more ? s.hits.concat(r.hits || []) : (r.hits || []),
         cursor: r.cursor || null,
         errors: r.errors || [],
       });
     } catch (e) {
-      setImapSearch(s => s.q !== q ? s : { ...s, loading: false, errors: [{ account: '', error: apiErrorMessage(e) }] });
+      setImapSearch(s => s.q !== key ? s : { ...s, loading: false, errors: [{ account: '', error: apiErrorMessage(e) }] });
     }
   }
   // Opening a mail-server hit stores it (POST /imap-import → a normal
@@ -9881,10 +9894,14 @@ function App({userId, onSignOut}) {
     if(!searchQuery) return true;
     const q=searchQuery.toLowerCase();
     const tags=(msgTags[m.id]||[]);
+    // v0.0.316 — To/CC/BCC look at every recipient with that role. CC and
+    // BCC read m.cc / m.bcc before, which messages never have (the shape
+    // carries ccList / bccList), so those two scopes never matched.
+    const anyIn=list=>(list||[]).some(e=>(e||'').toLowerCase().includes(q));
     if(searchScope==='from')    return m.from?.toLowerCase().includes(q);
-    if(searchScope==='to')      return m.to?.toLowerCase().includes(q);
-    if(searchScope==='cc')      return m.cc?.toLowerCase().includes(q)||false;
-    if(searchScope==='bcc')     return m.bcc?.toLowerCase().includes(q)||false;
+    if(searchScope==='to')      return anyIn(m.toList&&m.toList.length?m.toList:[m.to]);
+    if(searchScope==='cc')      return anyIn(m.ccList);
+    if(searchScope==='bcc')     return anyIn(m.bccList);
     if(searchScope==='subject') return m.subject?.toLowerCase().includes(q);
     if(searchScope==='tag')     return tags.some(t=>t.toLowerCase().includes(q));
     // all
@@ -9901,6 +9918,7 @@ function App({userId, onSignOut}) {
       serverHits={serverHits} serverSearching={serverSearching}
       serverHasMore={serverHasMore} serverLoadingMore={serverLoadingMore} onServerLoadMore={loadMoreServerHits}
       imap={imapSearch} onImapSearch={() => runImapSearch(false)} onImapMore={() => runImapSearch(true)} onOpenImapHit={openImapHit}
+      canSearchServers={searchScope !== 'tag'}
       selectedMsgId={selMsg}
       onSelectMsg={(id)=>{
         // v0.0.282 — "Older mail" hits live in serverHits, NOT in
