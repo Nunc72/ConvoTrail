@@ -210,7 +210,7 @@
        polish change is picked up by every browser as soon as the version
        is bumped — no manual cache-busters needed. Keep ?v= here in sync
        with APP_VERSION below at every deploy. -->
-  <link rel="stylesheet" href="polish.css?v=0.0.313"/>
+  <link rel="stylesheet" href="polish.css?v=0.0.314"/>
 </head>
 <body>
 <div id="root">
@@ -449,7 +449,7 @@ window.CONVOOZ_CRYPTO = CONVOOZ_CRYPTO;
 
 // ─── Constants ───────────────────────────────────────────────────────────────
 
-const APP_VERSION = "0.0.313"; // bumped on every deploy — keep in sync with version.json AND with the ?v= on polish.css above
+const APP_VERSION = "0.0.314"; // bumped on every deploy — keep in sync with version.json AND with the ?v= on polish.css above
 
 // ─── Backend + Supabase config ───────────────────────────────────────────────
 // Two stacks: prod (live testers) and staging (where new features land first).
@@ -4591,7 +4591,7 @@ const SEARCH_FILTER_TABS = [
   { label: "Deleted", key: "deleted" },
 ];
 
-function GlobalSearchResults({messages, contacts, deletedIds, msgTags, msgMatchesSearch, selectedMsgId, onSelectMsg, onSelectDraft, serverHits=[], serverSearching=false}) {
+function GlobalSearchResults({messages, contacts, deletedIds, msgTags, msgMatchesSearch, selectedMsgId, onSelectMsg, onSelectDraft, serverHits=[], serverSearching=false, serverHasMore=false, serverLoadingMore=false, onServerLoadMore}) {
   const [filter, setFilter] = useState('all');
 
   const filtered = useMemo(()=>{
@@ -4667,16 +4667,25 @@ function GlobalSearchResults({messages, contacts, deletedIds, msgTags, msgMatche
       </div>
       {/* Results list */}
       <div className="flex-1 overflow-y-auto scroll">
-        {filtered.length===0 && olderHits.length===0 && !serverSearching &&
+        {filtered.length===0 && olderHits.length===0 && !serverSearching && !serverHasMore &&
           <div className="text-center text-gray-300 text-sm mt-10">No results</div>}
         {filtered.map(msg => renderSearchRow({msg, contacts, deletedIds, selectedMsgId, onSelectMsg, onSelectDraft}))}
-        {(olderHits.length>0 || serverSearching) && (
+        {(olderHits.length>0 || serverSearching || serverHasMore) && (
           <div className="px-3 py-2 border-b border-gray-100 bg-gray-50 flex items-center gap-2">
             <span className="text-xs font-semibold text-gray-400 uppercase tracking-wider">Older mail</span>
             {serverSearching && <Spinner size={10}/>}
           </div>
         )}
         {olderHits.map(msg => renderSearchRow({msg, contacts, deletedIds, selectedMsgId, onSelectMsg, onSelectDraft}))}
+        {/* v0.0.314 — next 50 server hits; the server says whether more exist. */}
+        {serverHasMore && !serverSearching && (
+          <div className="px-4 py-3 text-center">
+            <button onClick={onServerLoadMore} disabled={serverLoadingMore}
+              className="inline-flex items-center gap-1.5 text-xs font-medium text-indigo-600 hover:text-indigo-800 disabled:opacity-60">
+              {serverLoadingMore ? <><Spinner size={10}/><span>Loading…</span></> : 'Show more'}
+            </button>
+          </div>
+        )}
       </div>
     </div>
   );
@@ -7560,18 +7569,63 @@ function App({userId, onSignOut}) {
   // Server-side search hits for mail older than the ~300 we cache. Fired
   // on a debounce after the user types, merged after the client-side
   // results in GlobalSearchResults under an "Older mail" header.
-  const [serverHits,       setServerHits]       = useState([]);
+  // v0.0.314 — /search pages by offset ("Show more"). The raw rows live
+  // in state and are shaped in a memo, so a background refresh that
+  // changes contactList re-shapes them instead of re-fetching page 1 and
+  // throwing away the pages the user already loaded. serverOffsetRef
+  // counts RAW rows (shaping drops rows without a contact); serverQueryRef
+  // drops a page that lands after the query changed.
+  const [serverRows,       setServerRows]       = useState([]);
   const [serverSearching,  setServerSearching]  = useState(false);
+  const [serverHasMore,    setServerHasMore]    = useState(false);
+  const [serverLoadingMore, setServerLoadingMore] = useState(false);
+  const serverOffsetRef = useRef(0);
+  const serverQueryRef  = useRef('');
   useEffect(() => {
-    if (!searchActive) { setServerHits([]); setServerSearching(false); return; }
+    if (!searchActive) { serverQueryRef.current = ''; setServerRows([]); setServerHasMore(false); setServerSearching(false); return; }
     const q = (searchQuery || '').trim();
-    if (q.length < 2) { setServerHits([]); setServerSearching(false); return; }
+    if (q.length < 2) { serverQueryRef.current = ''; setServerRows([]); setServerHasMore(false); setServerSearching(false); return; }
     let cancelled = false;
+    serverQueryRef.current = q;
+    setServerHasMore(false);
     setServerSearching(true);
     const handle = setTimeout(async () => {
       try {
         const r = await apiFetch('/search?q=' + encodeURIComponent(q));
         if (cancelled) return;
+        const rows = r.messages || [];
+        serverOffsetRef.current = rows.length;
+        setServerRows(rows);
+        setServerHasMore(!!r.hasMore);
+      } catch (e) {
+        if (!cancelled) { setServerRows([]); setServerHasMore(false); }
+      } finally {
+        if (!cancelled) setServerSearching(false);
+      }
+    }, 300);
+    return () => { cancelled = true; clearTimeout(handle); };
+  }, [searchActive, searchQuery]);
+  async function loadMoreServerHits() {
+    const q = serverQueryRef.current;
+    if (!q || serverLoadingMore) return;
+    setServerLoadingMore(true);
+    try {
+      const r = await apiFetch('/search?q=' + encodeURIComponent(q) + '&offset=' + serverOffsetRef.current);
+      if (serverQueryRef.current !== q) return;
+      const rows = r.messages || [];
+      serverOffsetRef.current += rows.length;
+      setServerRows(prev => {
+        const have = new Set(prev.map(m => m.id));
+        return prev.concat(rows.filter(m => !have.has(m.id)));
+      });
+      setServerHasMore(!!r.hasMore);
+    } catch (e) {
+      if (serverQueryRef.current === q) setActionToast('Show more failed: ' + e.message);
+    } finally {
+      setServerLoadingMore(false);
+    }
+  }
+  const serverHits = useMemo(() => {
         // Shape the raw rows into the same form messageList items use,
         // so GlobalSearchResults can render them with the same code.
         // sender/revert2me aren't reconstructed here (we'd need r2m_state
@@ -7582,7 +7636,7 @@ function App({userId, onSignOut}) {
         for (const c of contactList) {
           for (const e of (c.emails || [])) emailToContactId.set(e.toLowerCase(), c.id);
         }
-        const shaped = (r.messages || []).map(raw => {
+        return serverRows.map(raw => {
           const fromEmail = (raw.from_email || '').toLowerCase();
           const allRecipients = Array.isArray(raw.to_emails) ? raw.to_emails : [];
           const toList = allRecipients.filter(e => (e.role || 'to') === 'to').map(e => e.email).filter(Boolean);
@@ -7615,15 +7669,7 @@ function App({userId, onSignOut}) {
             sender: null,
           };
         }).filter(m => m.contactId !== null);
-        setServerHits(shaped);
-      } catch (e) {
-        if (!cancelled) setServerHits([]);
-      } finally {
-        if (!cancelled) setServerSearching(false);
-      }
-    }, 300);
-    return () => { cancelled = true; clearTimeout(handle); };
-  }, [searchActive, searchQuery, mailAccounts, contactList]);
+  }, [serverRows, mailAccounts, contactList]);
   const userMenuRef = useRef(null);
   const [signatures,       setSignatures]       = useState(()=>bootstrapCache?.signatures ?? []);
   const [accountSigs,      setAccountSigs]      = useState(()=>bootstrapCache?.accountSigs ?? {});
@@ -9708,6 +9754,7 @@ function App({userId, onSignOut}) {
     col2=<GlobalSearchResults messages={messageList} contacts={contactList} deletedIds={deletedIds}
       msgTags={msgTags} msgMatchesSearch={msgMatchesSearch}
       serverHits={serverHits} serverSearching={serverSearching}
+      serverHasMore={serverHasMore} serverLoadingMore={serverLoadingMore} onServerLoadMore={loadMoreServerHits}
       selectedMsgId={selMsg}
       onSelectMsg={(id)=>{
         // v0.0.282 — "Older mail" hits live in serverHits, NOT in

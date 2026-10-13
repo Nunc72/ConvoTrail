@@ -500,10 +500,18 @@ export async function registerDataRoutes(app: FastifyInstance) {
   // trips. One OR-filtered SELECT is both cheaper egress-wise (Supavisor
   // pool, not API) and a single round-trip. JS-side dedup also disappears
   // because a single SELECT can't return the same id twice.
-  app.get<{ Querystring: { q?: string; limit?: string } }>("/search", auth, async (req, reply) => {
+  //
+  // v0.0.314: pages ("Show more") via offset — `hasMore` tells the FE
+  // whether another page exists — and includes auto-purged mail. The
+  // 2000-mail cap only keeps that out of /bootstrap; the rows (bodies
+  // included) are still here, and they're exactly the older mail this
+  // search is for. Before, search stopped at the newest 50 hits within
+  // the 2000 most recent mails.
+  app.get<{ Querystring: { q?: string; limit?: string; offset?: string } }>("/search", auth, async (req, reply) => {
     const q = (req.query.q || '').trim();
-    if (q.length < 2) return { messages: [] };
+    if (q.length < 2) return { messages: [], hasMore: false };
     const limit = Math.min(Number(req.query.limit) || 50, 200);
+    const offset = Math.max(0, Math.floor(Number(req.query.offset) || 0));
     const pool = requirePool();
     const pattern = `%${q}%`;
     try {
@@ -514,13 +522,14 @@ export async function registerDataRoutes(app: FastifyInstance) {
                 deleted_at, spam, has_attachments
            FROM messages
           WHERE user_id = $1
-            AND NOT COALESCE((flags->>'auto_purged')::bool, false)
             AND (subject ILIKE $2 OR body_text ILIKE $2 OR from_email ILIKE $2)
-          ORDER BY date DESC
-          LIMIT $3`,
-        [req.authUser!.id, pattern, limit],
+          ORDER BY date DESC NULLS LAST, id DESC
+          LIMIT $3 OFFSET $4`,
+        [req.authUser!.id, pattern, limit + 1, offset],
       );
-      return { messages: rowsWithIsoDates(r.rows) };
+      const rows = rowsWithIsoDates(r.rows);
+      const hasMore = rows.length > limit;
+      return { messages: hasMore ? rows.slice(0, limit) : rows, hasMore };
     } catch (e) {
       return sendTransientOr500(reply, e);
     }
