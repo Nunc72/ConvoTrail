@@ -210,7 +210,7 @@
        polish change is picked up by every browser as soon as the version
        is bumped — no manual cache-busters needed. Keep ?v= here in sync
        with APP_VERSION below at every deploy. -->
-  <link rel="stylesheet" href="polish.css?v=0.0.314"/>
+  <link rel="stylesheet" href="polish.css?v=0.0.315"/>
 </head>
 <body>
 <div id="root">
@@ -449,7 +449,7 @@ window.CONVOOZ_CRYPTO = CONVOOZ_CRYPTO;
 
 // ─── Constants ───────────────────────────────────────────────────────────────
 
-const APP_VERSION = "0.0.314"; // bumped on every deploy — keep in sync with version.json AND with the ?v= on polish.css above
+const APP_VERSION = "0.0.315"; // bumped on every deploy — keep in sync with version.json AND with the ?v= on polish.css above
 
 // ─── Backend + Supabase config ───────────────────────────────────────────────
 // Two stacks: prod (live testers) and staging (where new features land first).
@@ -4591,7 +4591,65 @@ const SEARCH_FILTER_TABS = [
   { label: "Deleted", key: "deleted" },
 ];
 
-function GlobalSearchResults({messages, contacts, deletedIds, msgTags, msgMatchesSearch, selectedMsgId, onSelectMsg, onSelectDraft, serverHits=[], serverSearching=false, serverHasMore=false, serverLoadingMore=false, onServerLoadMore}) {
+// Raw /search or /imap-import row → the messageList item shape, so the
+// search lists and MessageDetail treat it like any other mail. sender /
+// revert2me aren't reconstructed (search-irrelevant; the row falls back
+// to sane defaults). contactId is null when the counterpart isn't a
+// contact. v0.0.315: lifted out of the App's serverHits memo.
+function searchShapeMaps(mailAccounts, contactList) {
+  const accountEmailById = new Map(mailAccounts.map(a => [a.id, (a.email || '').toLowerCase()]));
+  const emailToContactId = new Map();
+  for (const c of contactList) {
+    for (const e of (c.emails || [])) emailToContactId.set(e.toLowerCase(), c.id);
+  }
+  return { accountEmailById, emailToContactId };
+}
+function shapeSearchRow(raw, { accountEmailById, emailToContactId }) {
+  const fromEmail = (raw.from_email || '').toLowerCase();
+  const allRecipients = Array.isArray(raw.to_emails) ? raw.to_emails : [];
+  const toList = allRecipients.filter(e => (e.role || 'to') === 'to').map(e => e.email).filter(Boolean);
+  const firstTo = (toList[0] || allRecipients[0]?.email || '').toLowerCase();
+  const otherEmail = raw.direction === 'in' ? fromEmail : firstTo;
+  return {
+    id: raw.id,
+    accountId: raw.mail_account_id,
+    accountEmail: accountEmailById.get(raw.mail_account_id) ?? '',
+    contactId: emailToContactId.get(otherEmail) ?? null,
+    dir: raw.direction,
+    subject: raw.subject || '(no subject)',
+    from: raw.from_email || '',
+    to: toList[0] || allRecipients[0]?.email || '',
+    toList,
+    ccList: allRecipients.filter(e => e.role === 'cc').map(e => e.email).filter(Boolean),
+    date: raw.date,
+    read: !!raw.flags?.seen,
+    revert2me: false,
+    r2mArmed: false,
+    draft: !!raw.flags?.draft,
+    body: typeof raw.body_text === 'string' ? raw.body_text : undefined,
+    bodyHtml: typeof raw.body_html === 'string' && raw.body_html.trim() ? raw.body_html : (raw.body_html === null ? null : undefined),
+    snippet: raw.snippet || '',
+    hasAttachments: !!raw.has_attachments,
+    attachmentsMeta: Array.isArray(raw.attachments_meta) ? raw.attachments_meta : null,
+    spam: !!raw.spam,
+    unsubscribeUrl: raw.unsubscribe_url || null,
+    unsubscribeOneClick: !!raw.unsubscribe_one_click,
+    sender: null,
+  };
+}
+// "502 Bad Gateway: {"ok":false,"error":"…"}" → "…" (apiFetch puts the
+// response body in the message); anything else unchanged. v0.0.315.
+function apiErrorMessage(e) {
+  const m = String((e && e.message) || e || '');
+  const i = m.indexOf(': {');
+  if (i >= 0) {
+    try { const j = JSON.parse(m.slice(i + 2)); if (j && (j.message || j.error)) return j.message || j.error; } catch {}
+  }
+  return m;
+}
+const IMAP_SEARCH_IDLE = { q: '', active: false, loading: false, hits: [], cursor: null, errors: [], opening: null };
+
+function GlobalSearchResults({messages, contacts, deletedIds, msgTags, msgMatchesSearch, selectedMsgId, onSelectMsg, onSelectDraft, serverHits=[], serverSearching=false, serverHasMore=false, serverLoadingMore=false, onServerLoadMore, imap=IMAP_SEARCH_IDLE, onImapSearch, onImapMore, onOpenImapHit}) {
   const [filter, setFilter] = useState('all');
 
   const filtered = useMemo(()=>{
@@ -4651,6 +4709,41 @@ function GlobalSearchResults({messages, contacts, deletedIds, msgTags, msgMatche
     });
   },[serverHits,filtered,deletedIds,filter]);
 
+  // v0.0.315 — mail-server hits (IMAP). Shaped for renderSearchRow; the
+  // account + folder go where the snippet usually sits. Hits already
+  // listed above (same DB row) are skipped, and the filter tabs apply.
+  const imapRows = useMemo(()=>{
+    const hits = imap.hits || [];
+    if (!hits.length) return [];
+    const listed = new Set([...filtered.map(m => m.id), ...olderHits.map(m => m.id)]);
+    const emailToContact = new Map();
+    for (const c of contacts) for (const e of (c.emails || [])) if (e) emailToContact.set(e.toLowerCase(), c.id);
+    return hits
+      .filter(h => !(h.dbId && listed.has(h.dbId)))
+      .map(h => {
+        const other = h.direction === 'in' ? h.from.email : ((h.to[0] && h.to[0].email) || '');
+        return {
+          id: h.dbId || `imap:${h.accountId}:${h.folder}:${h.uid}`,
+          imapHit: h,
+          dir: h.direction,
+          subject: h.subject || '(no subject)',
+          from: h.from.name || h.from.email,
+          contactId: emailToContact.get((other || '').toLowerCase()) ?? null,
+          date: h.date,
+          read: h.seen,
+          draft: false,
+          revert2me: false,
+          sender: null,
+          snippet: `${h.accountEmail} · ${h.folder}${h.hasAttachments ? ' · attachment' : ''}`,
+        };
+      })
+      .filter(m => filter === 'in' ? m.dir === 'in'
+        : filter === 'out' ? m.dir === 'out'
+        : filter === 'now' ? (m.dir === 'in' && !m.read)
+        : (filter === 'draft' || filter === 'deleted') ? false
+        : true);
+  },[imap,filtered,olderHits,contacts,filter]);
+
   return (
     <div className="flex flex-col h-full bg-white">
       {/* Filter bar */}
@@ -4667,7 +4760,7 @@ function GlobalSearchResults({messages, contacts, deletedIds, msgTags, msgMatche
       </div>
       {/* Results list */}
       <div className="flex-1 overflow-y-auto scroll">
-        {filtered.length===0 && olderHits.length===0 && !serverSearching && !serverHasMore &&
+        {filtered.length===0 && olderHits.length===0 && !serverSearching && !serverHasMore && !(imap.active && (imap.loading || imapRows.length>0)) &&
           <div className="text-center text-gray-300 text-sm mt-10">No results</div>}
         {filtered.map(msg => renderSearchRow({msg, contacts, deletedIds, selectedMsgId, onSelectMsg, onSelectDraft}))}
         {(olderHits.length>0 || serverSearching || serverHasMore) && (
@@ -4684,6 +4777,38 @@ function GlobalSearchResults({messages, contacts, deletedIds, msgTags, msgMatche
               className="inline-flex items-center gap-1.5 text-xs font-medium text-indigo-600 hover:text-indigo-800 disabled:opacity-60">
               {serverLoadingMore ? <><Spinner size={10}/><span>Loading…</span></> : 'Show more'}
             </button>
+          </div>
+        )}
+        {/* v0.0.315 — search the mail servers themselves (every folder, no
+            date limit). Only on request: it takes a few seconds. */}
+        {imap.active && (
+          <div className="px-3 py-2 border-b border-gray-100 bg-gray-50 flex items-center gap-2">
+            <span className="text-xs font-semibold text-gray-400 uppercase tracking-wider">Mail servers</span>
+            {(imap.loading || imap.opening) && <Spinner size={10}/>}
+          </div>
+        )}
+        {imapRows.map(msg => renderSearchRow({msg, contacts, deletedIds, selectedMsgId, onSelectMsg: () => onOpenImapHit?.(msg.imapHit), onSelectDraft}))}
+        {imap.active && (imap.errors || []).map((er, i) => (
+          <div key={'imap-err-' + i} className="px-4 py-2 text-xs text-red-500">
+            Couldn't search {er.account || 'the mail servers'}: {er.error}
+          </div>
+        ))}
+        {imap.active && !imap.loading && imapRows.length === 0 && (imap.errors || []).length === 0 && (
+          <div className="px-4 py-3 text-xs text-gray-400 text-center">Nothing else found on the mail servers</div>
+        )}
+        {imap.active && imap.cursor && !imap.loading && (
+          <div className="px-4 py-3 text-center">
+            <button onClick={() => onImapMore?.()}
+              className="inline-flex items-center gap-1.5 text-xs font-medium text-indigo-600 hover:text-indigo-800">Show more</button>
+          </div>
+        )}
+        {imap.active && imap.loading && imap.hits.length === 0 && (
+          <div className="px-4 py-3 text-xs text-gray-400 text-center">Searching your mail servers…</div>
+        )}
+        {!imap.active && !serverSearching && (
+          <div className="px-4 py-3 text-center">
+            <button onClick={() => onImapSearch?.()}
+              className="inline-flex items-center gap-1.5 text-xs font-medium text-indigo-600 hover:text-indigo-800">Search mail servers</button>
           </div>
         )}
       </div>
@@ -7035,7 +7160,18 @@ function App({userId, onSignOut}) {
         const messagesWithFlips = applyPendingFlips(combinedMessages, requestedAt);
         setMailAccounts(mail_accounts);
         setContactList(shapedContacts);
-        setMessageList(messagesWithFlips);
+        // v0.0.315 — the snapshot is the newest 500 + drafts, so an older
+        // mail opened from search (DB "Older mail" or a mail-server hit)
+        // isn't in it, and replacing the list closed the mail the user
+        // was reading (auto-sync refreshes every 2 min). Carry the open
+        // mail's entries over; once something else is selected, the next
+        // refresh drops them.
+        setMessageList(prev => {
+          const openId = selMsgRef.current;
+          if (!openId || messagesWithFlips.some(m => m.id === openId)) return messagesWithFlips;
+          const keep = prev.filter(m => m.id === openId);
+          return keep.length ? [...messagesWithFlips, ...keep] : messagesWithFlips;
+        });
         setContactStats(contact_stats || {});
         setTagList(tagList);
         setTagIdByName(idByName);
@@ -7127,6 +7263,10 @@ function App({userId, onSignOut}) {
   const [selContact,   setSelContact]   = useState(null);
   const [mergeContact, setMergeContact] = useState(null);
   const [selMsg,       setSelMsg]       = useState(null);
+  // Read by the /bootstrap apply step (declared above), which keeps the
+  // open mail around when the fresh snapshot doesn't carry it. v0.0.315.
+  const selMsgRef = useRef(null);
+  selMsgRef.current = selMsg;
   // Drop selMsg when the message gets filtered out by the account selector
   // — keeping a stale detail open after toggling accounts looked like a bug.
   useEffect(() => {
@@ -7582,6 +7722,7 @@ function App({userId, onSignOut}) {
   const serverOffsetRef = useRef(0);
   const serverQueryRef  = useRef('');
   useEffect(() => {
+    setImapSearch(IMAP_SEARCH_IDLE); // v0.0.315 — a new query invalidates mail-server results
     if (!searchActive) { serverQueryRef.current = ''; setServerRows([]); setServerHasMore(false); setServerSearching(false); return; }
     const q = (searchQuery || '').trim();
     if (q.length < 2) { serverQueryRef.current = ''; setServerRows([]); setServerHasMore(false); setServerSearching(false); return; }
@@ -7626,50 +7767,54 @@ function App({userId, onSignOut}) {
     }
   }
   const serverHits = useMemo(() => {
-        // Shape the raw rows into the same form messageList items use,
-        // so GlobalSearchResults can render them with the same code.
-        // sender/revert2me aren't reconstructed here (we'd need r2m_state
-        // and per-account display names) — both are search-irrelevant
-        // and the row falls back to a sane default.
-        const accountEmailById = new Map(mailAccounts.map(a => [a.id, (a.email || '').toLowerCase()]));
-        const emailToContactId = new Map();
-        for (const c of contactList) {
-          for (const e of (c.emails || [])) emailToContactId.set(e.toLowerCase(), c.id);
-        }
-        return serverRows.map(raw => {
-          const fromEmail = (raw.from_email || '').toLowerCase();
-          const allRecipients = Array.isArray(raw.to_emails) ? raw.to_emails : [];
-          const toList = allRecipients.filter(e => (e.role || 'to') === 'to').map(e => e.email).filter(Boolean);
-          const firstTo = (toList[0] || allRecipients[0]?.email || '').toLowerCase();
-          const otherEmail = raw.direction === 'in' ? fromEmail : firstTo;
-          const contactId = emailToContactId.get(otherEmail) ?? null;
-          return {
-            id: raw.id,
-            accountId: raw.mail_account_id,
-            accountEmail: accountEmailById.get(raw.mail_account_id) ?? '',
-            contactId,
-            dir: raw.direction,
-            subject: raw.subject || '(no subject)',
-            from: raw.from_email || '',
-            to: toList[0] || allRecipients[0]?.email || '',
-            toList,
-            ccList: allRecipients.filter(e => e.role === 'cc').map(e => e.email).filter(Boolean),
-            date: raw.date,
-            read: !!raw.flags?.seen,
-            revert2me: false,
-            r2mArmed: false,
-            draft: !!raw.flags?.draft,
-            body: typeof raw.body_text === 'string' ? raw.body_text : undefined,
-            bodyHtml: typeof raw.body_html === 'string' && raw.body_html.trim() ? raw.body_html : (raw.body_html === null ? null : undefined),
-            snippet: raw.snippet || '',
-            hasAttachments: !!raw.has_attachments,
-            spam: !!raw.spam,
-            unsubscribeUrl: raw.unsubscribe_url || null,
-            unsubscribeOneClick: !!raw.unsubscribe_one_click,
-            sender: null,
-          };
-        }).filter(m => m.contactId !== null);
+    const maps = searchShapeMaps(mailAccounts, contactList);
+    return serverRows.map(raw => shapeSearchRow(raw, maps)).filter(m => m.contactId !== null);
   }, [serverRows, mailAccounts, contactList]);
+  // v0.0.315 — "Search mail servers": straight from IMAP (backend
+  // imapSearch.ts), only on request — it takes seconds, not milliseconds.
+  // Reset whenever the query changes (see the /search effect above).
+  const [imapSearch, setImapSearch] = useState(IMAP_SEARCH_IDLE);
+  async function runImapSearch(more) {
+    const q = (searchQuery || '').trim();
+    if (q.length < 2) return;
+    const cursor = more ? imapSearch.cursor : null;
+    if (more && !cursor) return;
+    setImapSearch(s => more ? { ...s, loading: true } : { ...IMAP_SEARCH_IDLE, q, active: true, loading: true });
+    try {
+      const r = await apiFetch('/imap-search?q=' + encodeURIComponent(q) + (cursor ? '&cursor=' + encodeURIComponent(cursor) : ''));
+      setImapSearch(s => s.q !== q ? s : {
+        ...s, loading: false,
+        hits: more ? s.hits.concat(r.hits || []) : (r.hits || []),
+        cursor: r.cursor || null,
+        errors: r.errors || [],
+      });
+    } catch (e) {
+      setImapSearch(s => s.q !== q ? s : { ...s, loading: false, errors: [{ account: '', error: apiErrorMessage(e) }] });
+    }
+  }
+  // Opening a mail-server hit stores it (POST /imap-import → a normal
+  // messages row, the existing one if sync already had it), so the
+  // detail pane, attachments, reply and forward all work as usual.
+  async function openImapHit(hit) {
+    if (!hit || imapSearch.opening) return;
+    const key = `${hit.accountId}|${hit.folder}|${hit.uid}`;
+    setImapSearch(s => ({ ...s, opening: key }));
+    try {
+      const r = await apiFetch('/imap-import', { method: 'POST', body: JSON.stringify({
+        accountId: hit.accountId, folder: hit.folder, uid: hit.uid, uidValidity: hit.uidValidity,
+      }) });
+      const row = r && r.message;
+      if (!row) throw new Error('no mail returned');
+      const shaped = shapeSearchRow(row, searchShapeMaps(mailAccounts, contactList));
+      setMessageList(prev => prev.some(m => m.id === shaped.id) ? prev : [...prev, shaped]);
+      setImapSearch(s => ({ ...s, opening: null,
+        hits: s.hits.map(h => `${h.accountId}|${h.folder}|${h.uid}` === key ? { ...h, dbId: row.id } : h) }));
+      handleSelectMsg(row.id);
+    } catch (e) {
+      setImapSearch(s => ({ ...s, opening: null }));
+      setActionToast('Could not open this mail: ' + apiErrorMessage(e));
+    }
+  }
   const userMenuRef = useRef(null);
   const [signatures,       setSignatures]       = useState(()=>bootstrapCache?.signatures ?? []);
   const [accountSigs,      setAccountSigs]      = useState(()=>bootstrapCache?.accountSigs ?? {});
@@ -9755,6 +9900,7 @@ function App({userId, onSignOut}) {
       msgTags={msgTags} msgMatchesSearch={msgMatchesSearch}
       serverHits={serverHits} serverSearching={serverSearching}
       serverHasMore={serverHasMore} serverLoadingMore={serverLoadingMore} onServerLoadMore={loadMoreServerHits}
+      imap={imapSearch} onImapSearch={() => runImapSearch(false)} onImapMore={() => runImapSearch(true)} onOpenImapHit={openImapHit}
       selectedMsgId={selMsg}
       onSelectMsg={(id)=>{
         // v0.0.282 — "Older mail" hits live in serverHits, NOT in

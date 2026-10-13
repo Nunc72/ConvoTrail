@@ -1071,6 +1071,81 @@ const INSERT_CHUNK_SIZE = 10;
 // the PG statement_timeout. ON CONFLICT DO NOTHING handles the
 // (mail_account_id, folder, uid, uidvalidity) unique constraint so two
 // concurrent sync runs can't blow up the batch on a race.
+// v0.0.315 — store one mail by UID, for opening a mail-server search hit
+// (imapSearch.ts) that sync never pulled. Same buildMessageRow +
+// bulkInsertMessages path as the sync, so body, attachments, reply and
+// flags all work on it like on any other mail. No contact extraction —
+// an old hit shouldn't resurrect contacts — and the 2000-mail cap still
+// holds: the next sync's auto-purge archives it again if it's among the
+// oldest. Returns the row id (also when it was already stored). Problems
+// on the mail-server side come out as ImapImportError (message is fit for
+// the user); anything else is a DB / internal error.
+export class ImapImportError extends Error {}
+export async function importMessageByUid(
+  accountId: string,
+  folder: string,
+  uid: number,
+  uidValidity: string,
+  userKey?: Buffer,
+): Promise<string> {
+  const pool = requirePool();
+  const findRow = async () => (await pool.query<{ id: string }>(
+    `SELECT id FROM messages
+      WHERE mail_account_id = $1 AND folder = $2 AND uidvalidity = $3 AND uid = $4`,
+    [accountId, folder, uidValidity, uid],
+  )).rows[0]?.id ?? null;
+  const existing = await findRow();
+  if (existing) return existing;
+
+  const acc = (await pool.query<{
+    id: string; user_id: string; email: string;
+    imap_host: string; imap_port: number; imap_user: string; imap_cred_enc: Buffer | null;
+  }>(
+    `SELECT id, user_id, email, imap_host, imap_port, imap_user, imap_cred_enc
+       FROM mail_accounts WHERE id = $1`,
+    [accountId],
+  )).rows[0];
+  if (!acc) throw new ImapImportError("mail account not found");
+  if (!acc.imap_cred_enc) throw new ImapImportError("no stored IMAP password for this account");
+
+  const client = new ImapFlow({
+    host: acc.imap_host, port: acc.imap_port, secure: true,
+    auth: { user: acc.imap_user, pass: decrypt(acc.imap_cred_enc) },
+    logger: false, socketTimeout: 20_000,
+  });
+  let row: Record<string, unknown> | null = null;
+  try {
+    await client.connect();
+    // Folder pins for direction, exactly as syncAccount sets them.
+    const boxes = await client.list();
+    const allMail = boxes.find(m => m.specialUse === "\\All");
+    const inbox = boxes.find(m => m.specialUse === "\\Inbox") || boxes.find(m => m.path.toUpperCase() === "INBOX");
+    const sent = boxes.find(m => m.specialUse === "\\Sent");
+    const inboxPath = allMail ? undefined : inbox?.path;
+    const sentPath = allMail ? undefined : sent?.path;
+
+    const lock = await client.getMailboxLock(folder, { readOnly: true });
+    try {
+      const uv = BigInt((client.mailbox as { uidValidity: bigint | number }).uidValidity);
+      if (uv.toString() !== uidValidity) throw new ImapImportError("the mailbox changed since the search — search again");
+      for await (const msg of client.fetch([uid], { envelope: true, flags: true, source: true, internalDate: true, uid: true }, { uid: true })) {
+        row = await buildMessageRow(msg, acc.id, acc.user_id, folder, uv, acc.email.toLowerCase(), userKey, inboxPath, sentPath);
+      }
+      if (!row) throw new ImapImportError("this mail is no longer on the server");
+    } finally {
+      lock.release();
+    }
+  } catch (e) {
+    throw e instanceof ImapImportError ? e : new ImapImportError(`mail server: ${e instanceof Error ? e.message : String(e)}`);
+  } finally {
+    try { await client.logout(); } catch { client.close(); }
+  }
+  await bulkInsertMessages(pool, [row]);
+  const id = await findRow();
+  if (!id) throw new Error("storing the mail failed");
+  return id;
+}
+
 async function bulkInsertMessages(pool: pg.Pool, rows: Record<string, unknown>[]): Promise<void> {
   for (let i = 0; i < rows.length; i += INSERT_CHUNK_SIZE) {
     const chunk = rows.slice(i, i + INSERT_CHUNK_SIZE);

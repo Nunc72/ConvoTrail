@@ -3,6 +3,9 @@ import { authPreHandler } from "../auth.js";
 import { maybeCleanupAuditLog } from "../audit.js";
 import { sendTransientOr500 } from "../errors.js";
 import { requirePool } from "../db.js";
+import { imapSearchForUser } from "../imapSearch.js";
+import { importMessageByUid, ImapImportError } from "../sync.js";
+import { parseUserKeyHeader } from "../userCrypto.js";
 
 // pg returns timestamptz columns as JS Date objects, but supabase-js (which
 // previously powered /bootstrap) returned them as ISO 8601 strings — which
@@ -534,6 +537,65 @@ export async function registerDataRoutes(app: FastifyInstance) {
       return sendTransientOr500(reply, e);
     }
   });
+
+  // ─── Search the mail servers (v0.0.315) ─────────────────────────────────
+  // /search only sees what sync stored; this asks the IMAP servers
+  // themselves, every folder, no date limit (see imapSearch.ts). Fired
+  // explicitly from the "Search mail servers" link — it takes seconds,
+  // not milliseconds. `cursor` pages ("Show more"); `errors` lists the
+  // accounts that couldn't be searched, next to the hits from the rest.
+  app.get<{ Querystring: { q?: string; cursor?: string } }>("/imap-search", auth, async (req, reply) => {
+    const q = (req.query.q || "").trim();
+    if (q.length < 2) return { hits: [], cursor: null, errors: [] };
+    if (q.length > 200) return reply.badRequest("search term too long");
+    try {
+      return await imapSearchForUser(req.authUser!.id, q, req.query.cursor);
+    } catch (e) {
+      return sendTransientOr500(reply, e);
+    }
+  });
+
+  // Open a mail-server hit: store it (importMessageByUid, same row shape
+  // as sync) and return it in the /search row shape, so the FE treats it
+  // like any other mail. Same locked-state guard as /sync: with
+  // encryption on, storing without X-User-Key would leave plaintext rows.
+  app.post<{ Body: { accountId?: string; folder?: string; uid?: number; uidValidity?: string } }>(
+    "/imap-import", auth, async (req, reply) => {
+      const { accountId, folder, uid, uidValidity } = req.body || {};
+      if (!accountId || !folder || !Number.isInteger(uid) || !uidValidity) return reply.badRequest("accountId, folder, uid and uidValidity are required");
+      const pool = requirePool();
+      const userId = req.authUser!.id;
+      try {
+        const owner = await pool.query<{ user_id: string }>(`SELECT user_id FROM mail_accounts WHERE id = $1`, [accountId]);
+        if (owner.rows.length === 0) return reply.notFound();
+        if (owner.rows[0].user_id !== userId) return reply.forbidden();
+        const userKey = parseUserKeyHeader(req.headers["x-user-key"]);
+        if (!userKey) {
+          const hasCrypto = await pool.query<{ exists: boolean }>(
+            `SELECT EXISTS(SELECT 1 FROM user_crypto WHERE user_id = $1) AS exists`, [userId]);
+          if (hasCrypto.rows[0]?.exists) {
+            return reply.code(423).send({ ok: false, error: "locked", message: "Unlock the passphrase to open this mail." });
+          }
+        }
+        const id = await importMessageByUid(accountId, folder, uid as number, uidValidity, userKey ?? undefined);
+        const r = await pool.query(
+          `SELECT id, mail_account_id, folder, uid, message_id, thread_id,
+                  from_email, from_name, to_emails, subject, snippet,
+                  body_text, body_html, date, flags, direction,
+                  deleted_at, spam, has_attachments, attachments_meta,
+                  unsubscribe_url, unsubscribe_one_click
+             FROM messages WHERE id = $1 AND user_id = $2`,
+          [id, userId],
+        );
+        if (r.rows.length === 0) return reply.notFound();
+        return { message: rowsWithIsoDates(r.rows)[0] };
+      } catch (e) {
+        // Mail-server problems (mail gone, mailbox changed, login) are the
+        // user's to see; DB hiccups keep the usual 503 path.
+        if (e instanceof ImapImportError) return reply.code(502).send({ ok: false, error: e.message });
+        return sendTransientOr500(reply, e);
+      }
+    });
 
   // ─── Contacts (with all emails) ─────────────────────────────────────────
   // Standalone endpoint — currently the FE only reads contacts via
