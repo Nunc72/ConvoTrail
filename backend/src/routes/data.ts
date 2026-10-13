@@ -223,25 +223,36 @@ export async function registerDataRoutes(app: FastifyInstance) {
       // fires when the message itself has NULL from_email_blind, so it
       // never overrides a blind match and never reads plaintext for
       // rows that have an encrypted twin.
+      // v0.0.318: archived (auto-purged) mail counts too. Excluding it hid
+      // every contact whose mails all aged past the 2000-mail cap — 169 on
+      // prod, Myriam among them — although the contact itself never went
+      // away; such contacts now sit at the bottom of the list again.
       const cae = await pool.query<{ contact_id: string; account_emails: string[] }>(
         `WITH per_msg AS (
            SELECT LOWER(ma.email) AS account_email, ce.contact_id
              FROM messages m
              JOIN mail_accounts ma ON ma.id = m.mail_account_id
-             JOIN contact_emails ce ON
-               ce.email_blind = m.from_email_blind
-               OR (m.from_email_blind IS NULL AND LOWER(ce.email) = LOWER(m.from_email))
+             JOIN contact_emails ce ON ce.user_id = $1 AND ce.email_blind = m.from_email_blind
             WHERE m.user_id = $1
-              AND NOT COALESCE((m.flags->>'auto_purged')::bool, false)
+              AND m.from_email_blind IS NOT NULL
+            UNION ALL
+           -- v0.0.318: plaintext sender match as its own branch. As an OR
+           -- inside the join above it forced a nested loop over messages ×
+           -- contact_emails — 3.3 s on every /bootstrap for Rik's 4k mails.
+           SELECT LOWER(ma.email) AS account_email, ce.contact_id
+             FROM messages m
+             JOIN mail_accounts ma ON ma.id = m.mail_account_id
+             JOIN contact_emails ce ON ce.user_id = $1 AND LOWER(ce.email) = LOWER(m.from_email)
+            WHERE m.user_id = $1
+              AND m.from_email_blind IS NULL
               AND m.from_email IS NOT NULL AND m.from_email <> ''
             UNION ALL
            SELECT LOWER(ma.email) AS account_email, ce.contact_id
              FROM messages m
              JOIN mail_accounts ma ON ma.id = m.mail_account_id
              CROSS JOIN LATERAL unnest(m.to_emails_blind) tb
-             JOIN contact_emails ce ON ce.email_blind = tb
+             JOIN contact_emails ce ON ce.user_id = $1 AND ce.email_blind = tb
             WHERE m.user_id = $1
-              AND NOT COALESCE((m.flags->>'auto_purged')::bool, false)
               AND m.to_emails_blind IS NOT NULL
             UNION ALL
            -- Plaintext to-list fallback: same conditional as the
@@ -251,9 +262,8 @@ export async function registerDataRoutes(app: FastifyInstance) {
              FROM messages m
              JOIN mail_accounts ma ON ma.id = m.mail_account_id
              CROSS JOIN LATERAL jsonb_array_elements(m.to_emails) elem
-             JOIN contact_emails ce ON LOWER(ce.email) = LOWER(elem->>'email')
+             JOIN contact_emails ce ON ce.user_id = $1 AND LOWER(ce.email) = LOWER(elem->>'email')
             WHERE m.user_id = $1
-              AND NOT COALESCE((m.flags->>'auto_purged')::bool, false)
               AND m.to_emails_blind IS NULL
               AND jsonb_typeof(m.to_emails) = 'array'
          )
@@ -307,7 +317,7 @@ export async function registerDataRoutes(app: FastifyInstance) {
         baseCte + `
         SELECT
           contact_id,
-          MAX(date) FILTER (WHERE deleted_at IS NULL AND NOT COALESCE((flags->>'draft')::bool, false)) AS latest_date,
+          MAX(date) FILTER (WHERE (deleted_at IS NULL OR COALESCE((flags->>'auto_purged')::bool, false)) AND NOT COALESCE((flags->>'draft')::bool, false)) AS latest_date,
           COUNT(*) FILTER (
             WHERE deleted_at IS NULL
               AND direction = 'in'

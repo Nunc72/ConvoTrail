@@ -1542,88 +1542,100 @@ async function upsertContacts(
   const emails = [...addrs.keys()];
   if (emails.length === 0) return 0;
 
-  // v0.0.268 — restore the plaintext-existing-check path for instances
-  // that haven't set up encryption (prod was deployed v0.0.258 without
-  // ever running the Phase 1.5 setup, so userKey never flows through
-  // sync). The earlier hard `if (!userKey) return 0` silently dropped
-  // every new sender on those instances — including veraramer's
-  // "Fwd: een goed jaar!" that lit this up. We now branch:
-  //   • userKey present (staging): blind-only match, same as v0.0.255.
-  //   • userKey absent  (prod, pre-encryption): plaintext (LOWER) match
-  //     against the same column. _enc + blind columns stay NULL for
-  //     these rows; the existing backfill route picks them up the
-  //     moment the user sets up encryption.
-  let toCreate: string[];
+  // Blind indexes up front: async crypto, no need to hold the lock for it.
+  const blindByEmail = new Map<string, Buffer>();
   if (userKey) {
-    const blindByEmail = new Map<string, Buffer>();
     for (const email of emails) {
       const b = await blindIndexForUser(email, userKey);
       if (b) blindByEmail.set(email, b);
     }
-    const blinds = [...blindByEmail.values()];
-    if (blinds.length === 0) return 0;
-    const existingR = await pool.query<{ email_blind: Buffer | null }>(
-      `SELECT email_blind FROM contact_emails
-        WHERE user_id = $1 AND email_blind = ANY($2::bytea[])`,
-      [userId, blinds],
-    );
-    const haveBlinds = new Set(
-      existingR.rows.map(r => r.email_blind?.toString("base64")).filter(Boolean) as string[],
-    );
-    toCreate = emails.filter(e => {
-      const b = blindByEmail.get(e);
-      return b && !haveBlinds.has(b.toString("base64"));
-    });
-  } else {
-    const lowered = emails.map(e => e.toLowerCase());
-    const existingR = await pool.query<{ email: string }>(
-      `SELECT email FROM contact_emails
-        WHERE user_id = $1 AND LOWER(email) = ANY($2::text[])`,
-      [userId, lowered],
-    );
-    const haveEmails = new Set(existingR.rows.map(r => r.email.toLowerCase()));
-    toCreate = emails.filter(e => !haveEmails.has(e.toLowerCase()));
+    if (blindByEmail.size === 0) return 0;
   }
-  if (toCreate.length === 0) return 0;
 
-  // Phase 1.5b/c — when the user is unlocked, fill the encrypted twins
-  // for name/org and the blind index + ciphertext for email. Plaintext
-  // stays alongside (dual-write). Insert goes through pg-pool because
-  // supabase-js mangles Node Buffers as JSON.
-  const NOREPLY_LOCAL_RE = /(noreply|no-reply)/i;
+  // v0.0.318 — one contact writer per user at a time. "Get mail" syncs
+  // every account in parallel and each sync's orphan pass (3a) sees the
+  // same contact-less sender; check-then-insert raced and every account
+  // created its own contact (33 duplicated addresses on prod, Myriam ×3).
+  // The transaction-scoped advisory lock makes the next sync wait, then
+  // see the rows the first one just wrote.
+  const client = await pool.connect();
   let created = 0;
-  for (const email of toCreate) {
-    const localPart = email.split("@")[0] ?? "";
-    const name = guessNameFromEmail(email, addrs.get(email) ?? null);
-    const isNoReply = NOREPLY_LOCAL_RE.test(localPart);
-    let nameEnc: Buffer | null = null;
-    let emailBlind: Buffer | null = null;
-    let emailEnc: Buffer | null = null;
+  try {
+    await client.query("BEGIN");
+    await client.query("SELECT pg_advisory_xact_lock(hashtext($1))", [`contacts:${userId}`]);
+
+    let toCreate: string[];
     if (userKey) {
-      [nameEnc, emailBlind, emailEnc] = await Promise.all([
-        encryptForUser(name,    userKey),
-        blindIndexForUser(email, userKey),
-        encryptForUser(email,   userKey),
-      ]);
-    }
-    try {
-      const cRes = await pool.query<{ id: string }>(
-        `INSERT INTO contacts (user_id, name, primary_email, is_no_reply, name_enc)
-              VALUES ($1, $2, $3, $4, $5)
-            RETURNING id`,
-        [userId, name, email, isNoReply, nameEnc],
+      const blinds = [...blindByEmail.values()];
+      const existingR = await client.query<{ email_blind: Buffer | null }>(
+        `SELECT email_blind FROM contact_emails
+          WHERE user_id = $1 AND email_blind = ANY($2::bytea[])`,
+        [userId, blinds],
       );
-      const cid = cRes.rows[0]?.id;
-      if (!cid) continue;
-      await pool.query(
-        `INSERT INTO contact_emails (contact_id, user_id, email, email_blind, email_enc)
-              VALUES ($1, $2, $3, $4, $5)`,
-        [cid, userId, email, emailBlind, emailEnc],
+      const haveBlinds = new Set(
+        existingR.rows.map(r => r.email_blind?.toString("base64")).filter(Boolean) as string[],
       );
-      created++;
-    } catch (e) {
-      console.warn(`[sync] upsertContacts: failed for ${email}:`, e instanceof Error ? e.message : e);
+      toCreate = emails.filter(e => {
+        const b = blindByEmail.get(e);
+        return b && !haveBlinds.has(b.toString("base64"));
+      });
+    } else {
+      const lowered = emails.map(e => e.toLowerCase());
+      const existingR = await client.query<{ email: string }>(
+        `SELECT email FROM contact_emails
+          WHERE user_id = $1 AND LOWER(email) = ANY($2::text[])`,
+        [userId, lowered],
+      );
+      const haveEmails = new Set(existingR.rows.map(r => r.email.toLowerCase()));
+      toCreate = emails.filter(e => !haveEmails.has(e.toLowerCase()));
     }
+
+    const NOREPLY_LOCAL_RE = /(noreply|no-reply)/i;
+    for (const email of toCreate) {
+      const localPart = email.split("@")[0] ?? "";
+      const name = guessNameFromEmail(email, addrs.get(email) ?? null);
+      const isNoReply = NOREPLY_LOCAL_RE.test(localPart);
+      let nameEnc: Buffer | null = null;
+      let emailBlind: Buffer | null = null;
+      let emailEnc: Buffer | null = null;
+      if (userKey) {
+        [nameEnc, emailBlind, emailEnc] = await Promise.all([
+          encryptForUser(name,    userKey),
+          blindIndexForUser(email, userKey),
+          encryptForUser(email,   userKey),
+        ]);
+      }
+      // A savepoint per contact keeps one failed insert from aborting
+      // the whole transaction (same "skip and go on" as before).
+      await client.query("SAVEPOINT one_contact");
+      try {
+        const cRes = await client.query<{ id: string }>(
+          `INSERT INTO contacts (user_id, name, primary_email, is_no_reply, name_enc)
+                VALUES ($1, $2, $3, $4, $5)
+              RETURNING id`,
+          [userId, name, email, isNoReply, nameEnc],
+        );
+        const cid = cRes.rows[0]?.id;
+        if (cid) {
+          await client.query(
+            `INSERT INTO contact_emails (contact_id, user_id, email, email_blind, email_enc)
+                  VALUES ($1, $2, $3, $4, $5)`,
+            [cid, userId, email, emailBlind, emailEnc],
+          );
+          created++;
+        }
+        await client.query("RELEASE SAVEPOINT one_contact");
+      } catch (e) {
+        await client.query("ROLLBACK TO SAVEPOINT one_contact");
+        console.warn(`[sync] upsertContacts: failed for ${email}:`, e instanceof Error ? e.message : e);
+      }
+    }
+    await client.query("COMMIT");
+  } catch (e) {
+    await client.query("ROLLBACK").catch(() => {});
+    throw e;
+  } finally {
+    client.release();
   }
   return created;
 }
