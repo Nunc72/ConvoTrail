@@ -1532,7 +1532,8 @@ function parseUnsubscribeHeaders(headers: Map<string, unknown> | undefined): { u
   return { url: null, oneClick: false };
 }
 
-async function upsertContacts(
+// Also used by the drafts routes for a draft's addressee (v0.0.319).
+export async function upsertContacts(
   userId: string,
   addrs: Map<string, string | null>,
   userKey?: Buffer,

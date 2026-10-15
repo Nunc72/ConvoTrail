@@ -19,6 +19,10 @@
 //
 // We deliberately do NOT call this on Convooz soft-deletes — the mail
 // still exists, so the contact should remain visible.
+//
+// v0.0.319: an address in one of the user's drafts counts too. Saving a
+// draft to a new address creates its contact before any mail exists;
+// once the draft is sent or deleted the normal rule applies again.
 import { requirePool } from "./db.js";
 
 export async function cleanupOrphanContacts(userId: string): Promise<number> {
@@ -41,6 +45,18 @@ export async function cleanupOrphanContacts(userId: string): Promise<number> {
                    )
                  )
            WHERE ce.contact_id = c.id
+        )
+        AND NOT EXISTS (
+          SELECT 1
+            FROM contact_emails ce
+            JOIN drafts d ON d.user_id = c.user_id
+            CROSS JOIN LATERAL jsonb_array_elements(
+                     COALESCE(d.to_emails, '[]'::jsonb)
+                  || COALESCE(d.cc_emails, '[]'::jsonb)
+                  || COALESCE(d.bcc_emails, '[]'::jsonb)
+                 ) de
+           WHERE ce.contact_id = c.id
+             AND LOWER(btrim(de->>'email')) = LOWER(ce.email)
         )`,
     [userId],
   );

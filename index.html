@@ -210,7 +210,7 @@
        polish change is picked up by every browser as soon as the version
        is bumped — no manual cache-busters needed. Keep ?v= here in sync
        with APP_VERSION below at every deploy. -->
-  <link rel="stylesheet" href="polish.css?v=0.0.318"/>
+  <link rel="stylesheet" href="polish.css?v=0.0.319"/>
 </head>
 <body>
 <div id="root">
@@ -449,7 +449,7 @@ window.CONVOOZ_CRYPTO = CONVOOZ_CRYPTO;
 
 // ─── Constants ───────────────────────────────────────────────────────────────
 
-const APP_VERSION = "0.0.318"; // bumped on every deploy — keep in sync with version.json AND with the ?v= on polish.css above
+const APP_VERSION = "0.0.319"; // bumped on every deploy — keep in sync with version.json AND with the ?v= on polish.css above
 
 // ─── Backend + Supabase config ───────────────────────────────────────────────
 // Two stacks: prod (live testers) and staging (where new features land first).
@@ -2435,36 +2435,6 @@ function ComposePane({replyTo, replyKind='reply', toContact, draft, initTo:initT
       <div className={isMobile?'flex-1 min-h-0 overflow-y-auto scroll flex flex-col':'contents'}
         style={isMobile?{WebkitOverflowScrolling:'touch'}:{display:'contents'}}>
       <div style={isMobile?{minHeight:'calc(100% + 1px)',display:'flex',flexDirection:'column'}:{display:'contents'}}>
-      {/* From — only shown when multiple accounts active */}
-      {multiFrom&&<div className="px-4 py-2 border-b border-gray-100 flex-shrink-0">
-        <div className="flex items-center gap-2 text-sm">
-          <span className="text-gray-400 w-10 flex-shrink-0">From:</span>
-          <div className="flex-1 relative" ref={fromDropRef}>
-            <div className="flex items-center gap-1">
-              <span className="flex-1 text-gray-800 truncate min-w-0">{from}</span>
-              <button onClick={()=>setShowFromDrop(d=>!d)}
-                className={`flex-shrink-0 w-5 h-5 flex items-center justify-center rounded transition-colors ${showFromDrop?"bg-indigo-100 text-indigo-600":"text-gray-300 hover:text-gray-500"}`}>
-                <svg width="10" height="10" viewBox="0 0 10 10" fill="none">
-                  <path d="M2 3.5L5 6.5L8 3.5" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
-                </svg>
-              </button>
-            </div>
-            {showFromDrop&&(
-              <div className="absolute left-0 top-full mt-1 z-50 bg-white border border-gray-200 rounded-lg shadow-lg overflow-hidden" style={{minWidth:240}}>
-                <div className="px-3 py-1.5 text-xs text-gray-400 border-b border-gray-100 font-medium">Send from</div>
-                {selAccounts.map((acc,i)=>(
-                  <button key={acc} onClick={()=>{setFrom(acc);setShowFromDrop(false);}}
-                    className={`w-full text-left px-3 py-2 text-sm flex items-center gap-2 hover:bg-indigo-50 ${acc===from?"bg-indigo-50 text-indigo-700":"text-gray-700"}`}>
-                    <span className={`w-1.5 h-1.5 rounded-full flex-shrink-0 ${acc===from?"bg-indigo-500":"bg-gray-300"}`}/>
-                    <span className="truncate">{acc}</span>
-                    {i===0&&<span className="ml-auto text-xs text-gray-400">primary</span>}
-                  </button>
-                ))}
-              </div>
-            )}
-          </div>
-        </div>
-      </div>}
       {/* To */}
       <div className="px-4 py-2 border-b border-gray-100 flex-shrink-0">
         <div className="flex items-center gap-2 text-sm">
@@ -2527,6 +2497,37 @@ function ComposePane({replyTo, replyKind='reply', toContact, draft, initTo:initT
               onBlur={()=>setTimeout(()=>setAcField(f=>f==='bcc'?null:f),150)}
               onKeyDown={handleAcKey}/>
             {renderAcDropdown('bcc')}
+          </div>
+        </div>
+      </div>}
+      {/* From — only shown when multiple accounts active. Below the
+          recipients since v0.0.319 (was above To). */}
+      {multiFrom&&<div className="px-4 py-2 border-b border-gray-100 flex-shrink-0">
+        <div className="flex items-center gap-2 text-sm">
+          <span className="text-gray-400 w-10 flex-shrink-0">From:</span>
+          <div className="flex-1 relative" ref={fromDropRef}>
+            <div className="flex items-center gap-1">
+              <span className="flex-1 text-gray-800 truncate min-w-0">{from}</span>
+              <button onClick={()=>setShowFromDrop(d=>!d)}
+                className={`flex-shrink-0 w-5 h-5 flex items-center justify-center rounded transition-colors ${showFromDrop?"bg-indigo-100 text-indigo-600":"text-gray-300 hover:text-gray-500"}`}>
+                <svg width="10" height="10" viewBox="0 0 10 10" fill="none">
+                  <path d="M2 3.5L5 6.5L8 3.5" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
+                </svg>
+              </button>
+            </div>
+            {showFromDrop&&(
+              <div className="absolute left-0 top-full mt-1 z-50 bg-white border border-gray-200 rounded-lg shadow-lg overflow-hidden" style={{minWidth:240}}>
+                <div className="px-3 py-1.5 text-xs text-gray-400 border-b border-gray-100 font-medium">Send from</div>
+                {selAccounts.map((acc,i)=>(
+                  <button key={acc} onClick={()=>{setFrom(acc);setShowFromDrop(false);}}
+                    className={`w-full text-left px-3 py-2 text-sm flex items-center gap-2 hover:bg-indigo-50 ${acc===from?"bg-indigo-50 text-indigo-700":"text-gray-700"}`}>
+                    <span className={`w-1.5 h-1.5 rounded-full flex-shrink-0 ${acc===from?"bg-indigo-500":"bg-gray-300"}`}/>
+                    <span className="truncate">{acc}</span>
+                    {i===0&&<span className="ml-auto text-xs text-gray-400">primary</span>}
+                  </button>
+                ))}
+              </div>
+            )}
           </div>
         </div>
       </div>}
@@ -4152,6 +4153,8 @@ function ThreadColumn({contact,allMsgs,deletedIds,selectedMsgId,msgTags,onSelect
       </div>
     </div>
   );
+  // The "Addressee unknown" card (v0.0.319) has nothing to edit or flag.
+  const editable = !contact.isVirtual;
 
   if (isMobile) {
     return (
@@ -4174,17 +4177,17 @@ function ThreadColumn({contact,allMsgs,deletedIds,selectedMsgId,msgTags,onSelect
         <div className="px-5 pt-3 pb-2 border-b border-gray-200 flex-shrink-0 bg-gray-50">
           {/* Name row: avatar + name (clickable → edit) + flags chevron + new msg button */}
           <div className="flex items-center gap-2">
-            <div className="flex items-center gap-2 cursor-pointer min-w-0 flex-1"
+            <div className={`flex items-center gap-2 min-w-0 flex-1 ${editable?'cursor-pointer':''}`}
               onMouseEnter={()=>setNameHover(true)} onMouseLeave={()=>setNameHover(false)}
-              onClick={onEditContact}>
+              onClick={editable?onEditContact:undefined}>
               <Avatar contact={contact} size={28}/>
-              <span className="font-semibold text-gray-900 text-base leading-snug hover:text-indigo-700 transition-colors truncate">{contact.name}</span>
-              <span className="flex items-center justify-center text-gray-400 flex-shrink-0" style={{padding:2}}>
+              <span className={`font-semibold text-gray-900 text-base leading-snug transition-colors truncate ${editable?'hover:text-indigo-700':''}`}>{contact.name}</span>
+              {editable&&<span className="flex items-center justify-center text-gray-400 flex-shrink-0" style={{padding:2}}>
                 <PencilIcon size={11}/>
-              </span>
+              </span>}
             </div>
             {/* Flags chevron pulldown */}
-            <div className="relative flex-shrink-0" ref={flagsMenuRef}>
+            {editable&&<div className="relative flex-shrink-0" ref={flagsMenuRef}>
               <button onClick={()=>setFlagsOpen(v=>!v)}
                 className="w-7 h-7 flex items-center justify-center rounded-full hover:bg-gray-200 text-gray-400"
                 title="Contact flags">
@@ -4206,7 +4209,7 @@ function ThreadColumn({contact,allMsgs,deletedIds,selectedMsgId,msgTags,onSelect
                   })}
                 </div>
               )}
-            </div>
+            </div>}
             <button onClick={onNewMsg} title="New message"
               className="w-7 h-7 flex items-center justify-center rounded-full bg-indigo-600 hover:bg-indigo-700 text-white flex-shrink-0">
               <PlusIcon size={12}/>
@@ -4301,16 +4304,16 @@ function ThreadColumn({contact,allMsgs,deletedIds,selectedMsgId,msgTags,onSelect
           <Avatar contact={contact} size={80}/>
           <div className="min-w-0 flex-1 pt-1">
             <div className="flex items-center gap-1.5">
-              <div className="flex items-center gap-1.5 cursor-pointer flex-1 min-w-0"
+              <div className={`flex items-center gap-1.5 flex-1 min-w-0 ${editable?'cursor-pointer':''}`}
                 onMouseEnter={()=>setNameHover(true)} onMouseLeave={()=>setNameHover(false)}
-                onClick={onEditContact}>
-                <span className="font-semibold text-gray-900 text-base leading-snug hover:text-indigo-700 transition-colors truncate">{contact.name}</span>
-                <span className={`flex items-center justify-center text-gray-400 transition-opacity flex-shrink-0 ${nameHover?"opacity-100":"opacity-0"}`}
+                onClick={editable?onEditContact:undefined}>
+                <span className={`font-semibold text-gray-900 text-base leading-snug transition-colors truncate ${editable?'hover:text-indigo-700':''}`}>{contact.name}</span>
+                {editable&&<span className={`flex items-center justify-center text-gray-400 transition-opacity flex-shrink-0 ${nameHover?"opacity-100":"opacity-0"}`}
                   style={{padding:2}}>
                   <PencilIcon size={11}/>
-                </span>
+                </span>}
               </div>
-              {[['News','isNews'],['Noreply','isNoReply'],['Mute','isMuted']].map(([label,key])=>{
+              {editable&&[['News','isNews'],['Noreply','isNoReply'],['Mute','isMuted']].map(([label,key])=>{
                 const on=!!contact[key];
                 const cls=on?'bg-indigo-50 border-indigo-300 text-indigo-600'
                   :'border-gray-200 text-gray-300 hover:border-gray-300 hover:text-gray-500';
@@ -4686,6 +4689,23 @@ const IMAP_SEARCH_IDLE = { q: '', active: false, loading: false, hits: [], curso
 // every "Show more" the next TRAIL_PAGE.
 const TRAIL_PAGE = 50;
 const TRAIL_DEFAULT = { loaded: 0, dbMore: false, shown: TRAIL_PAGE, serverCursor: null, serverDone: false, busy: null, serverErrors: [] };
+// v0.0.319 — a draft is filed under its addressee's card: the first valid
+// To address, else CC, else BCC. Same rule as draftCardEmail() in
+// backend/src/routes/drafts.ts, which creates that contact on save. A
+// draft without any address goes to the "Addressee unknown" card, which
+// exists only here in the FE and only while such drafts exist.
+const ADDRESSEE_UNKNOWN_ID = 'addressee-unknown';
+const isVirtualContactId = id => id === ADDRESSEE_UNKNOWN_ID;
+const EMAIL_ADDR_RE = /^[^\s@,;<>]+@[^\s@,;<>]+\.[^\s@,;<>]+$/;
+function draftCardEmail(...lists) {
+  for (const list of lists) {
+    for (const e of list || []) {
+      const addr = ((e && e.email) || '').trim().toLowerCase();
+      if (EMAIL_ADDR_RE.test(addr)) return addr;
+    }
+  }
+  return null;
+}
 
 function GlobalSearchResults({messages, contacts, deletedIds, msgTags, msgMatchesSearch, selectedMsgId, onSelectMsg, onSelectDraft, serverHits=[], serverSearching=false, serverHasMore=false, serverLoadingMore=false, onServerLoadMore, imap=IMAP_SEARCH_IDLE, onImapSearch, onImapMore, onOpenImapHit, canSearchServers=true}) {
   const [filter, setFilter] = useState('all');
@@ -5008,9 +5028,10 @@ function LeftColumn({contactMeta, archivedContacts, selectedId, mergeId, onSelec
       // "actionable first" group to the tail, and the row the user
       // just clicked visually jumps under their cursor.
       if (searchQ) return (a.contact.name || '').localeCompare(b.contact.name || '');
-      // Actionable contacts (badge > 0) first; within each group preserve original order
-      const ba = a.unread + (a.r2mCount||0);
-      const bb = b.unread + (b.r2mCount||0);
+      // Actionable contacts (badge > 0, or an open draft — v0.0.319) first;
+      // within each group preserve original order
+      const ba = a.unread + (a.r2mCount||0) + (a.hasDraft ? 1 : 0);
+      const bb = b.unread + (b.r2mCount||0) + (b.hasDraft ? 1 : 0);
       if((ba>0)!==(bb>0)) return ba>0 ? -1 : 1;
       return 0;
     });
@@ -7008,11 +7029,14 @@ function App({userId, onSignOut}) {
           });
         }
 
-        // Shape drafts into the same shape as messages (dir='out', draft=true)
+        // Shape drafts into the same shape as messages (dir='out', draft=true).
+        // v0.0.319: filed under the addressee's card (draftCardEmail), and
+        // none are dropped any more — a draft without an address, or whose
+        // address has no contact, goes to the "Addressee unknown" card.
         const shapedDrafts = (drafts || []).map(d => {
           const accountEmail = accountEmailById.get(d.mail_account_id) ?? '';
-          const firstTo = (d.to_emails?.[0]?.email || '').toLowerCase();
-          const contactId = emailToContactId.get(firstTo) ?? null;
+          const cardEmail = draftCardEmail(d.to_emails, d.cc_emails, d.bcc_emails);
+          const contactId = (cardEmail && emailToContactId.get(cardEmail)) || ADDRESSEE_UNKNOWN_ID;
           const acc = accountById.get(d.mail_account_id);
           const senderName = acc?.display_name || acc?.email || accountEmail || 'Me';
           return {
@@ -7023,7 +7047,9 @@ function App({userId, onSignOut}) {
             dir: 'out',
             subject: d.subject || '(no subject)',
             from: accountEmail,
-            to: d.to_emails?.[0]?.email || '',
+            // Every To address, not just the first: Compose reopens the
+            // draft from this field, so a second To got lost on re-save.
+            to: (d.to_emails || []).map(x => x.email).join(', '),
             cc: (d.cc_emails || []).map(x => x.email).join(', '),
             bcc: (d.bcc_emails || []).map(x => x.email).join(', '),
             date: d.modified_at,
@@ -7044,7 +7070,7 @@ function App({userId, onSignOut}) {
               portrait: null,
             },
           };
-        }).filter(m => m.contactId !== null);
+        });
 
         // Per-contact: which account-emails have we seen activity from/to?
         // Authoritative source is the backend's contact_account_emails map,
@@ -7176,6 +7202,24 @@ function App({userId, onSignOut}) {
             account: accEmails[0] || null,            // "primary" account (first seen) — kept for back-compat
           };
         });
+        // v0.0.319 — the "Addressee unknown" card, present only while a
+        // draft has no (known) addressee. It shows in the accounts of its
+        // drafts, or in every account when a draft has none.
+        if (shapedDrafts.some(d => d.contactId === ADDRESSEE_UNKNOWN_ID)) {
+          const draftAccs = [...(contactAccounts.get(ADDRESSEE_UNKNOWN_ID) || [])];
+          const accEmails = draftAccs.length ? draftAccs : [...accountEmailById.values()].filter(Boolean);
+          shapedContacts.push({
+            id: ADDRESSEE_UNKNOWN_ID,
+            isVirtual: true,
+            name: 'Addressee unknown',
+            org: 'Drafts without a recipient yet',
+            emails: [], emailBlinds: [], name_enc: null, org_enc: null, emailEncs: [],
+            avatar: '?', color: '#9ca3af', portrait: null, r2mDays: 3,
+            isNews: false, isNoReply: false, isMuted: false, muteReason: null,
+            archivedAt: null, deletedAt: null,
+            accountEmails: accEmails, account: accEmails[0] || null,
+          });
+        }
 
         // Tags: hydrate the server-side tag list + per-message-tag map, plus a
         // name→id lookup used by the detach path (API takes tag_id, UI uses name).
@@ -7938,6 +7982,7 @@ function App({userId, onSignOut}) {
   // in col 2 with those two as the candidates.
   const [pendingMergeId, setPendingMergeId] = useState(null);
   function handleSwipeMerge(contactId) {
+    if (isVirtualContactId(contactId)) return;
     if (pendingMergeId === null) {
       setPendingMergeId(contactId);
       setActionToast('Swipe a second contact to merge with this one — or tap any contact to cancel.');
@@ -8025,6 +8070,17 @@ function App({userId, onSignOut}) {
   const [replyKind,    setReplyKind]    = useState(null); // null | 'reply' | 'reply-all' | 'forward'
   const [composeContact,setComposeContact]=useState(null);
   const [composeDraft, setComposeDraft] = useState(null);
+  // v0.0.319 — the "Addressee unknown" card disappears once its last
+  // draft gets an addressee. If it was the open card, follow that draft
+  // to its new card rather than leaving column 2 empty.
+  const lastSavedDraftIdRef = useRef(null);
+  useEffect(() => {
+    if (!isVirtualContactId(selContact)) return;
+    if (contactList.some(c => c.id === selContact)) return;
+    const draftId = composeDraft?.id || lastSavedDraftIdRef.current;
+    const moved = draftId && messageList.find(m => m.draft && m.id === draftId);
+    setSelContact(moved ? moved.contactId : null);
+  }, [contactList, messageList, selContact, composeDraft]);
   // Per-contact memory: which message was last open in that contact's thread
   const [lastMsgByContact, setLastMsgByContact] = useState(() => new Map());
   // Mobile compose origin: 'contacts' | 'thread' | 'tag' | 'search' | 'detail' | null
@@ -8190,10 +8246,15 @@ function App({userId, onSignOut}) {
           : '';
         const baseSortDate = (stats?.latest_date) || localLastDate;
         const sortLastDate = latestDraftDate > baseSortDate ? latestDraftDate : baseSortDate;
-        const sortIsActionable = stats
+        // v0.0.319 — an open draft is something to finish, so its card
+        // sorts with the actionable ones: a draft just saved puts the
+        // card at the very top, and newer activity elsewhere moves it
+        // down again.
+        const hasDraft = draftMsgs.length > 0;
+        const sortIsActionable = hasDraft || (stats
           ? (stats.unread > 0 || stats.r2m > 0)
-          : (unread > 0 || hasR2m);
-        return{contact,unread,newestUnread,lastDate:localLastDate,hasR2m,r2mCount,newestActionable:newestUnread>newestR2m?newestUnread:newestR2m,sortLastDate,sortIsActionable};
+          : (unread > 0 || hasR2m));
+        return{contact,unread,newestUnread,lastDate:localLastDate,hasR2m,r2mCount,newestActionable:newestUnread>newestR2m?newestUnread:newestR2m,sortLastDate,sortIsActionable,hasDraft};
       })
       .sort((a,b)=>{
         if (a.sortIsActionable && !b.sortIsActionable) return -1;
@@ -8408,6 +8469,9 @@ function App({userId, onSignOut}) {
   // (which drops lazy-fetched rows) the trail comes back as deep as the
   // user had loaded it; { more: true } fetches the next page.
   async function lazyFetchContactMessages(contactId, { more = false } = {}) {
+    // The "Addressee unknown" card only holds drafts; the server has no
+    // such contact (v0.0.319).
+    if (isVirtualContactId(contactId)) return;
     // v0.0.282 — short-circuit when this contact was already fetched in
     // this session. Callers fire unconditionally; the de-dup lives here
     // so future entry points (search-click, deep-link, …) get it for
@@ -8714,7 +8778,7 @@ function App({userId, onSignOut}) {
     }
   }
   function handleSelectContact(id,e){
-    if(e?.shiftKey&&selContact!==null&&selContact!==id){setMergeContact(id);setShowCompose(false);setSelMsg(null);return;}
+    if(e?.shiftKey&&selContact!==null&&selContact!==id&&!isVirtualContactId(id)&&!isVirtualContactId(selContact)){setMergeContact(id);setShowCompose(false);setSelMsg(null);return;}
     // Any plain tap clears the pending swipe-merge marker. The user can
     // explicitly cancel the merge flow this way without finishing it.
     if (pendingMergeId !== null) { setPendingMergeId(null); setActionToast(null); }
@@ -8803,6 +8867,7 @@ function App({userId, onSignOut}) {
     if (isMobile) setMobileCol(1);
   }
   async function handleMerge(keep,discard,emails){
+    if (isVirtualContactId(keep.id) || isVirtualContactId(discard.id)) return;
     // Optimistic local merge so the UI responds instantly; server truth loads via refreshData
     setContactList(prev=>prev.map(c=>c.id===keep.id?{...c,emails}:c).filter(c=>c.id!==discard.id));
     setMessageList(prev=>prev.map(m=>m.contactId===discard.id?{...m,contactId:keep.id}:m));
@@ -9551,11 +9616,13 @@ function App({userId, onSignOut}) {
     };
     if (existingId) {
       await apiFetch(`/drafts/${existingId}`, { method: 'PATCH', body: JSON.stringify(body_) });
+      lastSavedDraftIdRef.current = existingId;
       setActionToast('Draft saved');
       refreshData();
       return existingId;
     }
     const r = await apiFetch('/drafts', { method: 'POST', body: JSON.stringify(body_) });
+    lastSavedDraftIdRef.current = r.draft?.id ?? null;
     setActionToast('Draft saved');
     refreshData();
     return r.draft?.id ?? null;
@@ -9567,7 +9634,7 @@ function App({userId, onSignOut}) {
     setActionToast('Draft deleted');
     refreshData();
   }
-  function handleEditContact(){setEditingContact(selContact);setShowCompose(false);}
+  function handleEditContact(){if(isVirtualContactId(selContact))return;setEditingContact(selContact);setShowCompose(false);}
   // Soft-delete a contact (item 3 in Rik's list). Optimistically stamps
   // contact.deletedAt in local state and adds every attributed mail id
   // to deletedIds so the FE immediately shows them under the Deleted
@@ -9575,7 +9642,7 @@ function App({userId, onSignOut}) {
   // a transaction: contacts.deleted_at + messages.deleted_at cascade.
   // On failure we refresh the bootstrap to recover the pre-delete view.
   async function handleDeleteContact(id) {
-    if (!id) return;
+    if (!id || isVirtualContactId(id)) return;
     const contact = contactList.find(c => c.id === id);
     if (!contact) return;
     const cascadeIds = messageList.filter(m => m.contactId === id).map(m => m.id);
@@ -9727,7 +9794,7 @@ function App({userId, onSignOut}) {
   // contact, file it away", so we honour that by clearing the view.
   function handleToggleContactFlag(id, flag){
     const contact = contactList.find(c=>c.id===id);
-    if (!contact) return;
+    if (!contact || contact.isVirtual) return;
     if (flag === 'archive') {
       const wasArchived = archivedContacts.has(id);
       setArchivedContacts(prev=>{const n=new Set(prev);wasArchived?n.delete(id):n.add(id);return n;});
@@ -10119,7 +10186,7 @@ function App({userId, onSignOut}) {
       lazyFetching={lazyFetchingContactId === selContact}
       trail={trails[selContact] || TRAIL_DEFAULT}
       onTrailMore={() => trailShowMore(selContact)}
-      onTrailServers={() => trailFromServers(selContact)}
+      onTrailServers={isVirtualContactId(selContact) ? undefined : () => trailFromServers(selContact)}
       arrowFocus={arrowFocus}
       mobileBack={()=>setMobileCol(0)}/>;
   }

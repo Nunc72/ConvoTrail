@@ -1,11 +1,13 @@
 // Drafts CRUD. Drafts are created/updated explicitly via "Save draft" in
 // Compose; closing without saving persists nothing. Drafts are read via
 // /bootstrap, so there is no dedicated GET here.
-import type { FastifyInstance } from "fastify";
+import type { FastifyInstance, FastifyRequest } from "fastify";
 import { randomUUID } from "node:crypto";
 import { supabaseWithJwt } from "../supabase.js";
 import { authPreHandler } from "../auth.js";
 import { requirePool } from "../db.js";
+import { upsertContacts } from "../sync.js";
+import { parseUserKeyHeader } from "../userCrypto.js";
 import {
   uploadAttachment, downloadAttachmentBytes, deleteAttachments,
   MAX_ATTACHMENT_BYTES,
@@ -18,6 +20,48 @@ function splitAddresses(s: string | undefined): string[] {
 
 function toJsonEmails(s: string | undefined, role: "to" | "cc" | "bcc") {
   return splitAddresses(s).map(email => ({ email, role }));
+}
+
+// v0.0.319 — a saved draft lives on its addressee's contact card: the
+// first valid To address, else CC, else BCC. Same rule as draftCardEmail()
+// in index.html, which files the draft in the FE.
+const EMAIL_ADDR_RE = /^[^\s@,;<>]+@[^\s@,;<>]+\.[^\s@,;<>]+$/;
+type JsonEmails = Array<{ email?: string }> | null | undefined;
+function draftCardEmail(...lists: JsonEmails[]): string | null {
+  for (const list of lists) {
+    for (const e of list || []) {
+      const addr = (e?.email || "").trim().toLowerCase();
+      if (EMAIL_ADDR_RE.test(addr)) return addr;
+    }
+  }
+  return null;
+}
+
+// A new address gets its contact on save, the way /send creates one for
+// every recipient, so the card exists before the mail goes out. Without
+// any address the FE files the draft under its "Addressee unknown" card.
+// Non-fatal: the draft is saved either way, and a draft whose addressee
+// has no contact also ends up under "Addressee unknown".
+async function ensureDraftContact(
+  req: FastifyRequest,
+  row: { to_emails: JsonEmails; cc_emails: JsonEmails; bcc_emails: JsonEmails },
+) {
+  const email = draftCardEmail(row.to_emails, row.cc_emails, row.bcc_emails);
+  if (!email) return;
+  const userId = req.authUser!.id;
+  const userKey = parseUserKeyHeader(req.headers["x-user-key"]);
+  try {
+    if (!userKey) {
+      // Locked Pad A user: a plaintext-only contact would be invisible to
+      // the blind matching of later unlocked syncs and get duplicated.
+      const hasCrypto = await requirePool().query<{ exists: boolean }>(
+        `SELECT EXISTS(SELECT 1 FROM user_crypto WHERE user_id = $1) AS exists`, [userId]);
+      if (hasCrypto.rows[0]?.exists) return;
+    }
+    await upsertContacts(userId, new Map([[email, null]]), userKey ?? undefined);
+  } catch (e) {
+    req.log.warn({ err: e }, "draft: contact upsert failed");
+  }
 }
 
 interface DraftBody {
@@ -56,6 +100,7 @@ export async function registerDraftsRoutes(app: FastifyInstance) {
       .select("id, mail_account_id, to_emails, cc_emails, bcc_emails, subject, body, reply_to_message_id, tags, created_at, modified_at")
       .single();
     if (error) return reply.internalServerError(error.message);
+    await ensureDraftContact(req, data);
     return { draft: data };
   });
 
@@ -86,7 +131,14 @@ export async function registerDraftsRoutes(app: FastifyInstance) {
     if (Array.isArray(b.tags))           setField("tags", JSON.stringify(b.tags));
 
     vals.push(id);
-    await pool.query(`UPDATE drafts SET ${sets.join(", ")} WHERE id = $${p}`, vals);
+    const upd = await pool.query<{ to_emails: JsonEmails; cc_emails: JsonEmails; bcc_emails: JsonEmails }>(
+      `UPDATE drafts SET ${sets.join(", ")} WHERE id = $${p}
+       RETURNING to_emails, cc_emails, bcc_emails`,
+      vals,
+    );
+    if (upd.rows[0] && (b.to !== undefined || b.cc !== undefined || b.bcc !== undefined)) {
+      await ensureDraftContact(req, upd.rows[0]);
+    }
     return reply.code(204).send();
   });
 
