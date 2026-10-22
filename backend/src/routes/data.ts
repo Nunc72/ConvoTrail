@@ -108,7 +108,8 @@ export async function registerDataRoutes(app: FastifyInstance) {
                        AND NOT COALESCE((flags->>'auto_purged')::bool, false)
                      ORDER BY date DESC LIMIT $2`, [userId, limit]),
         pool.query(`SELECT id, mail_account_id, to_emails, cc_emails, bcc_emails,
-                           subject, body, reply_to_message_id, tags, created_at, modified_at
+                           subject, body, reply_to_message_id, tags, created_at, modified_at,
+                           snooze_until, dismissed_at, snooze_count
                       FROM drafts WHERE user_id = $1 ORDER BY modified_at DESC`, [userId]),
         pool.query(`SELECT id, name, archived_at, created_at, email_roles
                       FROM tags WHERE user_id = $1 ORDER BY name ASC`, [userId]),

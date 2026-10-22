@@ -210,7 +210,7 @@
        polish change is picked up by every browser as soon as the version
        is bumped — no manual cache-busters needed. Keep ?v= here in sync
        with APP_VERSION below at every deploy. -->
-  <link rel="stylesheet" href="polish.css?v=0.0.319"/>
+  <link rel="stylesheet" href="polish.css?v=0.0.320"/>
 </head>
 <body>
 <div id="root">
@@ -449,7 +449,7 @@ window.CONVOOZ_CRYPTO = CONVOOZ_CRYPTO;
 
 // ─── Constants ───────────────────────────────────────────────────────────────
 
-const APP_VERSION = "0.0.319"; // bumped on every deploy — keep in sync with version.json AND with the ?v= on polish.css above
+const APP_VERSION = "0.0.320"; // bumped on every deploy — keep in sync with version.json AND with the ?v= on polish.css above
 
 // ─── Backend + Supabase config ───────────────────────────────────────────────
 // Two stacks: prod (live testers) and staging (where new features land first).
@@ -811,7 +811,8 @@ const pad = n => String(n).padStart(2,"0");
 // no longer in scope under the active filter.
 function msgMatchesThreadFilter(msg, filter, deletedIds) {
   const del = deletedIds.includes(msg.id);
-  if (filter === 'now')     return !del && !msg.draft && ((msg.dir==='in' && !msg.read) || (msg.dir==='out' && msg.revert2me));
+  // v0.0.320 — an actionable draft (not snoozed or forgotten) is on Now too.
+  if (filter === 'now')     return !del && (msg.draft ? !!msg.draftActionable : ((msg.dir==='in' && !msg.read) || (msg.dir==='out' && msg.revert2me)));
   if (filter === 'in')      return msg.dir==='in' && !msg.draft && !del;
   if (filter === 'out')     return msg.dir==='out' && !msg.draft && !del;
   if (filter === 'draft')   return !!msg.draft && !del;
@@ -1944,7 +1945,7 @@ function SettingsModal({onClose, initialTab='profile', signatures, setSignatures
 
 const SIG_SEP = '\n\n';
 
-function ComposePane({replyTo, replyKind='reply', toContact, draft, initTo:initToOverride="", initCC="", initBCC="", initTag=null, initMsgTags=[], allKnownTags=[], allKnownEmails=[], selAccounts=[], myEmails=[], mailAccounts=[], signatures=[], accountSigs={}, onSend, onBeforeR2mSend, onSaveDraft, onDeleteDraft, onClose, mobileBack, mobileBackLabel}) {
+function ComposePane({replyTo, replyKind='reply', toContact, draft, initTo:initToOverride="", initCC="", initBCC="", initTag=null, initMsgTags=[], allKnownTags=[], allKnownEmails=[], selAccounts=[], myEmails=[], mailAccounts=[], signatures=[], accountSigs={}, onSend, onBeforeR2mSend, onSaveDraft, onDeleteDraft, onDraftSnooze, onDraftForget, onClose, mobileBack, mobileBackLabel}) {
   const isMobile = typeof window !== 'undefined' && window.innerWidth < 768;
   const isReply     = !!replyTo && replyKind !== 'forward';
   const isReplyAll  = !!replyTo && replyKind === 'reply-all';
@@ -2038,6 +2039,10 @@ function ComposePane({replyTo, replyKind='reply', toContact, draft, initTo:initT
   // Local draft id — set once we POST a new draft, reused for subsequent PATCHes
   // so the user can keep saving the same draft without remounting the pane.
   const [draftId,     setDraftId]     = useState(draft?.id || null);
+  // v0.0.320 — the grey "Draft" alert (Snooze / Forget) shows from the
+  // first save on. A snoozed or forgotten draft opens without it; saving
+  // it again brings it back, as the backend re-activates it on a save.
+  const [draftAlert,  setDraftAlert]  = useState(draft ? draft.draftActionable !== false : false);
   // Attachments on this draft — list of {id, filename, content_type, size}.
   // Initial list comes from the server-shaped draft (if editing existing);
   // new uploads append a temporary placeholder (id starts with 'tmp-') until
@@ -2209,7 +2214,7 @@ function ComposePane({replyTo, replyKind='reply', toContact, draft, initTo:initT
     };
     const r = await apiFetch('/drafts', { method: 'POST', body: JSON.stringify(body_) });
     const newId = r.draft?.id;
-    if (newId) setDraftId(newId);
+    if (newId) { setDraftId(newId); setDraftAlert(true); }
     return newId;
   }
   async function handleAttachFiles(fileList) {
@@ -2334,17 +2339,22 @@ function ComposePane({replyTo, replyKind='reply', toContact, draft, initTo:initT
     })();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isForward]);
+  // What Save sends; Snooze / Forget save the same content with their action.
+  function draftContent() {
+    return {
+      from, to, cc: showCC ? cc : '', bcc: showBCC ? bcc : '',
+      subject: subj, body,
+      reply_to_id: replyTo?.id,
+      tags: msgTags,
+    };
+  }
   async function handleSaveDraftClick() {
     if (savingDraft) return;
     setSavingDraft(true); setSendErr('');
     try {
-      const newId = await onSaveDraft?.({
-        from, to, cc: showCC ? cc : '', bcc: showBCC ? bcc : '',
-        subject: subj, body,
-        reply_to_id: replyTo?.id,
-        tags: msgTags,
-      }, draftId);
+      const newId = await onSaveDraft?.(draftContent(), draftId);
       if (newId && !draftId) setDraftId(newId);
+      setDraftAlert(true);
     } catch (e) {
       setSendErr(e?.message || 'Save draft failed');
     }
@@ -2435,6 +2445,19 @@ function ComposePane({replyTo, replyKind='reply', toContact, draft, initTo:initT
       <div className={isMobile?'flex-1 min-h-0 overflow-y-auto scroll flex flex-col':'contents'}
         style={isMobile?{WebkitOverflowScrolling:'touch'}:{display:'contents'}}>
       <div style={isMobile?{minHeight:'calc(100% + 1px)',display:'flex',flexDirection:'column'}:{display:'contents'}}>
+      {/* v0.0.320 — grey Draft alert, the counterpart of the New message
+          and Revert2Me bars on a mail. */}
+      {draftId && draftAlert && (
+        <div className="mx-4 mt-3 mb-1 px-3 py-2 rounded bg-gray-50 border border-gray-200 flex items-center gap-2 text-xs text-gray-600 flex-shrink-0">
+          <span><strong className="text-gray-700">Draft:</strong> not sent yet.</span>
+          <div className="ml-auto flex gap-2">
+            <button onClick={()=>onDraftSnooze?.(draftContent(), draftId)}
+              className="px-2 py-0.5 rounded bg-gray-100 hover:bg-gray-200 font-medium">Snooze</button>
+            <button onClick={()=>onDraftForget?.(draftContent(), draftId)}
+              className="px-2 py-0.5 rounded bg-gray-100 hover:bg-gray-200 font-medium">Forget</button>
+          </div>
+        </div>
+      )}
       {/* To */}
       <div className="px-4 py-2 border-b border-gray-100 flex-shrink-0">
         <div className="flex items-center gap-2 text-sm">
@@ -4025,7 +4048,7 @@ function ThreadColumn({contact,allMsgs,deletedIds,selectedMsgId,msgTags,onSelect
   const msgs=useMemo(()=>{
     const del=x=>deletedIds.includes(x.id);
     let m=allMsgs;
-    if(filter==="now")     m=m.filter(x=>!del(x)&&!x.draft&&((x.dir==="in"&&!x.read)||(x.dir==="out"&&x.revert2me)));
+    if(filter==="now")     m=m.filter(x=>!del(x)&&(x.draft?!!x.draftActionable:((x.dir==="in"&&!x.read)||(x.dir==="out"&&x.revert2me))));
     else if(filter==="in") m=m.filter(x=>x.dir==="in"&&!x.draft&&!del(x));
     else if(filter==="out")m=m.filter(x=>x.dir==="out"&&!x.draft&&!del(x));
     else if(filter==="draft")m=m.filter(x=>x.draft&&!del(x));
@@ -4272,6 +4295,7 @@ function ThreadColumn({contact,allMsgs,deletedIds,selectedMsgId,msgTags,onSelect
                   <div className="flex items-center gap-1.5 min-w-0">
                     {!msg.read&&!isDel&&!isDraft&&msg.dir==="in"&&<span className="w-1.5 h-1.5 rounded-full bg-indigo-500 flex-shrink-0"/>}
                     {msg.revert2me&&msg.dir==="out"&&!isDel&&!isDraft&&<span className="w-1.5 h-1.5 rounded-full bg-amber-400 flex-shrink-0"/>}
+                    {isDraft&&msg.draftActionable&&<span className="w-1.5 h-1.5 rounded-full bg-gray-400 flex-shrink-0"/>}
                     <span className={`text-xs truncate ${(!msg.read&&!isDel&&!isDraft)?"font-semibold text-gray-900":"text-gray-600"}`}>{msg.subject}</span>
                     {msg.hasAttachments&&<svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="text-gray-400 flex-shrink-0" aria-label="has attachment"><path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"/></svg>}
                   </div>
@@ -4378,6 +4402,7 @@ function ThreadColumn({contact,allMsgs,deletedIds,selectedMsgId,msgTags,onSelect
                 <div className="flex items-center gap-1.5 min-w-0">
                   {!msg.read&&!isDel&&!isDraft&&msg.dir==="in"&&<span className="w-1.5 h-1.5 rounded-full bg-indigo-500 flex-shrink-0"/>}
                   {msg.revert2me&&msg.dir==="out"&&!isDel&&!isDraft&&<span className="w-1.5 h-1.5 rounded-full bg-amber-400 flex-shrink-0"/>}
+                  {isDraft&&msg.draftActionable&&<span className="w-1.5 h-1.5 rounded-full bg-gray-400 flex-shrink-0"/>}
                   <span className={`text-xs truncate ${(!msg.read&&!isDel&&!isDraft)?"font-semibold text-gray-900":"text-gray-600"}`}>{msg.subject}</span>
                   {msg.hasAttachments&&<svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="text-gray-400 flex-shrink-0" aria-label="has attachment"><path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"/></svg>}
                 </div>
@@ -4713,7 +4738,7 @@ function GlobalSearchResults({messages, contacts, deletedIds, msgTags, msgMatche
   const filtered = useMemo(()=>{
     const del = x => deletedIds.includes(x.id);
     let m = messages.filter(msgMatchesSearch);
-    if(filter==='now')     m = m.filter(x=>!del(x)&&!x.draft&&((x.dir==='in'&&!x.read)||(x.dir==='out'&&x.revert2me)));
+    if(filter==='now')     m = m.filter(x=>!del(x)&&(x.draft?!!x.draftActionable:((x.dir==='in'&&!x.read)||(x.dir==='out'&&x.revert2me))));
     else if(filter==='in')      m = m.filter(x=>x.dir==='in'&&!x.draft&&!del(x));
     else if(filter==='out')     m = m.filter(x=>x.dir==='out'&&!x.draft&&!del(x));
     else if(filter==='draft')   m = m.filter(x=>x.draft&&!del(x));
@@ -5028,10 +5053,10 @@ function LeftColumn({contactMeta, archivedContacts, selectedId, mergeId, onSelec
       // "actionable first" group to the tail, and the row the user
       // just clicked visually jumps under their cursor.
       if (searchQ) return (a.contact.name || '').localeCompare(b.contact.name || '');
-      // Actionable contacts (badge > 0, or an open draft — v0.0.319) first;
-      // within each group preserve original order
-      const ba = a.unread + (a.r2mCount||0) + (a.hasDraft ? 1 : 0);
-      const bb = b.unread + (b.r2mCount||0) + (b.hasDraft ? 1 : 0);
+      // Actionable contacts (badge > 0, drafts included since v0.0.319)
+      // first; within each group preserve original order
+      const ba = a.unread + (a.r2mCount||0) + (a.draftCount||0);
+      const bb = b.unread + (b.r2mCount||0) + (b.draftCount||0);
       if((ba>0)!==(bb>0)) return ba>0 ? -1 : 1;
       return 0;
     });
@@ -5107,13 +5132,14 @@ function LeftColumn({contactMeta, archivedContacts, selectedId, mergeId, onSelec
     </svg>;
   }
 
-  function ContactRow({contact, unread, hasR2m, r2mCount}) {
+  function ContactRow({contact, unread, hasR2m, r2mCount, draftCount, actionKind}) {
     const isSel=contact.id===selectedId, isMerge=contact.id===mergeId;
     const isPending = contact.id === pendingMergeId;
-    const badge = unread + (r2mCount||0);
-    // New-mail (blue) wins when both kinds of alert are present — it's the
-    // more urgent of the two. Pure-r2m contacts still show amber.
-    const badgeColor = unread > 0 ? 'bg-indigo-600' : 'bg-amber-500';
+    const badge = unread + (r2mCount||0) + (draftCount||0);
+    // v0.0.320 — the newest actionable by action date colours the badge:
+    // new mail blue, revert2me amber, draft grey.
+    const badgeColor = actionKind === 'draft' ? 'bg-gray-400'
+      : actionKind === 'r2m' ? 'bg-amber-500' : 'bg-indigo-600';
     // Mobile swipe-right gesture for the merge flow. The row drags with
     // the finger and an indigo strip with white "Merge" text reveals on
     // the left as it moves. Release past the threshold fires the merge
@@ -5396,7 +5422,7 @@ function LeftColumn({contactMeta, archivedContacts, selectedId, mergeId, onSelec
                   :'No contacts'}
               </div>
             )}
-            {activeContacts.map(({contact,unread,hasR2m,r2mCount})=><ContactRow key={contact.id} contact={contact} unread={unread} hasR2m={hasR2m} r2mCount={r2mCount}/>)}
+            {activeContacts.map(({contact,unread,hasR2m,r2mCount,draftCount,actionKind})=><ContactRow key={contact.id} contact={contact} unread={unread} hasR2m={hasR2m} r2mCount={r2mCount} draftCount={draftCount} actionKind={actionKind}/>)}
           </>)}
         </div>
       </div>
@@ -5570,7 +5596,7 @@ function LeftColumn({contactMeta, archivedContacts, selectedId, mergeId, onSelec
                   :contactTab==='Muted'?'No muted contacts'
                   :'No contacts'}
               </div>}
-              {activeContacts.map(({contact,unread,hasR2m,r2mCount})=><ContactRow key={contact.id} contact={contact} unread={unread} hasR2m={hasR2m} r2mCount={r2mCount}/>)}
+              {activeContacts.map(({contact,unread,hasR2m,r2mCount,draftCount,actionKind})=><ContactRow key={contact.id} contact={contact} unread={unread} hasR2m={hasR2m} r2mCount={r2mCount} draftCount={draftCount} actionKind={actionKind}/>)}
             </>)}
           </div>
         </div>
@@ -6947,6 +6973,9 @@ function App({userId, onSignOut}) {
             date: m.date,
             read: !!m.flags?.seen,
             r2mArmed: !!r2mRow && !r2mRow.dismissed_at,
+            // v0.0.320 — when the revert2me timer (or its last snooze)
+            // ran out: that alert, not the send date, is its action date.
+            r2mAlertAt: (r2mRow && r2mRow.snooze_until) || null,
             draft: !!m.flags?.draft,
             body: hasBodyText ? m.body_text : undefined,
             bodyHtml: hasBodyHtml ? (m.body_html.trim() ? m.body_html : null) : undefined,
@@ -7039,12 +7068,20 @@ function App({userId, onSignOut}) {
           const contactId = (cardEmail && emailToContactId.get(cardEmail)) || ADDRESSEE_UNKNOWN_ID;
           const acc = accountById.get(d.mail_account_id);
           const senderName = acc?.display_name || acc?.email || accountEmail || 'Me';
+          // v0.0.320 — a saved draft is actionable (grey dot, badge and
+          // banner) until it's snoozed or forgotten. Back from a snooze,
+          // its action date is the snooze's end rather than the last edit.
+          const snoozeEnd = d.snooze_until ? Date.parse(d.snooze_until) : 0;
+          const backFromSnooze = snoozeEnd > 0 && snoozeEnd <= nowMs && snoozeEnd > Date.parse(d.modified_at);
           return {
             id: d.id,
             accountId: d.mail_account_id,
             accountEmail,
             contactId,
             dir: 'out',
+            draftActionable: !d.dismissed_at && !(snoozeEnd > nowMs),
+            actionAt: backFromSnooze ? d.snooze_until : d.modified_at,
+            draftSnoozeCount: d.snooze_count || 0,
             subject: d.subject || '(no subject)',
             from: accountEmail,
             // Every To address, not just the first: Compose reopens the
@@ -8219,13 +8256,29 @@ function App({userId, onSignOut}) {
         // mail without \Seen counts. An outgoing row without \Seen (e.g. sent
         // from another client that didn't auto-set \Seen on Sent) shows no
         // bullet anywhere, so it shouldn't inflate the badge either.
-        const unread=active.filter(m=>!m.read&&m.dir==='in').length;
-        const newestUnread=unread>0?active.filter(m=>!m.read&&m.dir==='in').reduce((a,b)=>a.date>b.date?a:b).date:'';
+        const unreadMsgs=active.filter(m=>!m.read&&m.dir==='in');
+        const unread=unreadMsgs.length;
         const localLastDate=active.length>0?active.reduce((a,b)=>a.date>b.date?a:b).date:(all.length>0?all.reduce((a,b)=>a.date>b.date?a:b).date:"");
         const r2mMsgs=active.filter(m=>m.revert2me&&m.dir==="out");
         const hasR2m=r2mMsgs.length>0;
         const r2mCount=r2mMsgs.length;
-        const newestR2m=hasR2m?r2mMsgs.reduce((a,b)=>a.date>b.date?a:b).date:'';
+        // v0.0.320 — snoozed or forgotten drafts drop out of every
+        // actionable signal below: count, badge colour and sort.
+        const draftMsgs = all.filter(m => m.draft && m.draftActionable);
+        const draftCount = draftMsgs.length;
+        const hasDraft = draftCount > 0;
+        // Action date = when the item asked for attention: a mail when it
+        // arrived, a revert2me when its timer or snooze ran out, a draft
+        // when it was saved or came back from a snooze. The newest one
+        // colours the badge and orders the actionable cards, so an alert
+        // back from a snooze counts as fresh instead of by its send date.
+        const ms = s => (s && Date.parse(s)) || 0;
+        const newestAt = (list, at) => list.reduce((best, m) => Math.max(best, at(m)), 0);
+        const unreadAt = newestAt(unreadMsgs, m => ms(m.date));
+        const r2mAt    = newestAt(r2mMsgs, m => Math.max(ms(m.r2mAlertAt), ms(m.date)));
+        const draftAt  = newestAt(draftMsgs, m => ms(m.actionAt || m.modifiedAt || m.date));
+        const actionMs = Math.max(unreadAt, r2mAt, draftAt);
+        const actionKind = !actionMs ? null : actionMs === unreadAt ? 'new' : actionMs === r2mAt ? 'r2m' : 'draft';
         // Sort-stable signals from the server (computed over ALL messages,
         // not just the top-500 in messageList). Used as the sort key so a
         // lazy-fetch landing more messages for this contact doesn't
@@ -8238,9 +8291,8 @@ function App({userId, onSignOut}) {
         // the server-side latest_date stat doesn't see them. Fold the
         // newest in-scope draft's modifiedAt into the sort key here so
         // a contact whose only recent activity is an open compose pane
-        // bubbles to the top of the non-actionable group instead of
-        // dropping to wherever its last sent/received mail sits.
-        const draftMsgs = all.filter(m => m.draft);
+        // bubbles to the top instead of dropping to wherever its last
+        // sent/received mail sits. Actionable drafts only (v0.0.320).
         const latestDraftDate = draftMsgs.length > 0
           ? draftMsgs.reduce((a, b) => a.date > b.date ? a : b).date
           : '';
@@ -8250,17 +8302,18 @@ function App({userId, onSignOut}) {
         // sorts with the actionable ones: a draft just saved puts the
         // card at the very top, and newer activity elsewhere moves it
         // down again.
-        const hasDraft = draftMsgs.length > 0;
         const sortIsActionable = hasDraft || (stats
           ? (stats.unread > 0 || stats.r2m > 0)
           : (unread > 0 || hasR2m));
-        return{contact,unread,newestUnread,lastDate:localLastDate,hasR2m,r2mCount,newestActionable:newestUnread>newestR2m?newestUnread:newestR2m,sortLastDate,sortIsActionable,hasDraft};
+        return{contact,unread,lastDate:localLastDate,hasR2m,r2mCount,draftCount,hasDraft,actionMs,actionKind,sortLastDate,sortIsActionable};
       })
       .sort((a,b)=>{
         if (a.sortIsActionable && !b.sortIsActionable) return -1;
         if (!a.sortIsActionable && b.sortIsActionable) return 1;
-        // Within each group, sort by the server-side latest-message
-        // date so additions from lazy-fetch don't reshuffle anything.
+        // Actionable cards by their newest action date (v0.0.320).
+        if (a.sortIsActionable && a.actionMs !== b.actionMs && a.actionMs && b.actionMs) return b.actionMs - a.actionMs;
+        // Otherwise by the server-side latest-message date, so
+        // additions from lazy-fetch don't reshuffle anything.
         return (b.sortLastDate || '').localeCompare(a.sortLastDate || '');
       });
   },[contactList,messageList,contactStats,deletedIds,selAccounts]);
@@ -9604,17 +9657,23 @@ function App({userId, onSignOut}) {
     // lock sees them.
     if (cryptoStatus === 'unlocked') runEncryptionBackfill();
   }
-  // Returns the draft id (new or existing). Pane keeps it locally for subsequent PATCHes.
-  async function handleSaveDraft({from, to, cc, bcc, subject, body, reply_to_id, tags}, existingId) {
+  function draftRequestBody({from, to, cc, bcc, subject, body, reply_to_id, tags}) {
     const acc = mailAccounts.find(a => (a.email||'').toLowerCase() === (from||'').toLowerCase());
-    const body_ = {
+    return {
       mail_account_id: acc?.id || null,
       to: to || '', cc: cc || '', bcc: bcc || '',
       subject: subject || '', body: body || '',
       reply_to_id: reply_to_id || null,
       tags: Array.isArray(tags) ? tags : [],
     };
+  }
+  // Returns the draft id (new or existing). Pane keeps it locally for subsequent PATCHes.
+  async function handleSaveDraft(content, existingId) {
+    const body_ = draftRequestBody(content);
     if (existingId) {
+      // A save re-activates a snoozed / forgotten draft (v0.0.320), so an
+      // earlier Snooze / Forget flip must not hide it again.
+      forgetFlip(existingId);
       await apiFetch(`/drafts/${existingId}`, { method: 'PATCH', body: JSON.stringify(body_) });
       lastSavedDraftIdRef.current = existingId;
       setActionToast('Draft saved');
@@ -9626,6 +9685,35 @@ function App({userId, onSignOut}) {
     setActionToast('Draft saved');
     refreshData();
     return r.draft?.id ?? null;
+  }
+  // v0.0.320 — the grey Draft banner. Snooze / Forget save the pane's
+  // content together with the action (a plain save would re-activate
+  // the draft) and close the pane, the way Seen / Snooze move on from a
+  // mail. The draft stays under Draft; it just stops asking for attention.
+  async function persistDraftAlert(content, id, action) {
+    rememberFlip(id, { draftActionable: false });
+    setMessageList(prev => prev.map(m => m.draft && m.id === id ? { ...m, draftActionable: false } : m));
+    handleCloseCompose();
+    try {
+      await apiFetch(`/drafts/${id}`, { method: 'PATCH', body: JSON.stringify({ ...draftRequestBody(content), [action]: true }) });
+      flipSaved(id);
+    } catch (e) {
+      forgetFlip(id);
+      setMessageList(prev => prev.map(m => m.draft && m.id === id ? { ...m, draftActionable: true } : m));
+      setActionToast((action === 'snooze' ? 'Snooze' : 'Forget') + ' failed: ' + e.message);
+    }
+    refreshData();
+  }
+  function handleDraftSnooze(content, id) {
+    gateOnSnoozeOnboarding(() => {
+      const d = messageList.find(m => m.draft && m.id === id);
+      setActionToast(`Draft was snoozed for ${fibSnoozeDays(d?.draftSnoozeCount || 0)} days`);
+      persistDraftAlert(content, id, 'snooze');
+    });
+  }
+  function handleDraftForget(content, id) {
+    setActionToast('Draft forgotten — it stays under Draft');
+    persistDraftAlert(content, id, 'forget');
   }
   async function handleDeleteDraft(id) {
     if (!id) { handleCloseCompose(); return; }
@@ -10606,7 +10694,7 @@ function App({userId, onSignOut}) {
                     initMsgTags={composeDraft?composeDraft.tags||[]:replyTo?msgTags[replyTo.id]||[]:[]}
                     allKnownTags={allKnownTags} allKnownEmails={allKnownEmails} selAccounts={selAccounts}
                     signatures={signatures} accountSigs={accountSigs}
-                    onSend={handleSend} onBeforeR2mSend={onBeforeR2mSend} onSaveDraft={handleSaveDraft} onDeleteDraft={handleDeleteDraft}
+                    onSend={handleSend} onBeforeR2mSend={onBeforeR2mSend} onSaveDraft={handleSaveDraft} onDeleteDraft={handleDeleteDraft} onDraftSnooze={handleDraftSnooze} onDraftForget={handleDraftForget}
                     onClose={handleCloseCompose}
                     mobileBack={handleCloseCompose}
                     mobileBackLabel={
@@ -10678,7 +10766,7 @@ function App({userId, onSignOut}) {
                   allKnownTags={allKnownTags} allKnownEmails={allKnownEmails}
                   selAccounts={selAccounts}
                   signatures={signatures} accountSigs={accountSigs}
-                  onSend={handleSend} onBeforeR2mSend={onBeforeR2mSend} onSaveDraft={handleSaveDraft} onDeleteDraft={handleDeleteDraft}
+                  onSend={handleSend} onBeforeR2mSend={onBeforeR2mSend} onSaveDraft={handleSaveDraft} onDeleteDraft={handleDeleteDraft} onDraftSnooze={handleDraftSnooze} onDraftForget={handleDraftForget}
                   onClose={handleCloseCompose}/>
               ):(
                 <MessageDetail message={selectedMsg} contact={detailContact}

@@ -8,6 +8,7 @@ import { authPreHandler } from "../auth.js";
 import { requirePool } from "../db.js";
 import { upsertContacts } from "../sync.js";
 import { parseUserKeyHeader } from "../userCrypto.js";
+import { fibSnoozeDays } from "../r2m.js";
 import {
   uploadAttachment, downloadAttachmentBytes, deleteAttachments,
   MAX_ATTACHMENT_BYTES,
@@ -75,6 +76,10 @@ interface DraftBody {
   // Compose-time tag names. Inherited from the original on reply, then
   // carried through draft save/send so the sent row gets the same tags.
   tags?: string[];
+  // v0.0.320 — the grey Draft banner's actions. Without either, a save
+  // puts the draft back among the actionables (clears snooze / forget).
+  snooze?: boolean;
+  forget?: boolean;
 }
 
 export async function registerDraftsRoutes(app: FastifyInstance) {
@@ -110,8 +115,8 @@ export async function registerDraftsRoutes(app: FastifyInstance) {
     const b = req.body || {};
     const pool = requirePool();
 
-    const r0 = await pool.query<{ user_id: string }>(
-      `SELECT user_id FROM drafts WHERE id = $1`, [id],
+    const r0 = await pool.query<{ user_id: string; snooze_count: number }>(
+      `SELECT user_id, snooze_count FROM drafts WHERE id = $1`, [id],
     );
     if (r0.rows.length === 0) return reply.notFound();
     if (r0.rows[0].user_id !== req.authUser!.id) return reply.forbidden();
@@ -130,16 +135,38 @@ export async function registerDraftsRoutes(app: FastifyInstance) {
     if (b.reply_to_id !== undefined)     setField("reply_to_message_id", b.reply_to_id || null);
     if (Array.isArray(b.tags))           setField("tags", JSON.stringify(b.tags));
 
+    if (b.snooze) {
+      // Same Fibonacci schedule as a revert2me snooze: 3, 5, 8, 13 … days.
+      const days = fibSnoozeDays(r0.rows[0].snooze_count ?? 0);
+      sets.push(`snooze_until = now() + ($${p++} || ' days')::interval`);
+      vals.push(String(days));
+      sets.push("snooze_count = snooze_count + 1", "dismissed_at = NULL");
+    } else if (b.forget) {
+      sets.push("dismissed_at = now()", "snooze_until = NULL");
+    } else {
+      // A plain save means the user is on it again.
+      sets.push("snooze_until = NULL", "dismissed_at = NULL");
+    }
+
     vals.push(id);
-    const upd = await pool.query<{ to_emails: JsonEmails; cc_emails: JsonEmails; bcc_emails: JsonEmails }>(
+    const upd = await pool.query<{
+      to_emails: JsonEmails; cc_emails: JsonEmails; bcc_emails: JsonEmails;
+      snooze_until: string | null; dismissed_at: string | null; snooze_count: number;
+    }>(
       `UPDATE drafts SET ${sets.join(", ")} WHERE id = $${p}
-       RETURNING to_emails, cc_emails, bcc_emails`,
+       RETURNING to_emails, cc_emails, bcc_emails, snooze_until, dismissed_at, snooze_count`,
       vals,
     );
-    if (upd.rows[0] && (b.to !== undefined || b.cc !== undefined || b.bcc !== undefined)) {
-      await ensureDraftContact(req, upd.rows[0]);
+    const row = upd.rows[0];
+    if (row && (b.to !== undefined || b.cc !== undefined || b.bcc !== undefined)) {
+      await ensureDraftContact(req, row);
     }
-    return reply.code(204).send();
+    return {
+      ok: true,
+      snooze_until: row?.snooze_until ?? null,
+      dismissed_at: row?.dismissed_at ?? null,
+      snooze_count: row?.snooze_count ?? 0,
+    };
   });
 
   // ─── Delete draft ────────────────────────────────────────────────────────
