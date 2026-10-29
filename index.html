@@ -210,7 +210,7 @@
        polish change is picked up by every browser as soon as the version
        is bumped — no manual cache-busters needed. Keep ?v= here in sync
        with APP_VERSION below at every deploy. -->
-  <link rel="stylesheet" href="polish.css?v=0.0.320"/>
+  <link rel="stylesheet" href="polish.css?v=0.0.321"/>
 </head>
 <body>
 <div id="root">
@@ -449,7 +449,7 @@ window.CONVOOZ_CRYPTO = CONVOOZ_CRYPTO;
 
 // ─── Constants ───────────────────────────────────────────────────────────────
 
-const APP_VERSION = "0.0.320"; // bumped on every deploy — keep in sync with version.json AND with the ?v= on polish.css above
+const APP_VERSION = "0.0.321"; // bumped on every deploy — keep in sync with version.json AND with the ?v= on polish.css above
 
 // ─── Backend + Supabase config ───────────────────────────────────────────────
 // Two stacks: prod (live testers) and staging (where new features land first).
@@ -5570,8 +5570,10 @@ function LeftColumn({contactMeta, archivedContacts, selectedId, mergeId, onSelec
         )}
       </div>
 
-      {/* CONTACTS + TAGS wrapper — fills all remaining space in left column */}
-      <div style={{flex:'1 1 0',minHeight:0,display:'flex',flexDirection:'column',overflow:'hidden',background:'#f5f6f8'}}>
+      {/* CONTACTS + TAGS wrapper — fills all remaining space in left column.
+          Canvas via the theme token (polish.css), so dark mode reaches it;
+          a literal #f5f6f8 kept the contact list light (v0.0.321). */}
+      <div style={{flex:'1 1 0',minHeight:0,display:'flex',flexDirection:'column',overflow:'hidden',background:'var(--bg-canvas)'}}>
 
         {/* CONTACTS content
             Tags open:   contacts min 43%, max 60% of wrapper; tags content fills rest.
