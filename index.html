@@ -157,6 +157,11 @@
     .msg-slide-out { animation: msgSlideOut 0.3s ease forwards; }
     .row-divider.active { background: #eef2ff; border-color: #6366f1; }
     .no-select { user-select: none; }
+    /* v0.0.323 — the mail action bar keeps every button in view: when
+       column 3 is too narrow for the labels, they drop and the icons
+       (with their tooltips) stay, as on mobile. */
+    .convooz-msg-actions { container-type: inline-size; }
+    @container (max-width: 579px) { .convooz-action-label { display: none; } }
     .tag-chip { display: inline-flex; align-items: center; gap: 4px; padding: 1px 7px; border-radius: 999px; font-size: 0.65rem; font-weight: 600; background: #f1f5f9; color: #64748b; }
     /* Prevent iOS auto-zoom on input focus: Safari only zooms when font-size < 16px.
        Apply 16px on mobile only so desktop keeps compact sizing. */
@@ -210,7 +215,7 @@
        polish change is picked up by every browser as soon as the version
        is bumped — no manual cache-busters needed. Keep ?v= here in sync
        with APP_VERSION below at every deploy. -->
-  <link rel="stylesheet" href="polish.css?v=0.0.322"/>
+  <link rel="stylesheet" href="polish.css?v=0.0.323"/>
 </head>
 <body>
 <div id="root">
@@ -449,7 +454,7 @@ window.CONVOOZ_CRYPTO = CONVOOZ_CRYPTO;
 
 // ─── Constants ───────────────────────────────────────────────────────────────
 
-const APP_VERSION = "0.0.322"; // bumped on every deploy — keep in sync with version.json AND with the ?v= on polish.css above
+const APP_VERSION = "0.0.323"; // bumped on every deploy — keep in sync with version.json AND with the ?v= on polish.css above
 
 // ─── Backend + Supabase config ───────────────────────────────────────────────
 // Two stacks: prod (live testers) and staging (where new features land first).
@@ -1047,6 +1052,11 @@ function ReplyAllIcon({size=14}) {
 function ForwardIcon({size=14}) {
   return <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
     <polyline points="15 17 20 12 15 7"/><path d="M4 18v-2a4 4 0 0 1 4-4h12"/>
+  </svg>;
+}
+function PaperclipIcon({size=14}) {
+  return <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+    <path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"/>
   </svg>;
 }
 function SyncIcon({size=14}) {
@@ -4085,27 +4095,42 @@ function MessageDetail({message,contact,isDeleted,msgTags,allTags,onReply,onRepl
       </div>{/* end mobile bounce wrapper */}
       </div>{/* end scrollable middle */}
 
-      <div className="px-5 py-3 border-t border-gray-200 flex items-center gap-2 flex-shrink-0 bg-white">
+      <div className="convooz-msg-actions px-5 py-3 border-t border-gray-200 flex items-center gap-2 flex-shrink-0 bg-white">
         {(()=>{const mob=window.innerWidth<768; return <>
         <button onClick={onReply} className="px-3 py-1.5 text-xs rounded bg-indigo-600 text-white hover:bg-indigo-700 font-medium flex items-center gap-1.5" title="Reply">
-          <ReplyIcon size={mob?16:13}/>{!mob&&<span>Reply</span>}
+          <ReplyIcon size={mob?16:13}/>{!mob&&<span className="convooz-action-label">Reply</span>}
         </button>
         <button onClick={onReplyAll} className="px-3 py-1.5 text-xs rounded bg-gray-100 hover:bg-gray-200 text-gray-700 flex items-center gap-1.5" title="Reply all">
-          <ReplyAllIcon size={mob?16:13}/>{!mob&&<span>Reply all</span>}
+          <ReplyAllIcon size={mob?16:13}/>{!mob&&<span className="convooz-action-label">Reply all</span>}
         </button>
         <button onClick={onForward} className="px-3 py-1.5 text-xs rounded bg-gray-100 hover:bg-gray-200 text-gray-700 flex items-center gap-1.5" title="Forward">
-          <ForwardIcon size={mob?16:13}/>{!mob&&<span>Forward</span>}
+          <ForwardIcon size={mob?16:13}/>{!mob&&<span className="convooz-action-label">Forward</span>}
         </button>
+        {(() => {
+          // v0.0.323 — the attachments' download in the action bar: one
+          // file as is, several as the .zip of "Download all attachments".
+          const atts = (enriched?.attachments || message.attachmentsMeta || []).filter(a => !a.isInline);
+          if (atts.length === 0) return null;
+          const single = atts.length === 1;
+          return (
+            <button onClick={() => single ? downloadAttachment(atts[0]) : downloadAllAttachments(atts)} disabled={!!zipProgress}
+              className="px-3 py-1.5 text-xs rounded bg-gray-100 hover:bg-gray-200 text-gray-700 flex items-center gap-1.5 disabled:opacity-60"
+              title={single ? `Download ${atts[0].filename}` : `Download all ${atts.length} attachments (.zip)`}>
+              {zipProgress ? <Spinner size={mob?16:13}/> : <PaperclipIcon size={mob?16:13}/>}
+              {!mob&&<span className="convooz-action-label">{zipProgress ? `${zipProgress.done}/${zipProgress.total}` : 'Download'}</span>}
+            </button>
+          );
+        })()}
         <div className="flex-1"/>
         {isDeleted
           ?<button onClick={onRecover} className="px-3 py-1.5 text-xs rounded bg-gray-100 hover:bg-green-100 text-green-600 flex items-center gap-1.5" title="Recover">
-            <RecoverIcon size={mob?16:13}/>{!mob&&<span>Recover</span>}
+            <RecoverIcon size={mob?16:13}/>{!mob&&<span className="convooz-action-label">Recover</span>}
           </button>
           :<button onClick={onDelete} className="px-3 py-1.5 text-xs rounded bg-gray-100 hover:bg-red-100 text-red-500 flex items-center gap-1.5" title="Delete">
-            <DeleteIcon size={mob?16:13}/>{!mob&&<span>Delete</span>}
+            <DeleteIcon size={mob?16:13}/>{!mob&&<span className="convooz-action-label">Delete</span>}
           </button>}
         {message.dir==="in"&&!isDeleted&&<button onClick={()=>onSpam?.(message.id)} className="px-3 py-1.5 text-xs rounded bg-gray-100 hover:bg-gray-200 text-gray-500 flex items-center gap-1.5" title="Spam">
-          <SpamIcon size={mob?16:13}/>{!mob&&<span>Spam</span>}
+          <SpamIcon size={mob?16:13}/>{!mob&&<span className="convooz-action-label">Spam</span>}
         </button>}
         </>})()}
       </div>
