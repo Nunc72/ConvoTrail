@@ -162,6 +162,20 @@
        (with their tooltips) stay, as on mobile. MessageDetail measures
        the fit and sets the class (v0.0.324). */
     .convooz-actions-compact .convooz-action-label { display: none; }
+    /* v0.0.325 — Print (printMail): while html.convooz-printing is set,
+       print media shows only #convooz-print, the mail; the app is hidden.
+       The outer frame's height/overflow lock would cut the print off
+       after one page. */
+    #convooz-print { display: none; }
+    @media print {
+      @page { margin: 16mm; }
+      html.convooz-printing, html.convooz-printing body {
+        height: auto !important; min-height: 0 !important; overflow: visible !important;
+        position: static !important; background: #fff !important;
+      }
+      html.convooz-printing body > :not(#convooz-print) { display: none !important; }
+      html.convooz-printing #convooz-print { display: block !important; }
+    }
     .tag-chip { display: inline-flex; align-items: center; gap: 4px; padding: 1px 7px; border-radius: 999px; font-size: 0.65rem; font-weight: 600; background: #f1f5f9; color: #64748b; }
     /* Prevent iOS auto-zoom on input focus: Safari only zooms when font-size < 16px.
        Apply 16px on mobile only so desktop keeps compact sizing. */
@@ -215,7 +229,7 @@
        polish change is picked up by every browser as soon as the version
        is bumped — no manual cache-busters needed. Keep ?v= here in sync
        with APP_VERSION below at every deploy. -->
-  <link rel="stylesheet" href="polish.css?v=0.0.324"/>
+  <link rel="stylesheet" href="polish.css?v=0.0.325"/>
 </head>
 <body>
 <div id="root">
@@ -454,7 +468,7 @@ window.CONVOOZ_CRYPTO = CONVOOZ_CRYPTO;
 
 // ─── Constants ───────────────────────────────────────────────────────────────
 
-const APP_VERSION = "0.0.324"; // bumped on every deploy — keep in sync with version.json AND with the ?v= on polish.css above
+const APP_VERSION = "0.0.325"; // bumped on every deploy — keep in sync with version.json AND with the ?v= on polish.css above
 
 // ─── Backend + Supabase config ───────────────────────────────────────────────
 // Two stacks: prod (live testers) and staging (where new features land first).
@@ -3032,41 +3046,313 @@ function saveBlobAs(blob, filename) {
 }
 
 // v0.0.324 — Print: the mail on its own (header block + body + attachment
-// names) in an off-screen iframe, then the system print dialog for that
-// frame — with "Save as PDF" on Mac and Windows. The sandbox has no
-// allow-scripts, so mail HTML can't run; allow-modals permits print(),
-// allow-same-origin lets us reach the frame (and the blob: URLs of
-// inline images).
-function printMail({ subject, from, to, cc, bcc, date, html, text, attachments }) {
+// names) and the system print dialog, with "Save as PDF".
+// v0.0.325 — printed from the page itself. The off-screen iframe of
+// v0.0.324 worked on desktop, but iOS Safari and Chrome on Android print
+// the page around the frame instead. Now the mail goes into
+// #convooz-print, which only print media shows (the app is hidden there,
+// see the inline <style>). Mail HTML is cleaned first (cleanMailDoc) and
+// gets a shadow root of its own, so its CSS reaches neither the app nor
+// the header block.
+//   • iOS only opens the print sheet when print() runs inside the tap, so
+//     WebKit prints right away (the images come from the cache of the mail
+//     on screen). Chrome and Firefox first wait for the images, at most
+//     2.5 s, so they don't print them blank.
+//   • A Home Screen app on iOS has no print sheet: print() does nothing
+//     there. It gets the mail as a PDF through the share sheet instead,
+//     which offers Print and Save to Files.
+//   • The container stays until the next tap or key press, not just until
+//     afterprint: Android renders the page again when the paper size
+//     changes in its print dialog.
+let endPrint = null;
+
+function printMail(mail) {
+  endPrint?.();
+  const host = document.createElement('div');
+  host.id = 'convooz-print';
+  const mailRoot = fillPrintRoot(host.attachShadow({ mode: 'open' }), mail);
+  document.body.appendChild(host);
+  document.documentElement.classList.add('convooz-printing');
+  const title = document.title;
+  document.title = mail.subject || 'Mail'; // print job name, default PDF file name
+
+  let ran = false, started = false, armed = false;
+  const onBeforePrint = () => { started = true; };
+  const onUserAction = () => { if (armed) end(); };
+  const end = () => {
+    window.removeEventListener('beforeprint', onBeforePrint);
+    document.removeEventListener('pointerdown', onUserAction, true);
+    document.removeEventListener('keydown', onUserAction, true);
+    document.documentElement.classList.remove('convooz-printing');
+    host.remove();
+    document.title = title;
+    if (endPrint === end) endPrint = null;
+  };
+  endPrint = end;
+  window.addEventListener('beforeprint', onBeforePrint);
+  document.addEventListener('pointerdown', onUserAction, true);
+  document.addEventListener('keydown', onUserAction, true);
+
+  const run = () => {
+    if (ran || endPrint !== end) return;
+    ran = true;
+    try { window.print(); } catch { /* print blocked */ }
+    setTimeout(() => { armed = true; }, 400); // the tap that printed doesn't count
+    if (!started && isStandaloneApp()) shareMailPdf(mail);
+  };
+  const pending = mailRoot ? [...mailRoot.querySelectorAll('img')].filter(img => !img.complete) : [];
+  if (!pending.length || printsInTap()) { run(); return; }
+  let left = pending.length;
+  const loaded = () => { if (--left <= 0) run(); };
+  pending.forEach(img => {
+    img.addEventListener('load', loaded, { once: true });
+    img.addEventListener('error', loaded, { once: true });
+  });
+  setTimeout(run, 2500);
+}
+
+// WebKit: Safari, and every browser on iOS.
+function printsInTap() {
+  const ua = navigator.userAgent;
+  return /iP(hone|ad|od)/.test(ua) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1)
+    || (/Safari\//.test(ua) && !/Chrom(e|ium)\/|Edg\/|OPR\/|Firefox\/|Android/.test(ua));
+}
+function isStandaloneApp() {
+  return navigator.standalone === true || !!window.matchMedia?.('(display-mode: standalone)').matches;
+}
+
+function fillPrintRoot(root, { subject, from, to, cc, bcc, date, html, text, attachments }) {
   const esc = htmlEscape;
   const row = (label, value) => value ? `<div><b>${label}</b> ${esc(value)}</div>` : '';
   const files = (attachments || []).filter(a => a && a.filename && !a.isInline);
-  const doc = `<!doctype html><html><head><meta charset="utf-8"><title>${esc(subject || 'Mail')}</title>
-<style>
-  @page { margin: 16mm; }
-  body { margin: 0; font: 13px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; color: #111; background: #fff; }
+  root.innerHTML = `<style>
+  :host { all: initial; display: block; font: 13px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; color: #111; background: #fff; }
   h1 { font-size: 18px; line-height: 1.3; margin: 0 0 10px; }
-  .meta { font-size: 12px; color: #444; padding-bottom: 10px; margin-bottom: 14px; border-bottom: 1px solid #ccc; }
+  .meta { font-size: 12px; color: #444; padding-bottom: 10px; margin-bottom: 14px; border-bottom: 1px solid #ccc; overflow-wrap: anywhere; }
   .meta b { color: #111; font-weight: 600; }
   .text { white-space: pre-wrap; overflow-wrap: anywhere; }
-  .html img { max-width: 100%; height: auto; }
   .files { margin-top: 16px; padding-top: 8px; border-top: 1px solid #ccc; font-size: 12px; color: #444; }
-</style></head><body>
+</style>
 <h1>${esc(subject || '(no subject)')}</h1>
 <div class="meta">${row('From:', from)}${row('To:', to)}${row('Cc:', cc)}${row('Bcc:', bcc)}${row('Date:', date)}</div>
-${html ? `<div class="html">${html}</div>` : `<div class="text">${esc(text || '')}</div>`}
-${files.length ? `<div class="files"><b>Attachments:</b> ${files.map(a => esc(a.filename)).join(', ')}</div>` : ''}
-</body></html>`;
-  const frame = document.createElement('iframe');
-  frame.setAttribute('sandbox', 'allow-same-origin allow-modals');
-  frame.setAttribute('aria-hidden', 'true');
-  frame.style.cssText = 'position:fixed;left:-10000px;top:0;width:800px;height:600px;border:0;';
-  frame.onload = () => {
-    try { frame.contentWindow.focus(); frame.contentWindow.print(); }
-    finally { setTimeout(() => frame.remove(), 1000); }
+${html ? '<div class="mail"></div>' : `<div class="text">${esc(text || '')}</div>`}
+${files.length ? `<div class="files"><b>Attachments:</b> ${files.map(a => esc(a.filename)).join(', ')}</div>` : ''}`;
+  if (!html) return null;
+  // The mail in its own shadow root, on the defaults of HtmlMessageBody.
+  // Its dark-mode rules are switched off (light text on white paper), and
+  // :root rules aim at the shadow host, since a shadow tree has no root.
+  const mailRoot = root.querySelector('.mail').attachShadow({ mode: 'open' });
+  const doc = cleanMailDoc(html);
+  const noDark = s => s.replace(/prefers-color-scheme\s*:\s*dark/gi, 'prefers-color-scheme: print');
+  for (const s of doc.querySelectorAll('style')) s.textContent = noDark(s.textContent).replace(/:root\b/g, ':host');
+  for (const n of doc.querySelectorAll('[media]')) n.setAttribute('media', noDark(n.getAttribute('media')));
+  mailRoot.innerHTML = `<style>
+  :host { all: initial; display: block; }
+  .body { font: 13px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; color: #222; word-break: break-word; overflow-wrap: anywhere; }
+  img, video { max-width: 100%; height: auto; }
+  table { max-width: 100%; }
+  a { color: #4f46e5; }
+  blockquote { margin: 0.5em 0; padding-left: 0.75em; border-left: 3px solid #e5e7eb; color: #6b7280; }
+  pre, code { white-space: pre-wrap; word-break: break-all; overflow-wrap: anywhere; }
+</style>`;
+  mailRoot.append(...[...doc.head.querySelectorAll('style, link')].map(n => document.adoptNode(n)));
+  const body = document.createElement('div');
+  body.className = 'body';
+  if (doc.body.getAttribute('style')) body.setAttribute('style', doc.body.getAttribute('style'));
+  body.append(...[...doc.body.childNodes].map(n => document.adoptNode(n)));
+  mailRoot.appendChild(body);
+  return mailRoot;
+}
+
+// Mail HTML for the live page: parsed inert (DOMParser runs and loads
+// nothing), then stripped of whatever could run, navigate or play:
+// scripts, frames, plugins, audio, meta/base, links other than
+// stylesheets, on* handlers, javascript: URLs, autoplay. loading="lazy"
+// goes too, or an image in the hidden container never loads.
+function cleanMailDoc(html) {
+  const doc = new DOMParser().parseFromString(html, 'text/html');
+  for (const n of doc.querySelectorAll('script, noscript, template, iframe, frame, frameset, object, embed, applet, audio, base, meta, title, link')) {
+    if (n.localName === 'link' && /\bstylesheet\b/i.test(n.getAttribute('rel') || '')) continue;
+    n.remove();
+  }
+  for (const el of doc.querySelectorAll('*')) {
+    for (const { name, value } of [...el.attributes]) {
+      if (/^on/i.test(name) || name === 'autoplay' || name === 'loading'
+        || (/^(href|src|srcset|xlink:href|action|formaction|background|poster)$/i.test(name)
+          && /^(javascript|vbscript|data:text\/html)/i.test(value.replace(/[\u0000-\u0020]/g, '')))) {
+        el.removeAttribute(name);
+      }
+    }
+  }
+  return doc;
+}
+
+// The PDF route of a Home Screen app: the share sheet takes the file
+// (Print, Save to Files, Mail …); without Web Share it's a download.
+function shareMailPdf(mail) {
+  const name = `${safeFileName(mail.subject, 'Mail')}.pdf`;
+  const file = new File([mailPdf(mail)], name, { type: 'application/pdf' });
+  if (navigator.canShare?.({ files: [file] })) {
+    navigator.share({ files: [file] }).catch(e => { if (e?.name !== 'AbortError') saveBlobAs(file, name); });
+  } else {
+    saveBlobAs(file, name);
+  }
+}
+
+// Text-only PDF of a mail: A4, the PDF base font Helvetica. Base fonts
+// only know WinAnsi (Western European): other letters lose their accent
+// or become '?', emoji are dropped. HTML mails come along as their text.
+// Glyph widths (per 1000) of Helvetica and Helvetica-Bold, for ' '…'~'.
+const PDF_HELV = [278,278,355,556,556,889,667,191,333,333,389,584,278,333,278,278,556,556,556,556,556,556,556,556,556,556,278,278,584,584,584,556,1015,667,667,722,722,667,611,778,722,278,500,667,556,833,722,778,667,778,722,667,611,722,667,944,667,667,611,278,278,278,469,556,333,556,556,500,556,556,278,556,556,222,222,500,222,833,556,556,556,556,333,500,278,556,500,722,500,500,500,334,260,334,584];
+const PDF_HELV_BOLD = [278,333,474,556,556,889,722,238,333,333,389,584,278,333,278,278,556,556,556,556,556,556,556,556,556,556,333,333,584,584,584,611,975,722,722,722,722,667,611,778,722,278,556,722,611,833,722,778,667,778,722,667,611,722,667,944,667,667,611,333,278,333,584,556,333,556,611,556,611,556,333,611,611,278,278,556,278,889,611,611,611,611,389,556,333,611,556,778,556,556,500,389,280,389,584];
+// WinAnsi's 0x80–0x9F block (by Unicode), stand-ins for what it lacks, and
+// widths in the upper half that differ from the base letter.
+const PDF_WINANSI = { 0x20AC:0x80, 0x201A:0x82, 0x0192:0x83, 0x201E:0x84, 0x2026:0x85, 0x2020:0x86, 0x2021:0x87, 0x02C6:0x88, 0x2030:0x89, 0x0160:0x8A, 0x2039:0x8B, 0x0152:0x8C, 0x017D:0x8E, 0x2018:0x91, 0x2019:0x92, 0x201C:0x93, 0x201D:0x94, 0x2022:0x95, 0x2013:0x96, 0x2014:0x97, 0x02DC:0x98, 0x2122:0x99, 0x0161:0x9A, 0x203A:0x9B, 0x0153:0x9C, 0x017E:0x9E, 0x0178:0x9F };
+const PDF_SUBST = { 0x2212:'-', 0x2010:'-', 0x2011:'-', 0x2002:' ', 0x2003:' ', 0x2007:' ', 0x2009:' ', 0x202F:' ', 0x2032:"'", 0x2033:'"', 0x2190:'<-', 0x2192:'->' };
+const PDF_WIDE = { 0x80:556, 0x82:222, 0x84:333, 0x85:1000, 0x88:333, 0x89:1000, 0x8A:667, 0x8B:333, 0x8C:1000, 0x8E:611, 0x91:222, 0x92:222, 0x93:333, 0x94:333, 0x95:350, 0x96:556, 0x97:1000, 0x98:333, 0x99:1000, 0x9A:500, 0x9B:333, 0x9C:944, 0x9E:500, 0x9F:667, 0xA0:278, 0xA9:737, 0xAE:737, 0xB0:400, 0xC6:1000, 0xD7:584, 0xD8:778, 0xDF:611, 0xE6:889, 0xF7:584, 0xF8:611 };
+
+// → a string of WinAnsi codes (one char per byte), '\n' kept.
+function pdfEncode(s) {
+  let out = '';
+  const ok = b => (b >= 32 && b < 127) || (b >= 0xA0 && b <= 0xFF && b !== 0xAD);
+  for (const ch of String(s || '').replace(/\r\n?|[\u2028\u2029]/g, '\n').replace(/\t/g, '    ')) {
+    const c = ch.codePointAt(0);
+    if (c === 10 || ok(c)) out += ch;
+    else if (PDF_WINANSI[c]) out += String.fromCharCode(PDF_WINANSI[c]);
+    else if (PDF_SUBST[c]) out += PDF_SUBST[c];
+    else if (c > 0xFFFF || c < 0xA0 || c === 0xAD || c === 0xFEFF || (c >= 0x300 && c < 0x370)
+      || (c >= 0x200B && c <= 0x200F) || (c >= 0x2060 && c <= 0x2064) || (c >= 0xFE00 && c <= 0xFE0F)) continue;
+    else {
+      // ő → o, ﬁ → fi, Ａ → A; whatever is left over becomes '?'.
+      let plain = '';
+      for (const p of ch.normalize('NFKD').replace(/[\u0300-\u036f]/g, '')) {
+        const b = p.charCodeAt(0);
+        plain += ok(b) ? p : PDF_WINANSI[b] ? String.fromCharCode(PDF_WINANSI[b]) : '?';
+      }
+      out += plain || '?';
+    }
+  }
+  return out;
+}
+function pdfCharWidth(code, bold) {
+  const table = bold ? PDF_HELV_BOLD : PDF_HELV;
+  if (code >= 32 && code < 127) return table[code - 32];
+  if (PDF_WIDE[code]) return PDF_WIDE[code];
+  const base = String.fromCharCode(code).normalize('NFD').charCodeAt(0);
+  return base >= 32 && base < 127 ? table[base - 32] : 556;
+}
+// Greedy word wrap of encoded text into lines of at most `width` points;
+// a word longer than a line is cut. Blank lines stay.
+function pdfWrap(text, size, width, bold) {
+  const cw = c => pdfCharWidth(c, bold) * size / 1000;
+  const tw = s => { let w = 0; for (let i = 0; i < s.length; i++) w += cw(s.charCodeAt(i)); return w; };
+  const lines = [];
+  for (const para of text.split('\n')) {
+    let line = '', w = 0, wrapped = false;
+    for (let tok of para.match(/\S+|\s+/g) || []) {
+      const blank = !tok.trim();
+      if (blank && wrapped && !line) continue; // no leading blanks on a wrapped line
+      const t = tw(tok);
+      if (w + t <= width) { line += tok; w += t; continue; }
+      if (line) lines.push(line.replace(/\s+$/, ''));
+      line = ''; w = 0; wrapped = true;
+      if (blank) continue;
+      while (tw(tok) > width) {
+        let i = 0, acc = 0;
+        while (i < tok.length && acc + cw(tok.charCodeAt(i)) <= width) acc += cw(tok.charCodeAt(i++));
+        i = Math.max(i, 1);
+        lines.push(tok.slice(0, i));
+        tok = tok.slice(i);
+      }
+      line = tok; w = tw(tok);
+    }
+    lines.push(line.replace(/\s+$/, ''));
+  }
+  return lines;
+}
+// The text of an HTML mail: blocks and <br> become line breaks, list
+// items get a bullet, images drop out.
+function htmlToPlainText(html) {
+  const doc = new DOMParser().parseFromString(html, 'text/html');
+  doc.querySelectorAll('script, style, noscript, template, title').forEach(n => n.remove());
+  const BLOCK = /^(address|article|aside|blockquote|dd|div|dl|dt|fieldset|figcaption|figure|footer|form|h[1-6]|header|hr|li|main|nav|ol|p|pre|section|table|tbody|thead|tfoot|tr|ul)$/;
+  let out = '';
+  const walk = (node, pre) => {
+    for (const n of node.childNodes) {
+      if (n.nodeType === 3) { out += pre ? n.nodeValue : n.nodeValue.replace(/\s+/g, ' '); continue; }
+      if (n.nodeType !== 1) continue;
+      const tag = n.localName;
+      if (tag === 'br') { out += '\n'; continue; }
+      const block = BLOCK.test(tag);
+      if (block) out += '\n';
+      if (tag === 'li') out += '\u2022 ';
+      if (tag === 'td' || tag === 'th') out += ' ';
+      walk(n, pre || tag === 'pre');
+      if (block) out += '\n';
+    }
   };
-  frame.srcdoc = doc;
-  document.body.appendChild(frame);
+  walk(doc.body, false);
+  return out.replace(/[ \t]+\n/g, '\n').replace(/\n[ \t]+/g, '\n').replace(/\n{3,}/g, '\n\n').trim();
+}
+function mailPdf({ subject, from, to, cc, bcc, date, html, text, attachments }) {
+  const W = 595.28, H = 841.89, M = 50, LABEL = 36;
+  const num = n => String(Math.round(n * 100) / 100);
+  const str = s => '(' + s.replace(/[\\()]/g, '\\$&').replace(/[^\x20-\x7e]/g, c => '\\' + c.charCodeAt(0).toString(8).padStart(3, '0')) + ')';
+  const pages = [];
+  let ops = [], y = H - M;
+  const put = (s, x, base, size, bold, gray) => ops.push(`BT /${bold ? 'F2' : 'F1'} ${size} Tf ${gray} g 1 0 0 1 ${num(x)} ${num(base)} Tm ${str(s)} Tj ET`);
+  const line = (s, { size, lead, bold = false, gray = 0, x = M, label = '' }) => {
+    if (y - lead < M) { pages.push(ops); ops = []; y = H - M; }
+    y -= lead;
+    if (label) put(label, M, y + lead * 0.25, size, true, 0);
+    if (s) put(s, x, y + lead * 0.25, size, bold, gray);
+  };
+  const rule = () => ops.push(`0.8 G 0.5 w ${M} ${num(y)} m ${num(W - M)} ${num(y)} l S`);
+  for (const l of pdfWrap(pdfEncode(subject || '(no subject)'), 15, W - 2 * M, true)) line(l, { size: 15, lead: 19, bold: true });
+  y -= 6;
+  for (const [label, value] of [['From:', from], ['To:', to], ['Cc:', cc], ['Bcc:', bcc], ['Date:', date]]) {
+    if (!value) continue;
+    pdfWrap(pdfEncode(value), 9.5, W - 2 * M - LABEL, false)
+      .forEach((l, i) => line(l, { size: 9.5, lead: 13, gray: 0.27, x: M + LABEL, label: i ? '' : label }));
+  }
+  y -= 8; rule(); y -= 8;
+  const body = text && text.trim() ? text : htmlToPlainText(html || '');
+  for (const l of pdfWrap(pdfEncode(body), 10.5, W - 2 * M, false)) line(l, { size: 10.5, lead: 14.5 });
+  const files = (attachments || []).filter(a => a && a.filename && !a.isInline);
+  if (files.length) {
+    y -= 10; rule(); y -= 2;
+    for (const l of pdfWrap(pdfEncode(`Attachments: ${files.map(a => a.filename).join(', ')}`), 9.5, W - 2 * M, false)) line(l, { size: 9.5, lead: 13, gray: 0.27 });
+  }
+  pages.push(ops);
+  const contents = pages.map((p, i) => (pages.length > 1
+    ? [...p, `BT /F1 8 Tf 0.5 g 1 0 0 1 ${num(W - M - 24)} ${num(M / 2)} Tm (${i + 1} / ${pages.length}) Tj ET`] : p).join('\n'));
+  return pdfFile(contents, subject || 'Mail');
+}
+// Page content streams → a PDF Blob: catalog, pages, the two base fonts,
+// an Info title (UTF-16), and the cross-reference table.
+function pdfFile(contents, title) {
+  let hex = 'FEFF';
+  for (let i = 0; i < title.length; i++) hex += title.charCodeAt(i).toString(16).padStart(4, '0');
+  const objs = [
+    '<< /Type /Catalog /Pages 2 0 R >>',
+    '',
+    '<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>',
+    '<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica-Bold /Encoding /WinAnsiEncoding >>',
+    `<< /Title <${hex}> /Producer (Convooz) >>`,
+  ];
+  const kids = [];
+  for (const c of contents) {
+    objs.push(`<< /Length ${c.length} >>\nstream\n${c}\nendstream`);
+    objs.push(`<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595.28 841.89] /Resources << /Font << /F1 3 0 R /F2 4 0 R >> >> /Contents ${objs.length} 0 R >>`);
+    kids.push(`${objs.length} 0 R`);
+  }
+  objs[1] = `<< /Type /Pages /Kids [${kids.join(' ')}] /Count ${kids.length} >>`;
+  let out = '%PDF-1.4\n%\u00e2\u00e3\u00cf\u00d3\n';
+  const offsets = objs.map((body, i) => { const at = out.length; out += `${i + 1} 0 obj\n${body}\nendobj\n`; return at; });
+  const xref = out.length;
+  out += `xref\n0 ${objs.length + 1}\n0000000000 65535 f \n${offsets.map(o => `${String(o).padStart(10, '0')} 00000 n \n`).join('')}`;
+  out += `trailer\n<< /Size ${objs.length + 1} /Root 1 0 R /Info 5 0 R >>\nstartxref\n${xref}\n%%EOF\n`;
+  return new Blob([Uint8Array.from(out, c => c.charCodeAt(0))], { type: 'application/pdf' });
 }
 
 // v0.0.322 — "Download all attachments" packs them into one .zip, built
