@@ -159,9 +159,9 @@
     .no-select { user-select: none; }
     /* v0.0.323 — the mail action bar keeps every button in view: when
        column 3 is too narrow for the labels, they drop and the icons
-       (with their tooltips) stay, as on mobile. */
-    .convooz-msg-actions { container-type: inline-size; }
-    @container (max-width: 579px) { .convooz-action-label { display: none; } }
+       (with their tooltips) stay, as on mobile. MessageDetail measures
+       the fit and sets the class (v0.0.324). */
+    .convooz-actions-compact .convooz-action-label { display: none; }
     .tag-chip { display: inline-flex; align-items: center; gap: 4px; padding: 1px 7px; border-radius: 999px; font-size: 0.65rem; font-weight: 600; background: #f1f5f9; color: #64748b; }
     /* Prevent iOS auto-zoom on input focus: Safari only zooms when font-size < 16px.
        Apply 16px on mobile only so desktop keeps compact sizing. */
@@ -215,7 +215,7 @@
        polish change is picked up by every browser as soon as the version
        is bumped — no manual cache-busters needed. Keep ?v= here in sync
        with APP_VERSION below at every deploy. -->
-  <link rel="stylesheet" href="polish.css?v=0.0.323"/>
+  <link rel="stylesheet" href="polish.css?v=0.0.324"/>
 </head>
 <body>
 <div id="root">
@@ -226,7 +226,7 @@
 </div>
 <script type="text/babel">
 
-const { useState, useMemo, useRef, useEffect, useCallback } = React;
+const { useState, useMemo, useRef, useEffect, useCallback, useLayoutEffect } = React;
 
 // ─── End-to-end-encryption crypto (Pad A) ────────────────────────────────────
 // Built on the browser-native Web Crypto API (window.crypto.subtle). No
@@ -454,7 +454,7 @@ window.CONVOOZ_CRYPTO = CONVOOZ_CRYPTO;
 
 // ─── Constants ───────────────────────────────────────────────────────────────
 
-const APP_VERSION = "0.0.323"; // bumped on every deploy — keep in sync with version.json AND with the ?v= on polish.css above
+const APP_VERSION = "0.0.324"; // bumped on every deploy — keep in sync with version.json AND with the ?v= on polish.css above
 
 // ─── Backend + Supabase config ───────────────────────────────────────────────
 // Two stacks: prod (live testers) and staging (where new features land first).
@@ -883,13 +883,17 @@ function htmlEscape(s) {
     .replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')
     .replace(/"/g,'&quot;').replace(/'/g,'&#39;');
 }
-function userTextToHtmlParagraphs(text) {
-  // Plain text → minimally-marked-up HTML. We escape user input then map
-  // newlines to <br>, paragraph-breaks (blank lines) to <p> blocks. Good
-  // enough for the user's typed reply on top of the quoted original.
-  const esc = htmlEscape(text);
-  const paragraphs = esc.split(/\n{2,}/g).map(p => p.replace(/\n/g, '<br>')).join('</p><p>');
-  return paragraphs ? `<p>${paragraphs}</p>` : '';
+function userTextToHtml(text) {
+  // Plain text → HTML for the user's typed part of a rich reply / forward:
+  // escaped, one <br> per newline (and runs of spaces kept), so every blank
+  // line stays a blank line. v0.0.324: blank lines used to become <p>
+  // blocks, and runs of them collapsed into one; clients that zero <p>
+  // margins (common in webmail and helpdesk tools) then showed the reply
+  // as one glued block.
+  if (!text) return '';
+  const lines = htmlEscape(text).replace(/\r\n?/g, '\n').split('\n')
+    .map(l => l.replace(/\t/g, '    ').replace(/ {2}/g, ' &nbsp;'));
+  return `<div>${lines.join('<br>\n')}</div>`;
 }
 function quoteHtmlHeader(msg) {
   const d = new Date(msg.date);
@@ -1057,6 +1061,19 @@ function ForwardIcon({size=14}) {
 function PaperclipIcon({size=14}) {
   return <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
     <path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"/>
+  </svg>;
+}
+function SendAgainIcon({size=14}) {
+  return <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+    <polyline points="17 1 21 5 17 9"/><path d="M3 11V9a4 4 0 0 1 4-4h14"/>
+    <polyline points="7 23 3 19 7 15"/><path d="M21 13v2a4 4 0 0 1-4 4H3"/>
+  </svg>;
+}
+function PrintIcon({size=14}) {
+  return <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+    <polyline points="6 9 6 2 18 2 18 9"/>
+    <path d="M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2"/>
+    <rect x="6" y="14" width="12" height="8"/>
   </svg>;
 }
 function SyncIcon({size=14}) {
@@ -1957,9 +1974,13 @@ const SIG_SEP = '\n\n';
 
 function ComposePane({replyTo, replyKind='reply', toContact, draft, initTo:initToOverride="", initCC="", initBCC="", initTag=null, initMsgTags=[], allKnownTags=[], allKnownEmails=[], selAccounts=[], myEmails=[], mailAccounts=[], signatures=[], accountSigs={}, onSend, onBeforeR2mSend, onSaveDraft, onDeleteDraft, onDraftSnooze, onDraftForget, onClose, mobileBack, mobileBackLabel}) {
   const isMobile = typeof window !== 'undefined' && window.innerWidth < 768;
-  const isReply     = !!replyTo && replyKind !== 'forward';
   const isReplyAll  = !!replyTo && replyKind === 'reply-all';
   const isForward   = !!replyTo && replyKind === 'forward';
+  // v0.0.324 — "Send again": a sent mail as a new message — its recipients,
+  // subject, text and attachments, all editable; no Re:, no quote, no
+  // reply threading.
+  const isAgain     = !!replyTo && replyKind === 'again';
+  const joinAddrs = list => (list || []).filter(Boolean).join(', ');
 
   // To: forward starts empty; reply / reply-all target the original sender
   // (for incoming) or the original recipient (for outgoing).
@@ -1968,6 +1989,7 @@ function ComposePane({replyTo, replyKind='reply', toContact, draft, initTo:initT
     : "";
   const initTo = draft?.to ?? (
     isForward ? "" :
+    isAgain ? (joinAddrs(replyTo.toList) || replyTo.to || "") :
     replyTo ? primaryReplyTarget :
     (initToOverride || toContact?.emails[0] || "")
   );
@@ -1984,16 +2006,17 @@ function ComposePane({replyTo, replyKind='reply', toContact, draft, initTo:initT
         && !myEmailSet.has(e.toLowerCase())
       ).join(', ')
     : "";
-  const initCCResolved = draft?.cc ?? (computedReplyAllCC || initCC);
+  const initCCResolved = draft?.cc ?? (isAgain ? joinAddrs(replyTo.ccList) : (computedReplyAllCC || initCC));
   // v0.0.281 — BCC needs the same draft-fallback dance as To / CC.
   // Without it, re-opening a saved draft shows an empty BCC field
   // (and the BCC chevron stays collapsed because showBCC is gated on
   // !!initBCC, which is just the tagComposeInit prop). Effect: BCC
   // addresses appeared lost on save → reload → save.
-  const initBCCResolved = draft?.bcc ?? initBCC;
+  const initBCCResolved = draft?.bcc ?? (isAgain ? joinAddrs(replyTo.bccList) : initBCC);
 
   const initSubj = draft?.subject ?? (
     isForward ? "Fwd: " + (replyTo?.subject || '') :
+    isAgain ? (replyTo.subject || '') :
     replyTo ? "Re: " + (replyTo.subject || '') :
     ""
   );
@@ -2007,10 +2030,13 @@ function ComposePane({replyTo, replyKind='reply', toContact, draft, initTo:initT
   //     the user can edit / trim / interleave their reply with the
   //     original. No iframe, no body_html — just the old text-only
   //     flow Rik was used to.
-  const isRichHtml = !!(replyTo?.bodyHtml && /<img/i.test(replyTo.bodyHtml));
+  const isRichHtml = !isAgain && !!(replyTo?.bodyHtml && /<img/i.test(replyTo.bodyHtml));
   const initBody = draft?.body ?? (
+    isAgain ? (replyTo.body || '') :
     replyTo && !isRichHtml ? `\n\n${quoteHeader(replyTo)}` : ""
   );
+  // The mail this one answers, for threading — none for Send again.
+  const replyToId = (!isAgain && replyTo?.id) || null;
 
   // Compute initial auto-signature (only for new messages, not replies/drafts).
   // For a reply, the from-address must match the account the original mail
@@ -2187,7 +2213,7 @@ function ComposePane({replyTo, replyKind='reply', toContact, draft, initTo:initT
       let plainBody, htmlBody = '';
       if (replyTo && isRichHtml && includeQuote) {
         plainBody = `${body}\n\n${quoteHeader(replyTo)}`;
-        htmlBody  = userTextToHtmlParagraphs(body)
+        htmlBody  = userTextToHtml(body)
                   + quoteHtmlHeader(replyTo)
                   + replyTo.bodyHtml;
       } else {
@@ -2197,7 +2223,7 @@ function ComposePane({replyTo, replyKind='reply', toContact, draft, initTo:initT
         from, to, cc: showCC ? cc : '', bcc: showBCC ? bcc : '',
         subject: subj, body: plainBody,
         body_html: htmlBody || undefined,
-        reply_to_id: replyTo?.id,
+        reply_to_id: replyToId || undefined,
         // When we have attachments, they live on the draft — the backend needs
         // the draft id to pull them into the MIME and clean up afterwards.
         draft_id: attachments.length > 0 ? draftId : null,
@@ -2220,7 +2246,7 @@ function ComposePane({replyTo, replyKind='reply', toContact, draft, initTo:initT
       mail_account_id: (mailAccounts||[]).find(a => (a.email||'').toLowerCase() === (from||'').toLowerCase())?.id || null,
       to: to || '', cc: (showCC?cc:'') || '', bcc: (showBCC?bcc:'') || '',
       subject: subj || '', body: body || '',
-      reply_to_id: replyTo?.id || null,
+      reply_to_id: replyToId,
     };
     const r = await apiFetch('/drafts', { method: 'POST', body: JSON.stringify(body_) });
     const newId = r.draft?.id;
@@ -2295,10 +2321,11 @@ function ComposePane({replyTo, replyKind='reply', toContact, draft, initTo:initT
   // bodyHtml when the original is a rich newsletter. The user can
   // remove any unwanted file via the standard ×-chip flow before
   // sending. Re-opening a saved forward draft skips the copy: the
-  // attachments are already attached to the draft row.
+  // attachments are already attached to the draft row. Send again
+  // (v0.0.324) copies them the same way.
   const forwardCopyRef = useRef(false);
   useEffect(() => {
-    if (!isForward) return;
+    if (!isForward && !isAgain) return;
     if (forwardCopyRef.current) return;
     if (attachments.length > 0) return;
     const sourceAtts = (replyTo?.attachmentsMeta || [])
@@ -2348,13 +2375,13 @@ function ComposePane({replyTo, replyKind='reply', toContact, draft, initTo:initT
       }
     })();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [isForward]);
+  }, [isForward, isAgain]);
   // What Save sends; Snooze / Forget save the same content with their action.
   function draftContent() {
     return {
       from, to, cc: showCC ? cc : '', bcc: showBCC ? bcc : '',
       subject: subj, body,
-      reply_to_id: replyTo?.id,
+      reply_to_id: replyToId || undefined,
       tags: msgTags,
     };
   }
@@ -2415,6 +2442,7 @@ function ComposePane({replyTo, replyKind='reply', toContact, draft, initTo:initT
   const hasMulti = toContact && toContact.emails.length>1 && !replyTo && !draft;
   const title = draft ? "Edit draft"
     : isForward ? "Forward"
+    : isAgain ? "Send again"
     : isReplyAll ? "Reply all"
     : replyTo ? "Reply"
     : "New message";
@@ -2715,6 +2743,15 @@ function ComposePane({replyTo, replyKind='reply', toContact, draft, initTo:initT
             <path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"/>
           </svg>
         </button>
+        {/* v0.0.324 — print what's in the pane now. */}
+        <button onClick={()=>printMail({
+            subject: subj, from, to, cc: showCC ? cc : '', bcc: showBCC ? bcc : '',
+            date: 'Not sent yet (draft)', text: body, attachments,
+          })}
+          title="Print"
+          className={`${isMobile?'p-1':'p-1.5'} rounded hover:bg-gray-100 text-gray-500`}>
+          <PrintIcon size={isMobile?14:16}/>
+        </button>
         <div className="flex-1"/>
         {sendErr && <span className="text-xs text-red-600 truncate flex-shrink min-w-0" title={sendErr}>{sendErr}</span>}
         {/* Delete draft — same button shape as MessageDetail's Delete so the
@@ -2992,6 +3029,44 @@ function saveBlobAs(blob, filename) {
   a.href = url; a.download = filename; a.rel = 'noopener';
   document.body.appendChild(a); a.click(); document.body.removeChild(a);
   setTimeout(()=>URL.revokeObjectURL(url), 500);
+}
+
+// v0.0.324 — Print: the mail on its own (header block + body + attachment
+// names) in an off-screen iframe, then the system print dialog for that
+// frame — with "Save as PDF" on Mac and Windows. The sandbox has no
+// allow-scripts, so mail HTML can't run; allow-modals permits print(),
+// allow-same-origin lets us reach the frame (and the blob: URLs of
+// inline images).
+function printMail({ subject, from, to, cc, bcc, date, html, text, attachments }) {
+  const esc = htmlEscape;
+  const row = (label, value) => value ? `<div><b>${label}</b> ${esc(value)}</div>` : '';
+  const files = (attachments || []).filter(a => a && a.filename && !a.isInline);
+  const doc = `<!doctype html><html><head><meta charset="utf-8"><title>${esc(subject || 'Mail')}</title>
+<style>
+  @page { margin: 16mm; }
+  body { margin: 0; font: 13px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; color: #111; background: #fff; }
+  h1 { font-size: 18px; line-height: 1.3; margin: 0 0 10px; }
+  .meta { font-size: 12px; color: #444; padding-bottom: 10px; margin-bottom: 14px; border-bottom: 1px solid #ccc; }
+  .meta b { color: #111; font-weight: 600; }
+  .text { white-space: pre-wrap; overflow-wrap: anywhere; }
+  .html img { max-width: 100%; height: auto; }
+  .files { margin-top: 16px; padding-top: 8px; border-top: 1px solid #ccc; font-size: 12px; color: #444; }
+</style></head><body>
+<h1>${esc(subject || '(no subject)')}</h1>
+<div class="meta">${row('From:', from)}${row('To:', to)}${row('Cc:', cc)}${row('Bcc:', bcc)}${row('Date:', date)}</div>
+${html ? `<div class="html">${html}</div>` : `<div class="text">${esc(text || '')}</div>`}
+${files.length ? `<div class="files"><b>Attachments:</b> ${files.map(a => esc(a.filename)).join(', ')}</div>` : ''}
+</body></html>`;
+  const frame = document.createElement('iframe');
+  frame.setAttribute('sandbox', 'allow-same-origin allow-modals');
+  frame.setAttribute('aria-hidden', 'true');
+  frame.style.cssText = 'position:fixed;left:-10000px;top:0;width:800px;height:600px;border:0;';
+  frame.onload = () => {
+    try { frame.contentWindow.focus(); frame.contentWindow.print(); }
+    finally { setTimeout(() => frame.remove(), 1000); }
+  };
+  frame.srcdoc = doc;
+  document.body.appendChild(frame);
 }
 
 // v0.0.322 — "Download all attachments" packs them into one .zip, built
@@ -3497,7 +3572,7 @@ function fibSnoozeDays(count) {
   return b;
 }
 
-function MessageDetail({message,contact,isDeleted,msgTags,allTags,onReply,onReplyAll,onForward,onDelete,onRecover,onDismissR2m,onR2mSeen,onR2mSnooze,onMarkRead,onSnooze,onSpam,onUnsubscribe,snoozeCount=0,onAddTag,onRemoveTag,onSelectContact,selAccounts=[],fadeOut=false,fadeOutFast=false,slideIn=false,slideOut=false,fadingAlert=null,onHeaderHeight,mobileBack,mobileBackLabel,cryptoStatus='idle'}) {
+function MessageDetail({message,contact,isDeleted,msgTags,allTags,onReply,onReplyAll,onForward,onSendAgain,onDelete,onRecover,onDismissR2m,onR2mSeen,onR2mSnooze,onMarkRead,onSnooze,onSpam,onUnsubscribe,snoozeCount=0,onAddTag,onRemoveTag,onSelectContact,selAccounts=[],fadeOut=false,fadeOutFast=false,slideIn=false,slideOut=false,fadingAlert=null,onHeaderHeight,mobileBack,mobileBackLabel,cryptoStatus='idle'}) {
   const isMobile = typeof window !== 'undefined' && window.innerWidth < 768;
   const headerRef = useRef(null);
   const [headerH, setHeaderH] = useState(0);
@@ -3516,6 +3591,33 @@ function MessageDetail({message,contact,isDeleted,msgTags,allTags,onReply,onRepl
   const [zipProgress, setZipProgress] = useState(null);
   const zipRunRef = useRef(0);
   useEffect(() => { zipRunRef.current++; setZipProgress(null); }, [message?.id]);
+  // v0.0.324 — the action bar keeps every button in view: when the
+  // labelled buttons don't fit column 3, the labels drop and the icons
+  // (with tooltips) stay, as on mobile. Measured rather than a fixed
+  // breakpoint, since the buttons differ per mail (Send again, Download,
+  // Spam). Each measurement shows the labels for a moment (same task, no
+  // paint in between) to take their full width.
+  const actionsRef = useRef(null);
+  const [actionsCompact, setActionsCompact] = useState(false);
+  useLayoutEffect(() => {
+    const el = actionsRef.current;
+    if (!el) return;
+    const measure = () => {
+      const compact = el.classList.contains('convooz-actions-compact');
+      if (compact) el.classList.remove('convooz-actions-compact');
+      const kids = [...el.children].filter(k => !k.classList.contains('flex-1'));
+      const cs = getComputedStyle(el);
+      const full = kids.reduce((s, k) => s + k.getBoundingClientRect().width, 0)
+        + (parseFloat(cs.columnGap) || 0) * Math.max(0, kids.length - 1)
+        + (parseFloat(cs.paddingLeft) || 0) + (parseFloat(cs.paddingRight) || 0);
+      if (compact) el.classList.add('convooz-actions-compact');
+      setActionsCompact(el.clientWidth + 1 < full);
+    };
+    measure();
+    const ro = new ResizeObserver(measure);
+    ro.observe(el);
+    return () => ro.disconnect();
+  });
   // v0.0.273 — Tier 3 step 5: FE-side cid: → object-URL resolution.
   // /body now returns body_html with raw cid: references for mails
   // whose attachments live in Storage (sync step 2). This state holds
@@ -3774,6 +3876,23 @@ function MessageDetail({message,contact,isDeleted,msgTags,allTags,onReply,onRepl
   // When fadingAlert is set (during action), freeze banner so alert stays until toast is gone
   const showAmberBanner = fadingAlert ? fadingAlert.amber : (message.revert2me&&message.dir==="out"&&!isDeleted);
   const showBlueBanner  = fadingAlert ? fadingAlert.blue  : (!message.read&&message.dir==="in"&&!isDraft&&!isDeleted);
+  // v0.0.324 — Print: the same body this pane shows (HTML with inline
+  // images resolved, or the text), under a From / To / Cc / Date block.
+  function printThis() {
+    const textBody = (message.body && message.body.trim()) ? message.body : (enriched?.text || '');
+    const name = message.dir === "out" ? senderPerson.name : contact?.name;
+    printMail({
+      subject: message.subject,
+      from: name && message.from && name !== message.from ? `${name} <${message.from}>` : message.from,
+      to: message.toList?.length ? message.toList.join(', ') : message.to,
+      cc: (message.ccList || []).join(', '),
+      bcc: message.dir === "out" ? (message.bccList || []).join(', ') : '',
+      date: formatFull(message.date),
+      html: (resolvedHtml ?? enriched?.html) || message.bodyHtml || '',
+      text: textBody,
+      attachments: enriched?.attachments || message.attachmentsMeta || [],
+    });
+  }
 
   // Mobile: wrap header+body+spacer inside a scrollable middle div; keep subheader fixed top, action bar fixed bottom
   const MobileFixedSubheader = isMobile&&mobileBack ? (
@@ -4095,41 +4214,50 @@ function MessageDetail({message,contact,isDeleted,msgTags,allTags,onReply,onRepl
       </div>{/* end mobile bounce wrapper */}
       </div>{/* end scrollable middle */}
 
-      <div className="convooz-msg-actions px-5 py-3 border-t border-gray-200 flex items-center gap-2 flex-shrink-0 bg-white">
-        {(()=>{const mob=window.innerWidth<768; return <>
-        <button onClick={onReply} className="px-3 py-1.5 text-xs rounded bg-indigo-600 text-white hover:bg-indigo-700 font-medium flex items-center gap-1.5" title="Reply">
+      <div ref={actionsRef} className={`convooz-msg-actions${actionsCompact ? ' convooz-actions-compact' : ''} px-5 py-3 border-t border-gray-200 flex items-center gap-2 flex-shrink-0 bg-white`}>
+        {(()=>{const mob=window.innerWidth<768;
+        // flex-shrink-0 + nowrap: buttons keep their natural width, which
+        // is what the fit measurement above relies on.
+        const btn='px-3 py-1.5 text-xs rounded flex items-center gap-1.5 flex-shrink-0 whitespace-nowrap';
+        const atts = (enriched?.attachments || message.attachmentsMeta || []).filter(a => !a.isInline);
+        const single = atts.length === 1;
+        return <>
+        <button onClick={onReply} className={`${btn} bg-indigo-600 text-white hover:bg-indigo-700 font-medium`} title="Reply">
           <ReplyIcon size={mob?16:13}/>{!mob&&<span className="convooz-action-label">Reply</span>}
         </button>
-        <button onClick={onReplyAll} className="px-3 py-1.5 text-xs rounded bg-gray-100 hover:bg-gray-200 text-gray-700 flex items-center gap-1.5" title="Reply all">
+        <button onClick={onReplyAll} className={`${btn} bg-gray-100 hover:bg-gray-200 text-gray-700`} title="Reply all">
           <ReplyAllIcon size={mob?16:13}/>{!mob&&<span className="convooz-action-label">Reply all</span>}
         </button>
-        <button onClick={onForward} className="px-3 py-1.5 text-xs rounded bg-gray-100 hover:bg-gray-200 text-gray-700 flex items-center gap-1.5" title="Forward">
+        <button onClick={onForward} className={`${btn} bg-gray-100 hover:bg-gray-200 text-gray-700`} title="Forward">
           <ForwardIcon size={mob?16:13}/>{!mob&&<span className="convooz-action-label">Forward</span>}
         </button>
-        {(() => {
-          // v0.0.323 — the attachments' download in the action bar: one
-          // file as is, several as the .zip of "Download all attachments".
-          const atts = (enriched?.attachments || message.attachmentsMeta || []).filter(a => !a.isInline);
-          if (atts.length === 0) return null;
-          const single = atts.length === 1;
-          return (
-            <button onClick={() => single ? downloadAttachment(atts[0]) : downloadAllAttachments(atts)} disabled={!!zipProgress}
-              className="px-3 py-1.5 text-xs rounded bg-gray-100 hover:bg-gray-200 text-gray-700 flex items-center gap-1.5 disabled:opacity-60"
-              title={single ? `Download ${atts[0].filename}` : `Download all ${atts.length} attachments (.zip)`}>
-              {zipProgress ? <Spinner size={mob?16:13}/> : <PaperclipIcon size={mob?16:13}/>}
-              {!mob&&<span className="convooz-action-label">{zipProgress ? `${zipProgress.done}/${zipProgress.total}` : 'Download'}</span>}
-            </button>
-          );
-        })()}
+        {/* v0.0.324 — a sent mail reopens as a new, editable message. */}
+        {message.dir==="out"&&!isDraft&&<button onClick={onSendAgain} className={`${btn} bg-gray-100 hover:bg-gray-200 text-gray-700`} title="Send again — reopens this mail to edit and send">
+          <SendAgainIcon size={mob?16:13}/>{!mob&&<span className="convooz-action-label">Send again</span>}
+        </button>}
+        {/* v0.0.323 — the attachments' download: one file as is, several
+            as the .zip of "Download all attachments". */}
+        {atts.length > 0 && (
+          <button onClick={() => single ? downloadAttachment(atts[0]) : downloadAllAttachments(atts)} disabled={!!zipProgress}
+            className={`${btn} bg-gray-100 hover:bg-gray-200 text-gray-700 disabled:opacity-60`}
+            title={single ? `Download ${atts[0].filename}` : `Download all ${atts.length} attachments (.zip)`}>
+            {zipProgress ? <Spinner size={mob?16:13}/> : <PaperclipIcon size={mob?16:13}/>}
+            {!mob&&<span className="convooz-action-label">{zipProgress ? `${zipProgress.done}/${zipProgress.total}` : 'Download'}</span>}
+          </button>
+        )}
+        {/* v0.0.324 — system print dialog (also "Save as PDF"). */}
+        <button onClick={printThis} className={`${btn} bg-gray-100 hover:bg-gray-200 text-gray-700`} title="Print">
+          <PrintIcon size={mob?16:13}/>{!mob&&<span className="convooz-action-label">Print</span>}
+        </button>
         <div className="flex-1"/>
         {isDeleted
-          ?<button onClick={onRecover} className="px-3 py-1.5 text-xs rounded bg-gray-100 hover:bg-green-100 text-green-600 flex items-center gap-1.5" title="Recover">
+          ?<button onClick={onRecover} className={`${btn} bg-gray-100 hover:bg-green-100 text-green-600`} title="Recover">
             <RecoverIcon size={mob?16:13}/>{!mob&&<span className="convooz-action-label">Recover</span>}
           </button>
-          :<button onClick={onDelete} className="px-3 py-1.5 text-xs rounded bg-gray-100 hover:bg-red-100 text-red-500 flex items-center gap-1.5" title="Delete">
+          :<button onClick={onDelete} className={`${btn} bg-gray-100 hover:bg-red-100 text-red-500`} title="Delete">
             <DeleteIcon size={mob?16:13}/>{!mob&&<span className="convooz-action-label">Delete</span>}
           </button>}
-        {message.dir==="in"&&!isDeleted&&<button onClick={()=>onSpam?.(message.id)} className="px-3 py-1.5 text-xs rounded bg-gray-100 hover:bg-gray-200 text-gray-500 flex items-center gap-1.5" title="Spam">
+        {message.dir==="in"&&!isDeleted&&<button onClick={()=>onSpam?.(message.id)} className={`${btn} bg-gray-100 hover:bg-gray-200 text-gray-500`} title="Spam">
           <SpamIcon size={mob?16:13}/>{!mob&&<span className="convooz-action-label">Spam</span>}
         </button>}
         </>})()}
@@ -9466,7 +9594,10 @@ function App({userId, onSignOut}) {
         bodyHtml = html;
       }
 
-      return { ...msg, body: quoteBody, bodyHtml };
+      // Carry /body's attachment list too: a row stored by /send has none
+      // of its own, so Forward / Send again would find nothing to copy.
+      const attachmentsMeta = Array.isArray(r.attachments) && r.attachments.length ? r.attachments : msg.attachmentsMeta;
+      return { ...msg, body: quoteBody, bodyHtml, attachmentsMeta };
     } catch (e) {
       console.warn('[reply/forward] /body fetch failed:', e?.message || e);
       return msg;
@@ -9475,6 +9606,8 @@ function App({userId, onSignOut}) {
   async function handleReply(msg){const m=await ensureBodyForQuote(msg);setReplyTo(m);setReplyKind('reply');setComposeContact(null);setComposeDraft(null);setShowCompose(true);setMergeContact(null);if(isMobile)setMobileCol(2);}
   async function handleReplyAll(msg){const m=await ensureBodyForQuote(msg);setReplyTo(m);setReplyKind('reply-all');setComposeContact(null);setComposeDraft(null);setShowCompose(true);setMergeContact(null);if(isMobile)setMobileCol(2);}
   async function handleForward(msg){const m=await ensureBodyForQuote(msg);setReplyTo(m);setReplyKind('forward');setComposeContact(null);setComposeDraft(null);setShowCompose(true);setMergeContact(null);if(isMobile)setMobileCol(2);}
+  // v0.0.324 — a sent mail reopens as a new, fully editable message.
+  async function handleSendAgain(msg){const m=await ensureBodyForQuote(msg);setReplyTo(m);setReplyKind('again');setComposeContact(null);setComposeDraft(null);setShowCompose(true);setMergeContact(null);if(isMobile)setMobileCol(2);}
   function handleNewMsg(contact=null){setReplyTo(null);setReplyKind(null);setComposeContact(contact);setComposeDraft(null);setShowCompose(true);setMergeContact(null);setTagComposeInit(null);if(isMobile)setMobileCol(2);}
 
   // ── Account sync plumbing ────────────────────────────────────────────────
@@ -10823,7 +10956,7 @@ function App({userId, onSignOut}) {
             <div data-col="3" style={{width:'100vw',height:'100%',overflow:'hidden',flexShrink:0,position:'relative'}}>
               <div style={{height:'100%', overflow:'hidden', position:'relative'}}>
                 {showCompose?(
-                  <ComposePane key={`${replyTo?.id??"x"}-${composeContact?.id??"x"}-${composeDraft?.id??"x"}-${tagComposeInit?.to??"x"}`}
+                  <ComposePane key={`${replyKind??"x"}-${replyTo?.id??"x"}-${composeContact?.id??"x"}-${composeDraft?.id??"x"}-${tagComposeInit?.to??"x"}`}
                     replyTo={replyTo} replyKind={replyKind} toContact={composeContact} draft={composeDraft}
                     myEmails={mailAccounts.map(a=>(a.email||'').toLowerCase())} mailAccounts={mailAccounts} mailAccounts={mailAccounts}
                     initTo={tagComposeInit?.to??""} initCC={tagComposeInit?.cc??""} initBCC={tagComposeInit?.bcc??""} initTag={tagComposeInit?.tag??null}
@@ -10846,7 +10979,7 @@ function App({userId, onSignOut}) {
                     msgTags={msgTags[selMsg]||[]} allTags={allKnownTags}
                     selAccounts={selAccounts}
                     cryptoStatus={cryptoStatus}
-                    onReply={()=>handleReply(selectedMsg)} onReplyAll={()=>handleReplyAll(selectedMsg)} onForward={()=>handleForward(selectedMsg)}
+                    onReply={()=>handleReply(selectedMsg)} onReplyAll={()=>handleReplyAll(selectedMsg)} onForward={()=>handleForward(selectedMsg)} onSendAgain={()=>handleSendAgain(selectedMsg)}
                     onDelete={()=>handleDelete(selMsg)} onRecover={()=>handleRecover(selMsg)}
                     onDismissR2m={handleDismissR2m} onR2mSeen={handleR2mSeen} onR2mSnooze={handleR2mSnooze}
                     onMarkRead={handleMarkRead} onSnooze={handleSnoozeMsg} onSpam={handleSpam} onUnsubscribe={handleUnsubscribe}
@@ -10894,7 +11027,7 @@ function App({userId, onSignOut}) {
             {/* Col 3 */}
             <div data-col="3" style={{width:colWidths[2]+"%",minWidth:"10%",overflow:"hidden"}} className="relative">
               {showCompose?(
-                <ComposePane key={`${replyTo?.id??"x"}-${composeContact?.id??"x"}-${composeDraft?.id??"x"}-${tagComposeInit?.to??"x"}`}
+                <ComposePane key={`${replyKind??"x"}-${replyTo?.id??"x"}-${composeContact?.id??"x"}-${composeDraft?.id??"x"}-${tagComposeInit?.to??"x"}`}
                   replyTo={replyTo} replyKind={replyKind} toContact={composeContact} draft={composeDraft}
                   myEmails={mailAccounts.map(a=>(a.email||'').toLowerCase())} mailAccounts={mailAccounts}
                   initTo={tagComposeInit?.to??""} initCC={tagComposeInit?.cc??""} initBCC={tagComposeInit?.bcc??""} initTag={tagComposeInit?.tag??null}
@@ -10910,7 +11043,7 @@ function App({userId, onSignOut}) {
                   msgTags={msgTags[selMsg]||[]} allTags={allKnownTags}
                   selAccounts={selAccounts}
                   cryptoStatus={cryptoStatus}
-                  onReply={()=>handleReply(selectedMsg)} onReplyAll={()=>handleReplyAll(selectedMsg)} onForward={()=>handleForward(selectedMsg)}
+                  onReply={()=>handleReply(selectedMsg)} onReplyAll={()=>handleReplyAll(selectedMsg)} onForward={()=>handleForward(selectedMsg)} onSendAgain={()=>handleSendAgain(selectedMsg)}
                   onDelete={()=>handleDelete(selMsg)} onRecover={()=>handleRecover(selMsg)}
                   onDismissR2m={handleDismissR2m} onR2mSeen={handleR2mSeen} onR2mSnooze={handleR2mSnooze}
                   onMarkRead={handleMarkRead} onSnooze={handleSnoozeMsg} onSpam={handleSpam} onUnsubscribe={handleUnsubscribe}
