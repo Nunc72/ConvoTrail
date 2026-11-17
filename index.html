@@ -176,6 +176,16 @@
       html.convooz-printing body > :not(#convooz-print) { display: none !important; }
       html.convooz-printing #convooz-print { display: block !important; }
     }
+    /* v0.0.326 — printSheet: shown while images load (iOS prints only
+       inside a tap) or while a Home Screen app makes its PDF. */
+    .convooz-print-sheet { position: fixed; inset: 0; z-index: 1000; display: flex; align-items: center; justify-content: center; padding: 16px; background: rgba(15,23,42,0.35); }
+    .convooz-print-sheet > div { width: 100%; max-width: 320px; padding: 18px; border-radius: 14px; background: var(--bg-card, #fff); color: var(--text-primary, #111827); box-shadow: 0 10px 40px rgba(0,0,0,0.25); font: 14px/1.45 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
+    .convooz-print-sheet p { margin: 0 0 14px; }
+    .convooz-print-sheet .buttons { display: flex; justify-content: flex-end; gap: 8px; }
+    .convooz-print-sheet button { padding: 7px 14px; border: 0; border-radius: 8px; font: inherit; font-weight: 600; cursor: pointer; }
+    .convooz-print-sheet button.primary { background: #4f46e5; color: #fff; }
+    .convooz-print-sheet button.primary:disabled { opacity: 0.45; cursor: default; }
+    .convooz-print-sheet button.secondary { background: var(--bg-selected, #eef2ff); color: var(--text-secondary, #374151); }
     .tag-chip { display: inline-flex; align-items: center; gap: 4px; padding: 1px 7px; border-radius: 999px; font-size: 0.65rem; font-weight: 600; background: #f1f5f9; color: #64748b; }
     /* Prevent iOS auto-zoom on input focus: Safari only zooms when font-size < 16px.
        Apply 16px on mobile only so desktop keeps compact sizing. */
@@ -229,7 +239,7 @@
        polish change is picked up by every browser as soon as the version
        is bumped — no manual cache-busters needed. Keep ?v= here in sync
        with APP_VERSION below at every deploy. -->
-  <link rel="stylesheet" href="polish.css?v=0.0.325"/>
+  <link rel="stylesheet" href="polish.css?v=0.0.326"/>
 </head>
 <body>
 <div id="root">
@@ -468,7 +478,7 @@ window.CONVOOZ_CRYPTO = CONVOOZ_CRYPTO;
 
 // ─── Constants ───────────────────────────────────────────────────────────────
 
-const APP_VERSION = "0.0.325"; // bumped on every deploy — keep in sync with version.json AND with the ?v= on polish.css above
+const APP_VERSION = "0.0.326"; // bumped on every deploy — keep in sync with version.json AND with the ?v= on polish.css above
 
 // ─── Backend + Supabase config ───────────────────────────────────────────────
 // Two stacks: prod (live testers) and staging (where new features land first).
@@ -3054,13 +3064,15 @@ function saveBlobAs(blob, filename) {
 // see the inline <style>). Mail HTML is cleaned first (cleanMailDoc) and
 // gets a shadow root of its own, so its CSS reaches neither the app nor
 // the header block.
-//   • iOS only opens the print sheet when print() runs inside the tap, so
-//     WebKit prints right away (the images come from the cache of the mail
-//     on screen). Chrome and Firefox first wait for the images, at most
-//     2.5 s, so they don't print them blank.
+//   • iOS only opens the print sheet when print() runs inside the tap, and
+//     prints an image that is still loading blank. Images already in the
+//     cache (those of the mail on screen) print right away; for the rest
+//     a sheet shows the loading, and its Print button prints (v0.0.326).
+//     Chrome and Firefox wait for the images instead, at most 2.5 s.
 //   • A Home Screen app on iOS has no print sheet: print() does nothing
 //     there. It gets the mail as a PDF through the share sheet instead,
-//     which offers Print and Save to Files.
+//     which offers Print and Save to Files; with its images since
+//     v0.0.326 (shareMailPdf).
 //   • The container stays until the next tap or key press, not just until
 //     afterprint: Android renders the page again when the paper size
 //     changes in its print dialog.
@@ -3076,13 +3088,14 @@ function printMail(mail) {
   const title = document.title;
   document.title = mail.subject || 'Mail'; // print job name, default PDF file name
 
-  let ran = false, started = false, armed = false;
+  let ran = false, started = false, armed = false, sheet = null;
   const onBeforePrint = () => { started = true; };
   const onUserAction = () => { if (armed) end(); };
   const end = () => {
     window.removeEventListener('beforeprint', onBeforePrint);
     document.removeEventListener('pointerdown', onUserAction, true);
     document.removeEventListener('keydown', onUserAction, true);
+    sheet?.close();
     document.documentElement.classList.remove('convooz-printing');
     host.remove();
     document.title = title;
@@ -3096,19 +3109,60 @@ function printMail(mail) {
   const run = () => {
     if (ran || endPrint !== end) return;
     ran = true;
+    sheet?.close();
     try { window.print(); } catch { /* print blocked */ }
     setTimeout(() => { armed = true; }, 400); // the tap that printed doesn't count
-    if (!started && isStandaloneApp()) shareMailPdf(mail);
+    if (!started && isStandaloneApp()) shareMailPdf(mail, host, mailRoot);
   };
   const pending = mailRoot ? [...mailRoot.querySelectorAll('img')].filter(img => !img.complete) : [];
-  if (!pending.length || printsInTap()) { run(); return; }
+  // The PDF of a Home Screen app on iOS fetches the image files itself.
+  const homeScreenIos = isStandaloneApp() && printsInTap() && navigator.maxTouchPoints > 0;
+  if (!pending.length || homeScreenIos) { run(); return; }
   let left = pending.length;
-  const loaded = () => { if (--left <= 0) run(); };
+  if (!printsInTap()) {
+    const loaded = () => { if (--left <= 0) run(); };
+    pending.forEach(img => {
+      img.addEventListener('load', loaded, { once: true });
+      img.addEventListener('error', loaded, { once: true });
+    });
+    setTimeout(run, 2500);
+    return;
+  }
+  // iOS: the sheet's button prints, inside its own tap. It works once the
+  // images are in, or after 8 s without the ones still on their way.
+  const status = () => left > 0 ? `Loading images… ${pending.length - left} of ${pending.length}` : 'Images loaded.';
+  sheet = printSheet({ text: status(), label: 'Print', onConfirm: run, onCancel: end });
+  const loaded = () => { left--; sheet.update(status(), left <= 0); };
   pending.forEach(img => {
     img.addEventListener('load', loaded, { once: true });
     img.addEventListener('error', loaded, { once: true });
   });
-  setTimeout(run, 2500);
+  setTimeout(() => sheet.update(status(), true), 8000);
+}
+
+// v0.0.326 — a small sheet over the app for printMail: a line of text,
+// Cancel, and a button that acts inside its own tap (iOS opens the print
+// and share sheets only from a tap).
+function printSheet({ text, label, onConfirm, onCancel }) {
+  const el = document.createElement('div');
+  el.className = 'convooz-print-sheet';
+  el.innerHTML = '<div role="dialog" aria-modal="true" aria-live="polite"><p></p><div class="buttons"><button type="button" class="secondary">Cancel</button><button type="button" class="primary"></button></div></div>';
+  const p = el.querySelector('p');
+  const [cancel, ok] = el.querySelectorAll('button');
+  ok.textContent = label;
+  ok.addEventListener('click', onConfirm);
+  cancel.addEventListener('click', onCancel);
+  document.body.appendChild(el);
+  const sheet = {
+    update(message, ready, newLabel) {
+      p.textContent = message;
+      ok.disabled = !ready;
+      if (newLabel) ok.textContent = newLabel;
+    },
+    close() { el.remove(); },
+  };
+  sheet.update(text, false);
+  return sheet;
 }
 
 // WebKit: Safari, and every browser on iOS.
@@ -3189,19 +3243,149 @@ function cleanMailDoc(html) {
 
 // The PDF route of a Home Screen app: the share sheet takes the file
 // (Print, Save to Files, Mail …); without Web Share it's a download.
-function shareMailPdf(mail) {
+// v0.0.326 — with the images of an HTML mail. Their files come through
+// the backend (POST /print-image), as the senders' servers don't let the
+// app read them. That takes a moment, and the share sheet only opens from
+// a tap, so a sheet shows the progress and then offers Share.
+function shareMailPdf(mail, host, mailRoot) {
   const name = `${safeFileName(mail.subject, 'Mail')}.pdf`;
-  const file = new File([mailPdf(mail)], name, { type: 'application/pdf' });
-  if (navigator.canShare?.({ files: [file] })) {
-    navigator.share({ files: [file] }).catch(e => { if (e?.name !== 'AbortError') saveBlobAs(file, name); });
-  } else {
-    saveBlobAs(file, name);
+  const toFile = blob => new File([blob], name, { type: 'application/pdf' });
+  const offer = file => {
+    if (navigator.canShare?.({ files: [file] })) {
+      navigator.share({ files: [file] }).catch(e => { if (e?.name !== 'AbortError') saveBlobAs(file, name); });
+    } else {
+      saveBlobAs(file, name);
+    }
+  };
+  const layout = mailRoot ? layoutForPdf(host, mailRoot) : null;
+  if (!layout?.images.length) { offer(toFile(mailPdf(mail, layout))); return; }
+  let file = null, done = 0, cancelled = false;
+  const total = layout.images.length;
+  const sheet = printSheet({
+    text: `Preparing the PDF… 0 of ${total} images`,
+    label: 'Share PDF',
+    onConfirm: () => { sheet.close(); offer(file); },
+    onCancel: () => { cancelled = true; sheet.close(); },
+  });
+  const ready = blob => {
+    if (cancelled) return;
+    file = toFile(blob);
+    if (!navigator.canShare?.({ files: [file] })) { sheet.update('The PDF is ready.', true, 'Save PDF'); return; }
+    sheet.update('The PDF is ready.', true);
+    // Straight on to the share sheet while the tap still counts; if
+    // that has run out, the button does it.
+    navigator.share({ files: [file] }).then(() => sheet.close(), e => { if (e?.name === 'AbortError') sheet.close(); });
+  };
+  pdfImages(layout.images, () => { if (!cancelled && !file) sheet.update(`Preparing the PDF… ${++done} of ${total} images`, false); })
+    .then(pics => ready(mailPdf(mail, layout, pics)))
+    .catch(() => ready(mailPdf(mail)));
+}
+
+// The print copy of an HTML mail, laid out once off-screen at 600 px
+// (the width the PDF's text column stands for): its text as it shows
+// (hidden parts left out, blocks on lines of their own) with a marker in
+// place of each image, and per image its file, place and size. Images
+// under 40 px (tracking pixels, spacers, icons) stay out.
+// → { blocks, images }, a block being { text } or { row: [image indexes
+// side by side] }.
+function layoutForPdf(host, mailRoot) {
+  host.style.cssText = 'display:block;position:fixed;left:-10000px;top:0;width:600px;pointer-events:none';
+  try {
+    const body = mailRoot.querySelector('.body');
+    const base = body.getBoundingClientRect();
+    const images = [], found = [];
+    for (const img of body.querySelectorAll('img')) {
+      const r = img.getBoundingClientRect();
+      const src = img.currentSrc || img.src;
+      const shown = img.checkVisibility ? img.checkVisibility({ checkOpacity: true, checkVisibilityCSS: true }) : r.width > 0;
+      // Not loaded yet and without a size of its own: the width and height attributes tell.
+      const tiny = r.width > 0 ? Math.max(r.width, r.height) < 40
+        : ['width', 'height'].some(a => img.hasAttribute(a) && parseFloat(img.getAttribute(a)) < 40);
+      if (!/^(https?|data|blob):/i.test(src) || !shown || tiny) continue;
+      found.push(img);
+      images.push({ src, x: r.left - base.left, top: r.top - base.top, width: r.width, height: r.height });
+    }
+    found.forEach((img, i) => {
+      const marker = document.createElement('span');
+      marker.style.display = 'block';
+      marker.textContent = `\uE000${i}\uE001`;
+      img.replaceWith(marker);
+    });
+    const blocks = [];
+    body.innerText.split(/\uE000(\d+)\uE001/).forEach((part, i) => {
+      if (i % 2 === 0) {
+        const text = part.replace(/\t+/g, ' ').split('\n').map(l => l.trim()).join('\n').replace(/\n{3,}/g, '\n\n').trim();
+        if (text) blocks.push({ text });
+        return;
+      }
+      const n = +part, im = images[n], last = blocks[blocks.length - 1];
+      const sameRow = last?.row && last.row.every(j => images[j].top < im.top + im.height && im.top < images[j].top + images[j].height);
+      if (sameRow) last.row.push(n); else blocks.push({ row: [n] });
+    });
+    return { blocks, images };
+  } finally {
+    host.style.cssText = '';
   }
 }
 
-// Text-only PDF of a mail: A4, the PDF base font Helvetica. Base fonts
-// only know WinAnsi (Western European): other letters lose their accent
-// or become '?', emoji are dropped. HTML mails come along as their text.
+// The image files for the PDF as JPEG (see jpegForPdf), three at a time;
+// the same file once. data: and blob: (inline images) are read here, web
+// images come through the backend. An image that fails is left out (null).
+async function pdfImages(images, onProgress) {
+  const out = images.map(() => null), files = new Map();
+  const load = async im => {
+    const res = /^(data|blob):/i.test(im.src) ? await fetch(im.src)
+      : await apiFetchResponse('/print-image', { method: 'POST', body: JSON.stringify({ url: im.src }) });
+    return jpegForPdf(await res.blob(), im.width, im.height);
+  };
+  let next = 0;
+  const worker = async () => {
+    while (next < images.length) {
+      const i = next++, im = images[i];
+      if (!files.has(im.src)) files.set(im.src, load(im));
+      try { out[i] = await files.get(im.src); } catch { /* left out */ }
+      onProgress();
+    }
+  };
+  await Promise.all([worker(), worker(), worker()]);
+  return out;
+}
+
+// An image file → JPEG for the PDF: about 170 dpi at the width it shows
+// (cssWidth px of the 600 px layout), at most 4000 px high, white behind
+// transparency. → { w, h, nw, ratio, bytes }, or null if it won't decode.
+async function jpegForPdf(blob, cssWidth, cssHeight) {
+  const url = URL.createObjectURL(blob);
+  try {
+    const img = new Image();
+    img.src = url;
+    await img.decode();
+    const nw = img.naturalWidth || cssWidth, nh = img.naturalHeight || cssHeight;
+    if (!nw || !nh) return null;
+    const ptWidth = Math.min(cssWidth || nw, 600) * PDF_PT_PER_PX;
+    let w = Math.max(1, Math.min(nw, Math.round(ptWidth * 2.4))), h = Math.max(1, Math.round(w * nh / nw));
+    if (h > 4000) { w = Math.max(1, Math.round(w * 4000 / h)); h = 4000; }
+    const canvas = document.createElement('canvas');
+    canvas.width = w; canvas.height = h;
+    const ctx = canvas.getContext('2d');
+    ctx.fillStyle = '#fff';
+    ctx.fillRect(0, 0, w, h);
+    ctx.drawImage(img, 0, 0, w, h);
+    const jpeg = await new Promise(resolve => canvas.toBlob(resolve, 'image/jpeg', 0.85));
+    canvas.width = canvas.height = 0; // frees the bitmap now (iOS caps canvas memory)
+    return jpeg ? { w, h, nw, ratio: nh / nw, bytes: new Uint8Array(await jpeg.arrayBuffer()) } : null;
+  } finally {
+    URL.revokeObjectURL(url);
+  }
+}
+
+// PDF of a mail: A4, the PDF base font Helvetica. Base fonts only know
+// WinAnsi (Western European): other letters lose their accent or become
+// '?', emoji are dropped. HTML mails come along as their text and, since
+// v0.0.326, their images (no colours or columns).
+// Points per px of the 600 px layout an HTML mail gets for it
+// (layoutForPdf): the text column, A4 minus 50 pt margins.
+const PDF_PT_PER_PX = (595.28 - 2 * 50) / 600;
 // Glyph widths (per 1000) of Helvetica and Helvetica-Bold, for ' '…'~'.
 const PDF_HELV = [278,278,355,556,556,889,667,191,333,333,389,584,278,333,278,278,556,556,556,556,556,556,556,556,556,556,278,278,584,584,584,556,1015,667,667,722,722,667,611,778,722,278,500,667,556,833,722,778,667,778,722,667,611,722,667,944,667,667,611,278,278,278,469,556,333,556,556,500,556,556,278,556,556,222,222,500,222,833,556,556,556,556,333,500,278,556,500,722,500,500,500,334,260,334,584];
 const PDF_HELV_BOLD = [278,333,474,556,556,889,722,238,333,333,389,584,278,333,278,278,556,556,556,556,556,556,556,556,556,556,333,333,584,584,584,611,975,722,722,722,722,667,611,778,722,278,556,722,611,833,722,778,667,778,722,667,611,722,667,944,667,667,611,333,278,333,584,556,333,556,611,556,611,556,333,611,611,278,278,556,278,889,611,611,611,611,389,556,333,611,556,778,556,556,500,389,280,389,584];
@@ -3294,7 +3478,9 @@ function htmlToPlainText(html) {
   walk(doc.body, false);
   return out.replace(/[ \t]+\n/g, '\n').replace(/\n[ \t]+/g, '\n').replace(/\n{3,}/g, '\n\n').trim();
 }
-function mailPdf({ subject, from, to, cc, bcc, date, html, text, attachments }) {
+// layout (layoutForPdf) and pics (pdfImages) give an HTML mail its text
+// as shown and its images; without them it's the text alone.
+function mailPdf({ subject, from, to, cc, bcc, date, html, text, attachments }, layout = null, pics = []) {
   const W = 595.28, H = 841.89, M = 50, LABEL = 36;
   const num = n => String(Math.round(n * 100) / 100);
   const str = s => '(' + s.replace(/[\\()]/g, '\\$&').replace(/[^\x20-\x7e]/g, c => '\\' + c.charCodeAt(0).toString(8).padStart(3, '0')) + ')';
@@ -3316,8 +3502,28 @@ function mailPdf({ subject, from, to, cc, bcc, date, html, text, attachments }) 
       .forEach((l, i) => line(l, { size: 9.5, lead: 13, gray: 0.27, x: M + LABEL, label: i ? '' : label }));
   }
   y -= 8; rule(); y -= 8;
-  const body = text && text.trim() ? text : htmlToPlainText(html || '');
-  for (const l of pdfWrap(pdfEncode(body), 10.5, W - 2 * M, false)) line(l, { size: 10.5, lead: 14.5 });
+  const blocks = layout ? layout.blocks : [{ text: text && text.trim() ? text : htmlToPlainText(html || '') }];
+  const images = [];
+  for (const b of blocks) {
+    if (b.text != null) {
+      for (const l of pdfWrap(pdfEncode(b.text), 10.5, W - 2 * M, false)) line(l, { size: 10.5, lead: 14.5 });
+      continue;
+    }
+    // A row of images at their place and size in the 600 px layout; one
+    // taller than a page is scaled down to fit.
+    const row = b.row.filter(i => pics[i]).map(i => {
+      const pic = pics[i], im = layout.images[i];
+      let w = Math.min((im.width || pic.nw) * PDF_PT_PER_PX, W - 2 * M), h = w * pic.ratio;
+      if (h > H - 2 * M) { w *= (H - 2 * M) / h; h = H - 2 * M; }
+      if (!images.includes(pic)) images.push(pic);
+      return { n: images.indexOf(pic), w, h, x: Math.min(Math.max(im.x * PDF_PT_PER_PX, 0), W - 2 * M - w) };
+    });
+    if (!row.length) continue;
+    const rowH = Math.max(...row.map(o => o.h));
+    if (y - 6 - rowH < M) { pages.push(ops); ops = []; y = H - M; } else y -= 6;
+    for (const o of row) ops.push(`q ${num(o.w)} 0 0 ${num(o.h)} ${num(M + o.x)} ${num(y - o.h)} cm /Im${o.n} Do Q`);
+    y -= rowH + 6;
+  }
   const files = (attachments || []).filter(a => a && a.filename && !a.isInline);
   if (files.length) {
     y -= 10; rule(); y -= 2;
@@ -3326,11 +3532,12 @@ function mailPdf({ subject, from, to, cc, bcc, date, html, text, attachments }) 
   pages.push(ops);
   const contents = pages.map((p, i) => (pages.length > 1
     ? [...p, `BT /F1 8 Tf 0.5 g 1 0 0 1 ${num(W - M - 24)} ${num(M / 2)} Tm (${i + 1} / ${pages.length}) Tj ET`] : p).join('\n'));
-  return pdfFile(contents, subject || 'Mail');
+  return pdfFile(contents, subject || 'Mail', images);
 }
 // Page content streams → a PDF Blob: catalog, pages, the two base fonts,
-// an Info title (UTF-16), and the cross-reference table.
-function pdfFile(contents, title) {
+// an Info title (UTF-16), the JPEG images (/Im0 …), and the
+// cross-reference table.
+function pdfFile(contents, title, images = []) {
   let hex = 'FEFF';
   for (let i = 0; i < title.length; i++) hex += title.charCodeAt(i).toString(16).padStart(4, '0');
   const objs = [
@@ -3339,20 +3546,36 @@ function pdfFile(contents, title) {
     '<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>',
     '<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica-Bold /Encoding /WinAnsiEncoding >>',
     `<< /Title <${hex}> /Producer (Convooz) >>`,
+    ...images,
   ];
+  const xobjects = images.length ? ` /XObject << ${images.map((_, i) => `/Im${i} ${6 + i} 0 R`).join(' ')} >>` : '';
   const kids = [];
   for (const c of contents) {
     objs.push(`<< /Length ${c.length} >>\nstream\n${c}\nendstream`);
-    objs.push(`<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595.28 841.89] /Resources << /Font << /F1 3 0 R /F2 4 0 R >> >> /Contents ${objs.length} 0 R >>`);
+    objs.push(`<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595.28 841.89] /Resources << /Font << /F1 3 0 R /F2 4 0 R >>${xobjects} >> /Contents ${objs.length} 0 R >>`);
     kids.push(`${objs.length} 0 R`);
   }
   objs[1] = `<< /Type /Pages /Kids [${kids.join(' ')}] /Count ${kids.length} >>`;
-  let out = '%PDF-1.4\n%\u00e2\u00e3\u00cf\u00d3\n';
-  const offsets = objs.map((body, i) => { const at = out.length; out += `${i + 1} 0 obj\n${body}\nendobj\n`; return at; });
-  const xref = out.length;
-  out += `xref\n0 ${objs.length + 1}\n0000000000 65535 f \n${offsets.map(o => `${String(o).padStart(10, '0')} 00000 n \n`).join('')}`;
-  out += `trailer\n<< /Size ${objs.length + 1} /Root 1 0 R /Info 5 0 R >>\nstartxref\n${xref}\n%%EOF\n`;
-  return new Blob([Uint8Array.from(out, c => c.charCodeAt(0))], { type: 'application/pdf' });
+  // Bytes: text one per character (Latin-1), the JPEG data as it is.
+  const parts = [];
+  let size = 0;
+  const add = p => { parts.push(typeof p === 'string' ? Uint8Array.from(p, c => c.charCodeAt(0)) : p); size += p.length; };
+  add('%PDF-1.4\n%\u00e2\u00e3\u00cf\u00d3\n');
+  const offsets = objs.map((body, i) => {
+    const at = size;
+    if (typeof body === 'string') {
+      add(`${i + 1} 0 obj\n${body}\nendobj\n`);
+    } else {
+      add(`${i + 1} 0 obj\n<< /Type /XObject /Subtype /Image /Width ${body.w} /Height ${body.h} /ColorSpace /DeviceRGB /BitsPerComponent 8 /Filter /DCTDecode /Length ${body.bytes.length} >>\nstream\n`);
+      add(body.bytes);
+      add('\nendstream\nendobj\n');
+    }
+    return at;
+  });
+  const xref = size;
+  add(`xref\n0 ${objs.length + 1}\n0000000000 65535 f \n${offsets.map(o => `${String(o).padStart(10, '0')} 00000 n \n`).join('')}`);
+  add(`trailer\n<< /Size ${objs.length + 1} /Root 1 0 R /Info 5 0 R >>\nstartxref\n${xref}\n%%EOF\n`);
+  return new Blob(parts, { type: 'application/pdf' });
 }
 
 // v0.0.322 — "Download all attachments" packs them into one .zip, built
