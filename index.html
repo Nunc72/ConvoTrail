@@ -176,16 +176,13 @@
       html.convooz-printing body > :not(#convooz-print) { display: none !important; }
       html.convooz-printing #convooz-print { display: block !important; }
     }
-    /* v0.0.326 — printSheet: shown while images load (iOS prints only
-       inside a tap) or while a Home Screen app makes its PDF. */
-    .convooz-print-sheet { position: fixed; inset: 0; z-index: 1000; display: flex; align-items: center; justify-content: center; padding: 16px; background: rgba(15,23,42,0.35); }
-    .convooz-print-sheet > div { width: 100%; max-width: 320px; padding: 18px; border-radius: 14px; background: var(--bg-card, #fff); color: var(--text-primary, #111827); box-shadow: 0 10px 40px rgba(0,0,0,0.25); font: 14px/1.45 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
-    .convooz-print-sheet p { margin: 0 0 14px; }
-    .convooz-print-sheet .buttons { display: flex; justify-content: flex-end; gap: 8px; }
-    .convooz-print-sheet button { padding: 7px 14px; border: 0; border-radius: 8px; font: inherit; font-weight: 600; cursor: pointer; }
-    .convooz-print-sheet button.primary { background: #4f46e5; color: #fff; }
-    .convooz-print-sheet button.primary:disabled { opacity: 0.45; cursor: default; }
-    .convooz-print-sheet button.secondary { background: var(--bg-selected, #eef2ff); color: var(--text-secondary, #374151); }
+    /* v0.0.327 — printBusy: a spinner over the app while printMail waits
+       for the mail's images or a Home Screen app makes its PDF. */
+    .convooz-print-busy { position: fixed; inset: 0; z-index: 1000; display: flex; align-items: center; justify-content: center; padding: 16px; background: rgba(15,23,42,0.35); }
+    .convooz-print-busy > div { display: flex; align-items: center; gap: 12px; padding: 14px 16px; border-radius: 14px; background: var(--bg-card, #fff); color: var(--text-primary, #111827); box-shadow: 0 10px 40px rgba(0,0,0,0.25); font: 14px/1.45 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
+    .convooz-print-busy .spin { flex: none; width: 18px; height: 18px; border: 2px solid rgba(99, 102, 241, 0.2); border-top-color: #6366f1; border-radius: 50%; animation: bootloader-spin 0.8s linear infinite; }
+    .convooz-print-busy button { padding: 6px 12px; border: 0; border-radius: 8px; font: inherit; font-weight: 600; cursor: pointer; background: var(--bg-selected, #eef2ff); color: var(--text-secondary, #374151); }
+    .convooz-print-busy button.primary { background: #4f46e5; color: #fff; }
     .tag-chip { display: inline-flex; align-items: center; gap: 4px; padding: 1px 7px; border-radius: 999px; font-size: 0.65rem; font-weight: 600; background: #f1f5f9; color: #64748b; }
     /* Prevent iOS auto-zoom on input focus: Safari only zooms when font-size < 16px.
        Apply 16px on mobile only so desktop keeps compact sizing. */
@@ -239,7 +236,7 @@
        polish change is picked up by every browser as soon as the version
        is bumped — no manual cache-busters needed. Keep ?v= here in sync
        with APP_VERSION below at every deploy. -->
-  <link rel="stylesheet" href="polish.css?v=0.0.326"/>
+  <link rel="stylesheet" href="polish.css?v=0.0.327"/>
 </head>
 <body>
 <div id="root">
@@ -478,7 +475,7 @@ window.CONVOOZ_CRYPTO = CONVOOZ_CRYPTO;
 
 // ─── Constants ───────────────────────────────────────────────────────────────
 
-const APP_VERSION = "0.0.326"; // bumped on every deploy — keep in sync with version.json AND with the ?v= on polish.css above
+const APP_VERSION = "0.0.327"; // bumped on every deploy — keep in sync with version.json AND with the ?v= on polish.css above
 
 // ─── Backend + Supabase config ───────────────────────────────────────────────
 // Two stacks: prod (live testers) and staging (where new features land first).
@@ -3064,19 +3061,18 @@ function saveBlobAs(blob, filename) {
 // see the inline <style>). Mail HTML is cleaned first (cleanMailDoc) and
 // gets a shadow root of its own, so its CSS reaches neither the app nor
 // the header block.
-//   • iOS only opens the print sheet when print() runs inside the tap, and
-//     prints an image that is still loading blank. Images already in the
-//     cache (those of the mail on screen) print right away; for the rest
-//     a sheet shows the loading, and its Print button prints (v0.0.326).
-//     Chrome and Firefox wait for the images instead, at most 2.5 s.
-//   • A Home Screen app on iOS has no print sheet: print() does nothing
-//     there. It gets the mail as a PDF through the share sheet instead,
-//     which offers Print and Save to Files; with its images since
-//     v0.0.326 (shareMailPdf).
-//   • The container stays until the next tap or key press, not just until
-//     afterprint: Android renders the page again when the paper size
-//     changes in its print dialog.
+// v0.0.327 — the same in every browser: once the mail's images are in
+// (those already on screen usually are), print() runs; until then a
+// spinner shows, at most PRINT_WAIT_MS, as an image still loading prints
+// blank. That stays within the 5 s WebKit still counts the tap. A Home
+// Screen app on iOS has no print sheet (print() does nothing there) and
+// gets the mail as a PDF through the share sheet, which has Print
+// (shareMailPdf).
+// The container stays until the next tap or key press, not just until
+// afterprint: Android renders the page again when the paper size changes
+// in its print dialog.
 let endPrint = null;
+const PRINT_WAIT_MS = 4000;
 
 function printMail(mail) {
   endPrint?.();
@@ -3088,91 +3084,74 @@ function printMail(mail) {
   const title = document.title;
   document.title = mail.subject || 'Mail'; // print job name, default PDF file name
 
-  let ran = false, started = false, armed = false, sheet = null;
-  const onBeforePrint = () => { started = true; };
+  let ran = false, armed = false, busy = null;
   const onUserAction = () => { if (armed) end(); };
   const end = () => {
-    window.removeEventListener('beforeprint', onBeforePrint);
     document.removeEventListener('pointerdown', onUserAction, true);
     document.removeEventListener('keydown', onUserAction, true);
-    sheet?.close();
+    busy?.close();
     document.documentElement.classList.remove('convooz-printing');
     host.remove();
     document.title = title;
     if (endPrint === end) endPrint = null;
   };
   endPrint = end;
-  window.addEventListener('beforeprint', onBeforePrint);
   document.addEventListener('pointerdown', onUserAction, true);
   document.addEventListener('keydown', onUserAction, true);
+  if (isHomeScreenIos()) { shareMailPdf(mail, host, mailRoot, end); return; }
 
   const run = () => {
     if (ran || endPrint !== end) return;
     ran = true;
-    sheet?.close();
+    busy?.close();
     try { window.print(); } catch { /* print blocked */ }
     setTimeout(() => { armed = true; }, 400); // the tap that printed doesn't count
-    if (!started && isStandaloneApp()) shareMailPdf(mail, host, mailRoot);
   };
   const pending = mailRoot ? [...mailRoot.querySelectorAll('img')].filter(img => !img.complete) : [];
-  // The PDF of a Home Screen app on iOS fetches the image files itself.
-  const homeScreenIos = isStandaloneApp() && printsInTap() && navigator.maxTouchPoints > 0;
-  if (!pending.length || homeScreenIos) { run(); return; }
+  if (!pending.length) { run(); return; }
+  busy = printBusy(end);
   let left = pending.length;
-  if (!printsInTap()) {
-    const loaded = () => { if (--left <= 0) run(); };
-    pending.forEach(img => {
-      img.addEventListener('load', loaded, { once: true });
-      img.addEventListener('error', loaded, { once: true });
-    });
-    setTimeout(run, 2500);
-    return;
-  }
-  // iOS: the sheet's button prints, inside its own tap. It works once the
-  // images are in, or after 8 s without the ones still on their way.
-  const status = () => left > 0 ? `Loading images… ${pending.length - left} of ${pending.length}` : 'Images loaded.';
-  sheet = printSheet({ text: status(), label: 'Print', onConfirm: run, onCancel: end });
-  const loaded = () => { left--; sheet.update(status(), left <= 0); };
+  const loaded = () => { if (--left <= 0) run(); };
   pending.forEach(img => {
     img.addEventListener('load', loaded, { once: true });
     img.addEventListener('error', loaded, { once: true });
   });
-  setTimeout(() => sheet.update(status(), true), 8000);
+  setTimeout(run, PRINT_WAIT_MS);
 }
 
-// v0.0.326 — a small sheet over the app for printMail: a line of text,
-// Cancel, and a button that acts inside its own tap (iOS opens the print
-// and share sheets only from a tap).
-function printSheet({ text, label, onConfirm, onCancel }) {
+// v0.0.327 — a spinner over the app while printing gets ready, with
+// Cancel. offer() swaps the spinner for a button, for a step that needs a
+// tap of its own.
+function printBusy(onCancel) {
   const el = document.createElement('div');
-  el.className = 'convooz-print-sheet';
-  el.innerHTML = '<div role="dialog" aria-modal="true" aria-live="polite"><p></p><div class="buttons"><button type="button" class="secondary">Cancel</button><button type="button" class="primary"></button></div></div>';
-  const p = el.querySelector('p');
-  const [cancel, ok] = el.querySelectorAll('button');
-  ok.textContent = label;
-  ok.addEventListener('click', onConfirm);
+  el.className = 'convooz-print-busy';
+  el.innerHTML = '<div role="dialog" aria-modal="true" aria-live="polite"><span class="spin"></span><span>Preparing print…</span><button type="button">Cancel</button></div>';
+  const box = el.firstChild, [spin, text, cancel] = box.children;
   cancel.addEventListener('click', onCancel);
   document.body.appendChild(el);
-  const sheet = {
-    update(message, ready, newLabel) {
-      p.textContent = message;
-      ok.disabled = !ready;
-      if (newLabel) ok.textContent = newLabel;
+  let ok = null;
+  return {
+    offer(label, onConfirm) {
+      if (!ok) {
+        spin.remove();
+        text.textContent = 'Ready to print.';
+        ok = document.createElement('button');
+        ok.type = 'button';
+        ok.className = 'primary';
+        box.appendChild(ok);
+      }
+      ok.textContent = label;
+      ok.onclick = onConfirm;
     },
     close() { el.remove(); },
   };
-  sheet.update(text, false);
-  return sheet;
 }
 
-// WebKit: Safari, and every browser on iOS.
-function printsInTap() {
-  const ua = navigator.userAgent;
-  return /iP(hone|ad|od)/.test(ua) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1)
-    || (/Safari\//.test(ua) && !/Chrom(e|ium)\/|Edg\/|OPR\/|Firefox\/|Android/.test(ua));
-}
-function isStandaloneApp() {
-  return navigator.standalone === true || !!window.matchMedia?.('(display-mode: standalone)').matches;
+// A web app on the Home Screen of an iPhone or iPad (iPadOS says it's a
+// Mac, but one with touch).
+function isHomeScreenIos() {
+  const appleTouch = /iP(hone|ad|od)/.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+  return appleTouch && (navigator.standalone === true || !!window.matchMedia?.('(display-mode: standalone)').matches);
 }
 
 function fillPrintRoot(root, { subject, from, to, cc, bcc, date, html, text, attachments }) {
@@ -3241,44 +3220,34 @@ function cleanMailDoc(html) {
   return doc;
 }
 
-// The PDF route of a Home Screen app: the share sheet takes the file
-// (Print, Save to Files, Mail …); without Web Share it's a download.
+// The PDF route of a Home Screen app on iOS: the share sheet takes the
+// file (Print, Save to Files, Mail …); without Web Share it's a download.
 // v0.0.326 — with the images of an HTML mail. Their files come through
 // the backend (POST /print-image), as the senders' servers don't let the
-// app read them. That takes a moment, and the share sheet only opens from
-// a tap, so a sheet shows the progress and then offers Share.
-function shareMailPdf(mail, host, mailRoot) {
+// app read them.
+// v0.0.327 — a spinner, then the share sheet. The backend shrinks the
+// images to the size they print at, so the PDF is usually ready within
+// the 5 s iOS still opens the share sheet after a tap; when it takes
+// longer, a Print button opens it with a tap of its own.
+function shareMailPdf(mail, host, mailRoot, end) {
   const name = `${safeFileName(mail.subject, 'Mail')}.pdf`;
-  const toFile = blob => new File([blob], name, { type: 'application/pdf' });
-  const offer = file => {
-    if (navigator.canShare?.({ files: [file] })) {
-      navigator.share({ files: [file] }).catch(e => { if (e?.name !== 'AbortError') saveBlobAs(file, name); });
-    } else {
-      saveBlobAs(file, name);
-    }
-  };
-  const layout = mailRoot ? layoutForPdf(host, mailRoot) : null;
-  if (!layout?.images.length) { offer(toFile(mailPdf(mail, layout))); return; }
-  let file = null, done = 0, cancelled = false;
-  const total = layout.images.length;
-  const sheet = printSheet({
-    text: `Preparing the PDF… 0 of ${total} images`,
-    label: 'Share PDF',
-    onConfirm: () => { sheet.close(); offer(file); },
-    onCancel: () => { cancelled = true; sheet.close(); },
+  let cancelled = false;
+  const busy = printBusy(() => { cancelled = true; done(); });
+  const done = () => { busy.close(); end(); };
+  const share = file => navigator.share({ files: [file] }).then(done, e => {
+    if (e?.name === 'NotAllowedError') busy.offer('Print', () => share(file));
+    else done(); // AbortError: the sheet was closed without a choice
   });
-  const ready = blob => {
+  const layout = mailRoot ? layoutForPdf(host, mailRoot) : null;
+  const pdf = layout?.images.length
+    ? pdfImages(layout.images).then(pics => mailPdf(mail, layout, pics))
+    : Promise.resolve().then(() => mailPdf(mail, layout));
+  pdf.catch(() => mailPdf(mail)).then(blob => {
     if (cancelled) return;
-    file = toFile(blob);
-    if (!navigator.canShare?.({ files: [file] })) { sheet.update('The PDF is ready.', true, 'Save PDF'); return; }
-    sheet.update('The PDF is ready.', true);
-    // Straight on to the share sheet while the tap still counts; if
-    // that has run out, the button does it.
-    navigator.share({ files: [file] }).then(() => sheet.close(), e => { if (e?.name === 'AbortError') sheet.close(); });
-  };
-  pdfImages(layout.images, () => { if (!cancelled && !file) sheet.update(`Preparing the PDF… ${++done} of ${total} images`, false); })
-    .then(pics => ready(mailPdf(mail, layout, pics)))
-    .catch(() => ready(mailPdf(mail)));
+    const file = new File([blob], name, { type: 'application/pdf' });
+    if (navigator.canShare?.({ files: [file] })) share(file);
+    else { saveBlobAs(file, name); done(); }
+  });
 }
 
 // The print copy of an HTML mail, laid out once off-screen at 600 px
@@ -3328,14 +3297,20 @@ function layoutForPdf(host, mailRoot) {
   }
 }
 
-// The image files for the PDF as JPEG (see jpegForPdf), three at a time;
+// The image files for the PDF as JPEG (see jpegForPdf), four at a time;
 // the same file once. data: and blob: (inline images) are read here, web
-// images come through the backend. An image that fails is left out (null).
-async function pdfImages(images, onProgress) {
+// images come through the backend, which shrinks them to the width the
+// PDF needs (v0.0.327). An image that fails or takes over 10 s is left
+// out (null).
+async function pdfImages(images) {
   const out = images.map(() => null), files = new Map();
   const load = async im => {
     const res = /^(data|blob):/i.test(im.src) ? await fetch(im.src)
-      : await apiFetchResponse('/print-image', { method: 'POST', body: JSON.stringify({ url: im.src }) });
+      : await apiFetchResponse('/print-image', {
+        method: 'POST',
+        body: JSON.stringify({ url: im.src, width: pdfPixels(im.width || 600) }),
+        signal: AbortSignal.timeout?.(10000),
+      });
     return jpegForPdf(await res.blob(), im.width, im.height);
   };
   let next = 0;
@@ -3344,10 +3319,9 @@ async function pdfImages(images, onProgress) {
       const i = next++, im = images[i];
       if (!files.has(im.src)) files.set(im.src, load(im));
       try { out[i] = await files.get(im.src); } catch { /* left out */ }
-      onProgress();
     }
   };
-  await Promise.all([worker(), worker(), worker()]);
+  await Promise.all([worker(), worker(), worker(), worker()]);
   return out;
 }
 
@@ -3362,8 +3336,7 @@ async function jpegForPdf(blob, cssWidth, cssHeight) {
     await img.decode();
     const nw = img.naturalWidth || cssWidth, nh = img.naturalHeight || cssHeight;
     if (!nw || !nh) return null;
-    const ptWidth = Math.min(cssWidth || nw, 600) * PDF_PT_PER_PX;
-    let w = Math.max(1, Math.min(nw, Math.round(ptWidth * 2.4))), h = Math.max(1, Math.round(w * nh / nw));
+    let w = Math.max(1, Math.min(nw, pdfPixels(cssWidth || nw))), h = Math.max(1, Math.round(w * nh / nw));
     if (h > 4000) { w = Math.max(1, Math.round(w * 4000 / h)); h = 4000; }
     const canvas = document.createElement('canvas');
     canvas.width = w; canvas.height = h;
@@ -3386,6 +3359,9 @@ async function jpegForPdf(blob, cssWidth, cssHeight) {
 // Points per px of the 600 px layout an HTML mail gets for it
 // (layoutForPdf): the text column, A4 minus 50 pt margins.
 const PDF_PT_PER_PX = (595.28 - 2 * 50) / 600;
+// Pixels across for an image cssWidth px wide in that layout: about
+// 170 dpi at its printed size.
+function pdfPixels(cssWidth) { return Math.round(Math.min(cssWidth, 600) * PDF_PT_PER_PX * 2.4); }
 // Glyph widths (per 1000) of Helvetica and Helvetica-Bold, for ' '…'~'.
 const PDF_HELV = [278,278,355,556,556,889,667,191,333,333,389,584,278,333,278,278,556,556,556,556,556,556,556,556,556,556,278,278,584,584,584,556,1015,667,667,722,722,667,611,778,722,278,500,667,556,833,722,778,667,778,722,667,611,722,667,944,667,667,611,278,278,278,469,556,333,556,556,500,556,556,278,556,556,222,222,500,222,833,556,556,556,556,333,500,278,556,500,722,500,500,500,334,260,334,584];
 const PDF_HELV_BOLD = [278,333,474,556,556,889,722,238,333,333,389,584,278,333,278,278,556,556,556,556,556,556,556,556,556,556,333,333,584,584,584,611,975,722,722,722,722,667,611,778,722,278,556,722,611,833,722,778,667,778,722,667,611,722,667,944,667,667,611,333,278,333,584,556,333,556,611,556,611,556,333,611,611,278,278,556,278,889,611,611,611,611,389,556,333,611,556,778,556,556,500,389,280,389,584];

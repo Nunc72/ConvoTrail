@@ -5,21 +5,25 @@
 // the backend fetches them (imageRelay.ts has the checks). The URL is
 // sent in the body and never logged: image links in newsletters often
 // carry a tracking id.
+// v0.0.327 — { width } as well: the image comes back no wider than the
+// PDF needs (shrinkForPrint).
 import type { FastifyInstance } from "fastify";
 import { authPreHandler } from "../auth.js";
-import { fetchPublicImage, RelayError } from "../imageRelay.js";
+import { fetchPublicImage, RelayError, shrinkForPrint } from "../imageRelay.js";
 
 const TIMEOUT_CODES = new Set(["UND_ERR_CONNECT_TIMEOUT", "UND_ERR_HEADERS_TIMEOUT", "UND_ERR_BODY_TIMEOUT"]);
 
 export async function registerPrintImageRoutes(app: FastifyInstance) {
-  app.post<{ Body: { url?: unknown } }>("/print-image", {
+  app.post<{ Body: { url?: unknown; width?: unknown } }>("/print-image", {
     preHandler: authPreHandler,
     config: { rateLimit: { max: 300, timeWindow: "1 minute" } },
   }, async (req, reply) => {
     const raw = typeof req.body?.url === "string" ? req.body.url : "";
     if (!raw || raw.length > 8192) return reply.badRequest("url required");
+    const width = Math.round(Number(req.body?.width));
     try {
-      const img = await fetchPublicImage(raw, AbortSignal.timeout(25_000));
+      let img = await fetchPublicImage(raw, AbortSignal.timeout(25_000));
+      if (width > 0) img = await shrinkForPrint(img, Math.min(Math.max(width, 16), 2400));
       return reply
         .header("content-type", img.type)
         .header("cache-control", "private, no-store")

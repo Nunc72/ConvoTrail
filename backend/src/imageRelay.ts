@@ -5,6 +5,7 @@
 // only image/* responses, at most 20 MB.
 import dns from "node:dns";
 import net from "node:net";
+import type Sharp from "sharp";
 import { Agent, request } from "undici";
 
 export const MAX_IMAGE_BYTES = 20 * 1024 * 1024;
@@ -131,5 +132,38 @@ export async function fetchPublicImage(raw: string, signal: AbortSignal): Promis
       chunks.push(chunk);
     }
     return { type, body: Buffer.concat(chunks, size) };
+  }
+}
+
+// v0.0.327 — the image at the size the PDF prints it: at most `width` px
+// wide and 4000 px high, as JPEG on white. A newsletter photo of several
+// MB becomes a few hundred KB, so the phone has its PDF ready within the
+// 5 s that iOS still opens the share sheet after a tap. SVG and other
+// formats come back as they are, and so does anything sharp can't read
+// or doesn't make smaller.
+const SHRINKABLE = new Set(["image/jpeg", "image/png", "image/webp", "image/gif", "image/avif", "image/tiff"]);
+let sharpLoad: Promise<typeof Sharp | null> | null = null;
+
+export async function shrinkForPrint(img: { type: string; body: Buffer }, width: number): Promise<{ type: string; body: Buffer }> {
+  if (!SHRINKABLE.has(img.type)) return img;
+  // Loaded on first use: libvips costs memory the sync shouldn't pay for
+  // until someone prints. One thread and no cache on this small machine.
+  sharpLoad ??= import("sharp").then(m => {
+    m.default.concurrency(1);
+    m.default.cache(false);
+    return m.default;
+  }, () => null);
+  const sharp = await sharpLoad;
+  if (!sharp) return img;
+  try {
+    const body = await sharp(img.body, { limitInputPixels: 40_000_000 })
+      .rotate()
+      .resize({ width, height: 4000, fit: "inside", withoutEnlargement: true })
+      .flatten({ background: "#ffffff" })
+      .jpeg({ quality: 85 })
+      .toBuffer();
+    return body.length < img.body.length ? { type: "image/jpeg", body } : img;
+  } catch {
+    return img;
   }
 }
